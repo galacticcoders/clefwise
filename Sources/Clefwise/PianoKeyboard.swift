@@ -9,6 +9,7 @@ struct PianoPad: View {
             keys: game.pianoKeys,
             naming: game.settings.naming,
             showsNames: game.settings.showKeyNames,
+            answersBlackKeys: game.accidentalsPossible,
             highlight: highlight(for:),
             onPress: { game.answer($0) }
         )
@@ -18,24 +19,28 @@ struct PianoPad: View {
         .opacity(game.phase == .playing ? 1 : 0.5)
     }
 
+    /// Keys are matched by sound: the piano calls a black key C♯ even when the question spells it D♭.
     private func highlight(for pitch: Pitch) -> KeyHighlight {
-        if let flash = game.flash, flash.pitch == pitch {
+        if let flash = game.flash, flash.pitch?.midiNumber == pitch.midiNumber {
             return flash.isCorrect ? .correct : .wrong
         }
-        if game.isShowingMiss, game.question?.pitch == pitch {
+        if game.isShowingMiss, game.question?.pitch.midiNumber == pitch.midiNumber {
             return .reveal
         }
         return .none
     }
 }
 
-/// A keyboard of whole octaves. Only white keys can be pressed, since every question is a natural note.
+/// A keyboard of whole octaves. Black keys are answers only when notes can be sharp or flat;
+/// otherwise they swallow clicks so a near miss doesn't press the white key underneath.
 struct PianoKeyboard: View {
     /// Diatonic indices of the white keys to draw.
     let keys: ClosedRange<Int>
     let naming: NamingSystem
     /// Write the note name on every key.
     let showsNames: Bool
+    let answersBlackKeys: Bool
+    /// Called with natural pitches for white keys and sharps (C♯, never D♭) for black keys.
     let highlight: (Pitch) -> KeyHighlight
     let onPress: (Pitch) -> Void
 
@@ -57,10 +62,20 @@ struct PianoKeyboard: View {
                     }
                 }
                 ForEach(blackKeys, id: \.boundary) { key in
-                    BlackKey(name: showsNames ? naming.blackKeyName(above: key.letter) : [],
-                             width: keyWidth * 0.58)
-                        .frame(width: keyWidth * 0.58, height: height * 0.6)
-                        .offset(x: CGFloat(key.boundary) * keyWidth - keyWidth * 0.29)
+                    let blackKey = BlackKey(name: showsNames ? naming.blackKeyName(above: key.pitch.letter) : [],
+                                            width: keyWidth * 0.58,
+                                            highlight: highlight(key.pitch))
+                    Group {
+                        if answersBlackKeys {
+                            Button { onPress(key.pitch) } label: { blackKey }
+                                .buttonStyle(BlackKeyStyle())
+                        } else {
+                            // Not an answer; swallow clicks so the white key underneath isn't pressed by accident.
+                            blackKey.onTapGesture {}
+                        }
+                    }
+                    .frame(width: keyWidth * 0.58, height: height * 0.6)
+                    .offset(x: CGFloat(key.boundary) * keyWidth - keyWidth * 0.29)
                 }
             }
             .frame(width: keyWidth * CGFloat(keys.count), height: height)
@@ -69,11 +84,11 @@ struct PianoKeyboard: View {
         .frame(height: 150)
     }
 
-    /// Black keys: the white-key boundary (counted from the left) each sits on, and the white key below it.
-    private var blackKeys: [(boundary: Int, letter: NoteLetter)] {
+    /// Black keys: the white-key boundary (counted from the left) each sits on, and its pitch as a sharp.
+    private var blackKeys: [(boundary: Int, pitch: Pitch)] {
         keys.dropLast().enumerated().compactMap { offset, index in
-            let letter = Pitch(diatonicIndex: index).letter
-            return [.c, .d, .f, .g, .a].contains(letter) ? (offset + 1, letter) : nil
+            let pitch = Pitch(diatonicIndex: index)
+            return [.c, .d, .f, .g, .a].contains(pitch.letter) ? (offset + 1, pitch.with(.sharp)) : nil
         }
     }
 
@@ -108,14 +123,33 @@ private struct WhiteKeyStyle: ButtonStyle {
     }
 }
 
+/// The black key draws itself; pressing only lightens it.
+private struct BlackKeyStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .brightness(configuration.isPressed ? 0.15 : 0)
+    }
+}
+
 private struct BlackKey: View {
     /// Lines of the key's name; empty to leave it blank.
     let name: [String]
     let width: CGFloat
+    /// Highlighted like the white keys (the right key turns pale green with a green edge), so it
+    /// stands out from the row of dark keys.
+    let highlight: KeyHighlight
 
     var body: some View {
-        UnevenRoundedRectangle(bottomLeadingRadius: 4, bottomTrailingRadius: 4)
-            .fill(LinearGradient(colors: [Color(white: 0.28), Theme.ink], startPoint: .top, endPoint: .bottom))
+        let shape = UnevenRoundedRectangle(bottomLeadingRadius: 4, bottomTrailingRadius: 4)
+        shape
+            .fill(highlight == .none
+                  ? AnyShapeStyle(LinearGradient(colors: [Color(white: 0.28), Theme.ink], startPoint: .top, endPoint: .bottom))
+                  : AnyShapeStyle(highlight.fill))
+            .overlay {
+                if highlight != .none {
+                    shape.strokeBorder(highlight.border, lineWidth: highlight == .reveal ? 2.5 : 1)
+                }
+            }
             .shadow(color: .black.opacity(0.25), radius: 1.5, y: 1.5)
             .overlay(alignment: .bottom) {
                 // Skipped on very wide keyboards, where the keys are too narrow to read.
@@ -124,7 +158,7 @@ private struct BlackKey: View {
                         ForEach(name, id: \.self) { Text($0) }
                     }
                     .font(.system(size: min(11, width * 0.3), weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(highlight == .none ? Color.white.opacity(0.85) : highlight.foreground)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                     .padding(.horizontal, 2)
@@ -132,7 +166,6 @@ private struct BlackKey: View {
                 }
             }
             .contentShape(Rectangle())
-            // Never an answer; swallow clicks so the white key underneath isn't pressed by accident.
-            .onTapGesture {}
+            .animation(.easeOut(duration: 0.12), value: highlight)
     }
 }

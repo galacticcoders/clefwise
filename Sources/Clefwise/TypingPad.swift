@@ -7,14 +7,22 @@ struct TypingPad: View {
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 2) {
-                Text(text)
-                    .font(.system(size: 34, weight: .semibold, design: .serif))
+                SpelledName(name: shown.name, accidental: shown.accidental, size: 34)
                     .foregroundStyle(textColor)
                 if showsCaret {
                     Caret()
                 }
             }
             .frame(width: 340, height: 76)
+            .overlay(alignment: .trailing) {
+                // Just outside the box, so it never covers a long name and the box doesn't move.
+                if game.typingNeedsReturn {
+                    ReturnCue()
+                        .fixedSize()
+                        .frame(width: 0, alignment: .leading)
+                        .offset(x: 14)
+                }
+            }
             .background(highlight.fill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -25,11 +33,19 @@ struct TypingPad: View {
             .animation(.easeOut(duration: 0.3), value: game.rejectedKeystrokes)
             .animation(.easeOut(duration: 0.12), value: highlight)
 
-            Text(NoteLetter.allCases.map { game.settings.naming.name(of: $0) }.joined(separator: "  ·  "))
+            Text(namesLine)
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
         .opacity(game.phase == .playing ? 1 : 0.5)
+    }
+
+    /// Words rather than ♯/♭, which are too small at this size to tell from # and b.
+    private var namesLine: String {
+        let naming = game.settings.naming
+        let names = NoteLetter.allCases.map { naming.name(of: $0) }.joined(separator: "  ·  ")
+        guard game.accidentalsPossible else { return names }
+        return names + "   —   " + (naming == .sargam ? "add b for komal, # for tivra" : "add # for sharp, b for flat")
     }
 
     /// The answer just given stays visible, coloured, until you start typing the next one.
@@ -38,15 +54,35 @@ struct TypingPad: View {
         return flash.isCorrect ? .correct : .wrong
     }
 
-    private var text: String {
+    private var shown: (name: String, accidental: Accidental) {
         if !game.typedText.isEmpty {
-            // Match how the names are written: "sol" shows as "Sol".
-            return game.typedText.prefix(1).uppercased() + game.typedText.dropFirst()
+            return typedName
         }
         if let flash = game.flash {
-            return game.settings.naming.name(of: flash.letter)
+            // "komal Ga"; a sign that makes no swara (Sa♭) is shown as typed.
+            let naming = game.settings.naming
+            if naming == .sargam, let swara = naming.answerName(of: flash.letter, flash.accidental) {
+                return (swara, .natural)
+            }
+            return (naming.name(of: flash.letter), flash.accidental)
         }
-        return game.phase == .playing ? "" : "Type the note"
+        return (game.phase == .playing ? "" : "Type the note", .natural)
+    }
+
+    /// Written the way names are: "sol" shows as "Sol", "f#" as "F♯", "sib" as "Si♭". A b is only
+    /// a flat after a whole name, so a lone "b" with letter names stays B.
+    private var typedName: (name: String, accidental: Accidental) {
+        var text = game.typedText
+        var accidental = Accidental.natural
+        let names = NoteLetter.allCases.map { game.settings.naming.name(of: $0).lowercased() }
+        if text.hasSuffix("#") || text.hasSuffix("♯") {
+            text.removeLast()
+            accidental = .sharp
+        } else if text.hasSuffix("♭") || (text.hasSuffix("b") && names.contains(String(text.dropLast()))) {
+            text.removeLast()
+            accidental = .flat
+        }
+        return (text.prefix(1).uppercased() + String(text.dropFirst()), accidental)
     }
 
     private var textColor: Color {
@@ -56,6 +92,22 @@ struct TypingPad: View {
 
     private var showsCaret: Bool {
         game.phase == .playing && highlight == .none && !game.isShowingMiss
+    }
+}
+
+/// Shown when the typed name is complete but could still take a ♯ or ♭, so it waits for Return.
+private struct ReturnCue: View {
+    var body: some View {
+        Text("Press Return ↩")
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Theme.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1)
+            }
     }
 }
 
