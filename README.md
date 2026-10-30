@@ -77,6 +77,24 @@ Notes you've missed recently come up more often (based on your last 8 tries at e
 practice concentrates on what you don't know yet. History, best scores and settings are stored in
 `UserDefaults`; reset everything with `defaults delete local.clefwise`.
 
+## Progress dashboard
+
+**Window → Progress** (⇧⌘P), or the **Progress** button next to the hints and mute buttons, opens
+a dashboard built from your usage data. Pick a range (last 7 / 30 / 90 days, all time) and a clef;
+everything on the page follows that choice.
+
+- **Overview**: practice time, notes answered, accuracy, typical response time (median to a
+  right answer) against the previous period, and your day streak.
+- **Over time**: accuracy and response time per day (per week past six weeks).
+- **Note map**: every line and space per clef, laid out like the staff, darker for better known;
+  hollow where there are fewer than 5 answers yet.
+- **Notes to work on**: your most-missed and slowest notes, sharps and flats included.
+- **Practice calendar**, **how you answer** (by answer method and naming system), **pieces** bar by
+  bar, and **recent rounds**.
+
+Every chart has a **Table** view with the numbers. The dashboard refreshes when a round ends and
+can stay open beside the game.
+
 ## Your usage data
 
 Everything you do is recorded locally for analysing your progress: every question and answer
@@ -111,6 +129,9 @@ Sources/Clefwise/
   UsageExport.swift   export zip: raw events, CSV tables, saved settings and stats
   UsageSchemaDoc.swift SCHEMA.md text included in exports
   AppUsage.swift      app lifecycle and UI-click logging, usage data menu items
+  Dashboard/          the Progress window: ProgressAnalyzer turns the usage log into a
+                      ProgressReport; ProgressStore loads it off the main thread; DashboardView
+                      and one file per section draw it (palette and card chrome in DashboardTheme)
   Synth.swift         tiny additive synth for note playback
   Theme.swift         colors
 Tests/ClefwiseTests/  Swift Testing tests (`swift test`), with hand-written MusicXML fixtures
