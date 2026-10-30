@@ -91,7 +91,7 @@ extension UsageExport {
 
         | Field | Meaning |
         |---|---|
-        | `size` | Window size in points, `{"width":…,"height":…}`. |
+        | `size` | The whole window's size in points, title bar and toolbar included, `{"width":…,"height":…}`. Logged once when the window first appears, then whenever a resize settles (about 1 s after the last change). |
 
         ### `settingChanged`: one setting changed
 

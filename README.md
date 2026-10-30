@@ -77,6 +77,21 @@ Notes you've missed recently come up more often (based on your last 8 tries at e
 practice concentrates on what you don't know yet. History, best scores and settings are stored in
 `UserDefaults`; reset everything with `defaults delete local.clefwise`.
 
+## Your usage data
+
+Everything you do is recorded locally for analysing your progress: every question and answer
+(note, clef, key, response time in ms, how you answered, each keystroke with its timing), every
+round with its settings and result, settings changes, pieces opened, and app sessions (launch,
+quit, time the app was in front). Nothing leaves your Mac.
+
+- Stored as one JSON Lines file per day in `~/Library/Application Support/Clefwise/Usage/`,
+  only ever appended to.
+- **File → Export Usage Data…** (⇧⌘E) saves a zip with the raw event files, `answers.csv`,
+  `rounds.csv`, `sessions.csv`, your current settings and stats, and `SCHEMA.md` describing every
+  field (with snippets for pandas, DuckDB and jq). **File → Show Usage Data in Finder** opens the
+  folder.
+- To start the log afresh, quit the app and delete that folder.
+
 ## Layout
 
 ```
@@ -91,6 +106,11 @@ Sources/Clefwise/
   Music.swift         pitches, accidentals, key signatures, clefs, ranges, naming systems
   Song.swift          a piece read from MusicXML
   MusicXML.swift      MusicXML / .mxl importer
+  UsageEvents.swift   what the usage log records (event format)
+  UsageLog.swift      the usage log on disk (daily JSON Lines files)
+  UsageExport.swift   export zip: raw events, CSV tables, saved settings and stats
+  UsageSchemaDoc.swift SCHEMA.md text included in exports
+  AppUsage.swift      app lifecycle and UI-click logging, usage data menu items
   Synth.swift         tiny additive synth for note playback
   Theme.swift         colors
 Tests/ClefwiseTests/  Swift Testing tests (`swift test`), with hand-written MusicXML fixtures

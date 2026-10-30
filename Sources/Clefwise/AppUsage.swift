@@ -78,14 +78,23 @@ enum UsageData {
         }
     }
 
+    /// Set while an export runs, so a second one can't race it for the same files.
+    private static var isExporting = false
+
     static func export(to destination: URL) {
-        // Events can still be on their way to disk; the export reads the files.
-        UsageLog.shared.flush()
-        do {
-            try UsageExport.export(UsageLog.shared, to: destination)
-            NSWorkspace.shared.activateFileViewerSelecting([destination])
-        } catch {
-            show(error, as: "Couldn't export the usage data")
+        guard !isExporting else { return }
+        isExporting = true
+        // Reading years of log takes seconds: do it off the main thread so practice carries on.
+        // (The export flushes events still on their way to disk first.)
+        Task.detached(priority: .userInitiated) {
+            let result = Result { try UsageExport.export(UsageLog.shared, to: destination) }
+            await MainActor.run {
+                isExporting = false
+                switch result {
+                case .success: NSWorkspace.shared.activateFileViewerSelecting([destination])
+                case .failure(let error): show(error, as: "Couldn't export the usage data")
+                }
+            }
         }
     }
 
