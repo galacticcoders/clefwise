@@ -59,13 +59,13 @@ struct Pitch: Hashable, Codable {
     }
 }
 
-/// How many sharps (positive) or flats (negative) a key signature has. Kept within ±5 so no
-/// note is ever spelled E♯, B♯, C♭ or F♭.
+/// How many sharps (positive) or flats (negative) a key signature has, -7…7.
 struct KeySignature: Hashable, Codable {
     let fifths: Int
 
     static let cMajor = KeySignature(fifths: 0)
-    /// C first, then the sharp keys, then the flat keys.
+    /// Keys for generated rounds: C first, then the sharp keys, then the flat keys. Kept within ±5
+    /// so no generated note is spelled E♯, B♯, C♭ or F♭; imported scores can use all seven.
     static let all = [0, 1, 2, 3, 4, 5, -1, -2, -3, -4, -5].map(KeySignature.init(fifths:))
 
     private static let sharpOrder: [NoteLetter] = [.f, .c, .g, .d, .a, .e, .b]
@@ -89,8 +89,12 @@ struct KeySignature: Hashable, Codable {
         return treble.prefix(abs(fifths)).map { $0 + shift }
     }
 
-    var majorKey: String { ["D♭", "A♭", "E♭", "B♭", "F", "C", "G", "D", "A", "E", "B"][fifths + 5] }
-    var minorKey: String { ["B♭", "F", "C", "G", "D", "A", "E", "B", "F♯", "C♯", "G♯"][fifths + 5] }
+    var majorKey: String {
+        ["C♭", "G♭", "D♭", "A♭", "E♭", "B♭", "F", "C", "G", "D", "A", "E", "B", "F♯", "C♯"][fifths + 7]
+    }
+    var minorKey: String {
+        ["A♭", "E♭", "B♭", "F", "C", "G", "D", "A", "E", "B", "F♯", "C♯", "G♯", "D♯", "A♯"][fifths + 7]
+    }
     /// "no ♯/♭", "1♯", "3♭"…
     var countLabel: String {
         fifths == 0 ? "no ♯/♭" : "\(abs(fifths))\(fifths > 0 ? Accidental.sharp.symbol : Accidental.flat.symbol)"
@@ -264,13 +268,19 @@ struct Question: Equatable {
     let keySignature: KeySignature
     /// Sign printed right before the note; nil when the key signature already gives its accidental.
     let printedAccidental: Accidental?
+    /// Octaves the note is written below how it sounds: 1 under an 8va line, -1 under 8vb, 0 normally.
+    let octaveShift: Int
 
-    init(clef: Clef, pitch: Pitch, keySignature: KeySignature = .cMajor, printedAccidental: Accidental? = nil) {
+    init(clef: Clef, pitch: Pitch, keySignature: KeySignature = .cMajor,
+         printedAccidental: Accidental? = nil, octaveShift: Int = 0) {
         self.clef = clef
         self.pitch = pitch
         self.keySignature = keySignature
         self.printedAccidental = printedAccidental
+        self.octaveShift = octaveShift
     }
 
-    var position: Int { clef.position(of: pitch) }
+    /// Where the note is drawn: `pitch` moved down by `octaveShift` octaves.
+    var writtenPitch: Pitch { Pitch(pitch.letter, pitch.octave - octaveShift, pitch.accidental) }
+    var position: Int { clef.position(of: writtenPitch) }
 }

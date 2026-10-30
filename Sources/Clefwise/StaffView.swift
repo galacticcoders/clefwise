@@ -8,6 +8,9 @@ struct StaffView: View {
     var keySignature = KeySignature.cMajor
     /// Its `printedAccidental`, if any, is drawn in front of the note head.
     var note: Question?
+    /// When set, the staff is scaled so notes anywhere in these positions fit (a piece's highest and
+    /// lowest notes); nil keeps the usual layout, which fits three ledger lines either side.
+    var positionsToFit: ClosedRange<Int>? = nil
     var noteColor: Color = Theme.ink
     /// Shown in a pill beside the note, e.g. to reveal the answer after a miss.
     var noteLabel: String?

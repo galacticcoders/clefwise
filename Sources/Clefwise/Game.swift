@@ -38,6 +38,10 @@ struct RoundSummary {
     let notesToReview: [StaffNote]
     /// Whether the round mixed clefs, so review notes need their clef spelled out.
     let mixedClefs: Bool
+    /// Set for rounds on a loaded piece.
+    let pieceTitle: String?
+    /// The round ended because the piece (from the start bar) was played through.
+    let finishedPiece: Bool
 
     var accuracy: Double? { attempts > 0 ? Double(score) / Double(attempts) : nil }
 }
@@ -98,6 +102,9 @@ final class Game {
         var key = KeyChoice.fixed(.cMajor)
         /// Now and then print a ♯, ♭ or ♮ in front of a note, on top of the key signature.
         var addsAccidentals = false
+        var piece = PieceSettings()
+        /// The last piece opened, reopened at launch.
+        var piecePath: String?
 
         init() {}
 
@@ -114,7 +121,64 @@ final class Game {
             isMuted = try container.decodeIfPresent(Bool.self, forKey: .isMuted) ?? isMuted
             key = try container.decodeIfPresent(KeyChoice.self, forKey: .key) ?? key
             addsAccidentals = try container.decodeIfPresent(Bool.self, forKey: .addsAccidentals) ?? addsAccidentals
+            piece = try container.decodeIfPresent(PieceSettings.self, forKey: .piece) ?? piece
+            piecePath = try container.decodeIfPresent(String.self, forKey: .piecePath) ?? piecePath
         }
+    }
+
+    /// How a loaded piece is practised.
+    struct PieceSettings: Codable, Equatable {
+        enum Hand: String, CaseIterable, Identifiable, Codable {
+            case right, left, both
+
+            var id: Self { self }
+            var label: String {
+                switch self {
+                case .right: "Right hand"
+                case .left: "Left hand"
+                case .both: "Both hands"
+                }
+            }
+        }
+
+        enum Order: String, CaseIterable, Identifiable, Codable {
+            case inOrder, shuffled
+
+            var id: Self { self }
+            var label: String { self == .inOrder ? "In order" : "Shuffled" }
+        }
+
+        /// Index into the score's parts.
+        var part = 0
+        /// Right hand = upper staff, left hand = lower; ignored for single-staff parts.
+        var hand = Hand.right
+        var order = Order.inOrder
+        /// Bar to start from (1-based), so a long piece can be practised a section at a time.
+        var startBar = 1
+        /// Only the top note of right-hand chords and the bottom note of left-hand ones.
+        var oneNotePerChord = false
+
+        init() {}
+
+        /// Missing keys fall back to defaults, like `Settings`.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            part = try container.decodeIfPresent(Int.self, forKey: .part) ?? part
+            hand = try container.decodeIfPresent(Hand.self, forKey: .hand) ?? hand
+            order = try container.decodeIfPresent(Order.self, forKey: .order) ?? order
+            startBar = try container.decodeIfPresent(Int.self, forKey: .startBar) ?? startBar
+            oneNotePerChord = try container.decodeIfPresent(Bool.self, forKey: .oneNotePerChord) ?? oneNotePerChord
+        }
+    }
+
+    /// Where a piece round is up to.
+    struct PieceProgress: Equatable {
+        /// Bar of the current note, and the piece's last bar.
+        let bar: Int
+        let bars: Int
+        /// Notes answered so far this round, and how many the round has.
+        let done: Int
+        let total: Int
     }
 
     static let sprintLength: TimeInterval = 60
@@ -150,6 +214,11 @@ final class Game {
     /// Key signature every question of the round is written in, picked at `start()`. Kept after
     /// the round so the staff still shows it, until the key setting changes.
     private var roundKey: KeySignature?
+    /// The piece being practised; nil means random notes from the toolbar settings.
+    private(set) var piece: Score?
+    private(set) var pieceURL: URL?
+    /// Why the last file couldn't be opened, for the UI to show (and clear).
+    var pieceError: String?
 
     @ObservationIgnored private var noteStats: [String: NoteStat]
     @ObservationIgnored private var bestStreak = 0
@@ -206,6 +275,49 @@ final class Game {
         let answers = typeableAnswers
         return answers.contains { $0.text == typedText }
             && answers.contains { $0.text != typedText && $0.text.hasPrefix(typedText) }
+    }
+
+    var isPractisingPiece: Bool { piece != nil }
+
+    /// The chosen part of the loaded piece.
+    var piecePart: ScorePart? {
+        guard let piece, !piece.parts.isEmpty else { return nil }
+        return piece.parts[min(max(settings.piece.part, 0), piece.parts.count - 1)]
+    }
+
+    /// Where a piece round is up to; nil outside piece rounds.
+    var pieceProgress: PieceProgress? { nil }
+
+    /// Staff positions the staff has to fit for the whole piece (both clefs), so it doesn't
+    /// rescale from note to note; nil for random rounds, which use the staff's usual layout.
+    var staffPositionsToFit: ClosedRange<Int>? { nil }
+
+    /// Reads a MusicXML file and switches to practising it, or sets `pieceError`.
+    func openPiece(at url: URL) {
+        do {
+            open(try MusicXMLImporter.load(from: url), from: url)
+        } catch {
+            pieceError = error.localizedDescription
+        }
+    }
+
+    /// Switches to practising `score` (also how tests and previews load one without a file).
+    func open(_ score: Score, from url: URL) {
+        guard !score.parts.isEmpty else {
+            pieceError = "There are no notes to practise in this file."
+            return
+        }
+        piece = score
+        pieceURL = url
+        settings.piecePath = url.path
+        if settings.piece.part >= score.parts.count { settings.piece.part = 0 }
+    }
+
+    /// Back to random notes.
+    func closePiece() {
+        piece = nil
+        pieceURL = nil
+        settings.piecePath = nil
     }
 
     /// White keys (as diatonic indices) for the piano: whole octaves covering every note the settings can ask.
@@ -468,7 +580,9 @@ final class Game {
             isNewBest: isNewBest,
             timeRanOut: timeRanOut,
             notesToReview: review,
-            mixedClefs: settings.clefChoice == .both
+            mixedClefs: settings.clefChoice == .both,
+            pieceTitle: nil,
+            finishedPiece: false
         )
         phase = .finished
     }
