@@ -4,6 +4,8 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var game: Game
     @State private var keyMonitor: Any?
+    /// A file is being dragged over the window between rounds.
+    @State private var isDropTargeted = false
 
     var body: some View {
         VStack(spacing: 18) {
@@ -42,12 +44,32 @@ struct ContentView: View {
         .padding(24)
         .frame(minWidth: 820, minHeight: 640)
         .background(Theme.background)
+        .overlay {
+            if isDropTargeted { DropHighlight() }
+        }
         .navigationTitle("Clefwise")
         .toolbar { settingsToolbar }
+        // Like the toolbar settings, a new piece waits for the round to end.
+        .dropDestination(for: URL.self) { urls, _ in
+            guard game.phase != .playing, let url = urls.first else { return false }
+            PieceFile.open(url, in: game)
+            return true
+        } isTargeted: {
+            isDropTargeted = $0 && game.phase != .playing
+        }
+        .alert("Couldn't open the piece", isPresented: isShowingPieceError, presenting: game.pieceError) { _ in
+            Button("OK") {}
+        } message: {
+            Text($0)
+        }
         .onAppear(perform: installKeyMonitor)
         .onDisappear {
             if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         }
+    }
+
+    private var isShowingPieceError: Binding<Bool> {
+        Binding(get: { game.pieceError != nil }, set: { if !$0 { game.pieceError = nil } })
     }
 
     private var shortcutHint: String {
@@ -75,22 +97,28 @@ struct ContentView: View {
     private var settingsToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Group {
-                Picker("Clef", selection: $game.settings.clefChoice) {
-                    ForEach(ClefChoice.allCases) { Text($0.label).tag($0) }
+                // A piece brings its own clefs, notes and keys. Disabled rather than hidden, so the
+                // toolbar doesn't jump when a piece is opened or closed.
+                Group {
+                    Picker("Clef", selection: $game.settings.clefChoice) {
+                        ForEach(ClefChoice.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .help(pieceHelp("Which clef to read", piece: "The piece sets the clef"))
+
+                    Picker("Notes", selection: $game.settings.range) {
+                        ForEach(NoteRange.allCases) { Text($0.label).tag($0) }
+                    }
+                    .help(pieceHelp("How far above and below the staff notes can go", piece: "The notes come from the piece"))
+
+                    keyMenu
+
+                    Toggle("Accidentals", isOn: $game.settings.addsAccidentals)
+                        .toggleStyle(.checkbox)
+                        .help(pieceHelp("Now and then put a ♯, ♭ or ♮ in front of a note, on top of the key signature",
+                                        piece: "The piece's own ♯, ♭ and ♮ are shown"))
                 }
-                .pickerStyle(.segmented)
-                .help("Which clef to read")
-
-                Picker("Notes", selection: $game.settings.range) {
-                    ForEach(NoteRange.allCases) { Text($0.label).tag($0) }
-                }
-                .help("How far above and below the staff notes can go")
-
-                keyMenu
-
-                Toggle("Accidentals", isOn: $game.settings.addsAccidentals)
-                    .toggleStyle(.checkbox)
-                    .help("Now and then put a ♯, ♭ or ♮ in front of a note, on top of the key signature")
+                .disabled(game.isPractisingPiece)
 
                 // A pop-up rather than segments, so the key controls fit without the toolbar overflowing.
                 Picker("Mode", selection: $game.settings.mode) {
@@ -120,7 +148,12 @@ struct ContentView: View {
             .pickerStyle(.inline)
             .labelsHidden()
         }
-        .help("Key signature: the sharps or flats that hold for every note")
+        .help(pieceHelp("Key signature: the sharps or flats that hold for every note", piece: "The piece sets the key signature"))
+    }
+
+    /// Says why a setting is greyed out while a piece is open, and how to get it back.
+    private func pieceHelp(_ help: String, piece: String) -> String {
+        game.isPractisingPiece ? "\(piece). Go back to random notes to change this." : help
     }
 
     private func installKeyMonitor() {
@@ -128,6 +161,8 @@ struct ContentView: View {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [game] event in
             // Leave ⌘/⌃/⌥ shortcuts (⌘Q, ⌘W, …) to the system.
             guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
+            // The open panel and alerts are windows of their own: typing and Return belong to them.
+            guard !(event.window is NSPanel), event.window?.attachedSheet == nil else { return event }
             let characters = event.charactersIgnoringModifiers ?? ""
             let keyCode = event.keyCode
             let handled = MainActor.assumeIsolated {
@@ -169,6 +204,14 @@ private struct StatsBar: View {
             StatTile(title: "Score", value: "\(game.score)")
             StatTile(title: "Streak", value: "\(game.streak)")
             StatTile(title: "Accuracy", value: game.accuracy.map { "\(Int(($0 * 100).rounded()))%" } ?? "–")
+            if let progress = game.pieceProgress {
+                // A fifth tile only fits a wide window; a narrow one does without rather than overflow.
+                ViewThatFits(in: .horizontal) {
+                    PieceProgressTile(progress: progress, order: game.settings.piece.order)
+                    Color.clear.frame(width: 0, height: 0)
+                }
+                .layoutPriority(1)
+            }
             Spacer()
             // Things you may want mid-round live here; round settings are in the toolbar.
             Group {
@@ -210,6 +253,7 @@ private struct StatTile: View {
     let title: String
     let value: String
     var tint: Color = Theme.ink
+    var width: CGFloat = 96
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -221,11 +265,45 @@ private struct StatTile: View {
                 .font(.system(size: 24, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
         }
-        .frame(width: 96, alignment: .leading)
+        .frame(width: width, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// Where a piece round is: the bar when reading in order (a shuffled round jumps about, so it
+/// counts notes instead), with a thin bar along the bottom for notes done.
+private struct PieceProgressTile: View {
+    let progress: Game.PieceProgress
+    let order: Game.PieceSettings.Order
+
+    var body: some View {
+        StatTile(title: order == .inOrder ? "Bar" : "Notes",
+                 value: order == .inOrder ? "\(progress.bar) / \(progress.bars)" : "\(progress.done) / \(progress.total)",
+                 width: 110)
+            .overlay(alignment: .bottom) {
+                GeometryReader { proxy in
+                    Capsule()
+                        .fill(Theme.accent.opacity(0.15))
+                        .overlay(alignment: .leading) {
+                            Capsule()
+                                .fill(Theme.accent)
+                                .frame(width: proxy.size.width * fraction)
+                        }
+                }
+                .frame(height: 3)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 4)
+            }
+            .help("\(progress.done) of \(progress.total) notes done · bar \(progress.bar) of \(progress.bars)")
+    }
+
+    private var fraction: CGFloat {
+        progress.total > 0 ? CGFloat(min(progress.done, progress.total)) / CGFloat(progress.total) : 0
     }
 }
 
@@ -244,9 +322,11 @@ private struct StaffCard: View {
                 clef: game.displayedClef,
                 keySignature: game.currentKeySignature,
                 note: game.question,
+                positionsToFit: game.staffPositionsToFit,
                 noteColor: game.isShowingMiss ? Theme.wrong : Theme.ink,
                 noteLabel: game.isShowingMiss ? game.question.map(answerLabel) : nil,
-                hintPositions: game.settings.showHints ? game.settings.range.positions : nil,
+                // A piece's notes can go past the range setting, so hints cover as far as they go.
+                hintPositions: game.settings.showHints ? game.staffPositionsToFit ?? game.settings.range.positions : nil,
                 naming: game.settings.naming
             )
             .padding(.horizontal, 24)
@@ -255,7 +335,11 @@ private struct StaffCard: View {
 
             switch game.phase {
             case .idle:
-                StartPanel(game: game)
+                if game.isPractisingPiece {
+                    PiecePanel(game: game)
+                } else {
+                    StartPanel(game: game)
+                }
             case .finished:
                 if let summary = game.summary {
                     SummaryPanel(summary: summary, game: game)
@@ -300,6 +384,17 @@ private struct StartPanel: View {
             Text("or press Space")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Divider()
+                .frame(width: 240)
+                .padding(.vertical, 4)
+            // Spelled out here as well as in the File menu, so it's found without looking for it.
+            HStack(spacing: 10) {
+                Button("Practise a piece…", systemImage: "music.note.list") { PieceFile.choose(for: game) }
+                    .help("Open a MusicXML file and read its notes (⌘O)")
+                Text("MusicXML file, or drop one here")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .panel()
     }
@@ -323,8 +418,15 @@ private struct SummaryPanel: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            Text(summary.mode == .practice ? "Practice complete" : summary.timeRanOut ? "Time's up!" : "Round ended")
-                .font(.title2.weight(.bold))
+            VStack(spacing: 4) {
+                Text(title)
+                    .font(.title2.weight(.bold))
+                if let pieceTitle = summary.pieceTitle {
+                    Text(pieceTitle)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("\(summary.score)")
                     .font(.system(size: 54, weight: .bold, design: .rounded))
@@ -333,13 +435,16 @@ private struct SummaryPanel: View {
                     .font(.title3)
                     .foregroundStyle(.secondary)
             }
-            if summary.isNewBest {
-                Label("New personal best!", systemImage: "star.fill")
-                    .font(.headline)
-                    .foregroundStyle(.orange)
-            } else if let best = summary.bestScore {
-                Text("Personal best: \(best)")
-                    .foregroundStyle(.secondary)
+            // Pieces keep no best score: one piece's score says nothing about another's.
+            if summary.pieceTitle == nil {
+                if summary.isNewBest {
+                    Label("New personal best!", systemImage: "star.fill")
+                        .font(.headline)
+                        .foregroundStyle(.orange)
+                } else if let best = summary.bestScore {
+                    Text("Personal best: \(best)")
+                        .foregroundStyle(.secondary)
+                }
             }
             HStack(spacing: 32) {
                 Metric(title: "Accuracy", value: summary.accuracy.map { "\(Int(($0 * 100).rounded()))%" } ?? "–")
@@ -363,6 +468,11 @@ private struct SummaryPanel: View {
             .padding(.top, 4)
         }
         .panel()
+    }
+
+    private var title: String {
+        if summary.finishedPiece { return "Piece complete" }
+        return summary.mode == .practice ? "Practice complete" : summary.timeRanOut ? "Time's up!" : "Round ended"
     }
 
     /// "F♯4", or "Fa♯ (F♯4)" with other naming systems; adds the clef when clefs were mixed.
@@ -392,13 +502,33 @@ private struct Metric: View {
     }
 }
 
-private extension View {
+extension View {
+    /// The white card the start, piece and summary panels sit on, over the staff.
     func panel() -> some View {
         multilineTextAlignment(.center)
             .padding(.horizontal, 36)
             .padding(.vertical, 22)
             .background(.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .shadow(color: .black.opacity(0.12), radius: 24, y: 10)
+    }
+}
+
+/// Shown while a file is dragged over the window.
+private struct DropHighlight: View {
+    var body: some View {
+        ZStack {
+            // Veils what's underneath so the message reads on its own.
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.white.opacity(0.8))
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Theme.accent.opacity(0.06))
+                .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 3, dash: [10, 7]))
+            Label("Drop a MusicXML file to practise it", systemImage: "music.note.list")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(Theme.accent)
+        }
+        .padding(10)
+        .allowsHitTesting(false)
     }
 }
 
