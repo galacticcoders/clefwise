@@ -29,7 +29,13 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
     octaves for the current clef and range. Keys are blank unless you tick *Show key names* (K),
     which names white and black keys (C♯/D♭…, Do♯/Re♭…, or komal/tivra swaras in sargam; black
     keys stay blank when the keyboard is too wide to fit them). A miss lights up the right key
-    and tells you if you only got the octave wrong. Piano rounds keep their own best scores.
+    and tells you if you only got the octave wrong.
+  - *Keyboard*: type the note's name in the current naming system (`c`, `sol`, `dha`); it
+    answers as soon as a whole name is typed. Keys that can't continue any name are ignored
+    with a shake, and Backspace fixes typos; neither counts as a miss. Any octave counts. During
+    a round every letter types, so H and M only work as shortcuts between rounds.
+
+  Each answer method keeps its own best scores.
 - A correct answer plays the note. A miss shows the note in red with its name and highlights the
   right key for a moment.
 - **Hints** (H) prints the name of every line and space and, with letter names, shows the
@@ -49,6 +55,7 @@ Sources/Clefwise/
   ContentView.swift   UI: stats, staff card, start/summary panels, answer keys
   StaffView.swift     staff, clef, note, ledger lines and hint drawing (Canvas)
   PianoKeyboard.swift piano answer input
+  TypingPad.swift     keyboard (typing) answer input
   Game.swift          round logic, adaptive note picking, persistence
   Music.swift         pitches, clefs, ranges
   Synth.swift         tiny additive synth for note playback

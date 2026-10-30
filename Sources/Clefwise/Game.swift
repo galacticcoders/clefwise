@@ -53,11 +53,23 @@ final class Game {
     }
 
     enum AnswerInput: String, CaseIterable, Identifiable, Codable {
-        case buttons, piano
+        case buttons, piano, keyboard
 
         var id: Self { self }
-        var label: String { self == .buttons ? "Note buttons" : "Piano" }
-        var symbol: String { self == .buttons ? "rectangle.split.3x1" : "pianokeys" }
+        var label: String {
+            switch self {
+            case .buttons: "Note buttons"
+            case .piano: "Piano"
+            case .keyboard: "Keyboard"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .buttons: "rectangle.split.3x1"
+            case .piano: "pianokeys"
+            case .keyboard: "keyboard"
+            }
+        }
     }
 
     enum Phase { case idle, playing, finished }
@@ -103,7 +115,10 @@ final class Game {
     private static let correctFlash: Duration = .milliseconds(250)
 
     var settings: Settings {
-        didSet { Self.save(settings, as: Keys.settings) }
+        didSet {
+            if settings.naming != oldValue.naming { typedText = "" }
+            Self.save(settings, as: Keys.settings)
+        }
     }
 
     private(set) var phase = Phase.idle
@@ -111,6 +126,10 @@ final class Game {
     /// True while a missed note is shown in red with its name before moving on.
     private(set) var isShowingMiss = false
     private(set) var flash: Flash?
+    /// What's been typed so far towards a note name, in keyboard mode.
+    private(set) var typedText = ""
+    /// Bumped when a keystroke can't lead to any note name, so the input box can shake.
+    private(set) var rejectedKeystrokes = 0
     private(set) var score = 0
     private(set) var attempts = 0
     private(set) var streak = 0
@@ -139,9 +158,11 @@ final class Game {
     var timeRemaining: TimeInterval { max(0, Self.sprintLength - elapsed) }
     var accuracy: Double? { attempts > 0 ? Double(score) / Double(attempts) : nil }
     var bestScore: Int? { bestScores[bestScoreKey] }
-    /// Piano answers need the right octave, so they keep their own best scores.
+    /// Each answer method plays differently (the piano needs the octave, typing takes keystrokes),
+    /// so each keeps its own best scores.
     private var bestScoreKey: String {
-        "\(settings.clefChoice.rawValue).\(settings.range.rawValue)" + (settings.answerInput == .piano ? ".piano" : "")
+        "\(settings.clefChoice.rawValue).\(settings.range.rawValue)"
+            + (settings.answerInput == .buttons ? "" : ".\(settings.answerInput.rawValue)")
     }
 
     /// White keys (as diatonic indices) for the piano: whole octaves covering every note the settings can ask.
@@ -166,6 +187,7 @@ final class Game {
         responseTimes = []
         summary = nil
         flash = nil
+        typedText = ""
         isShowingMiss = false
         question = nil
         phase = .playing
@@ -242,11 +264,19 @@ final class Game {
         case 36, 76, 49: // Return, keypad Enter, Space
             if phase != .playing { start() }
             return true
+        case 51 where settings.answerInput == .keyboard: // Delete (backspace)
+            if !typedText.isEmpty { typedText.removeLast() }
+            return true
         default:
             break
         }
         guard let character = characters.lowercased().first else { return false }
-        // Typing names a note but can't pick an octave, so it only answers in button mode.
+        // In keyboard mode every letter typed during a round goes towards a note name.
+        if settings.answerInput == .keyboard, phase == .playing, character.isLetter {
+            type(character)
+            return true
+        }
+        // Typing can't pick an octave, so these shortcuts only answer in button mode.
         // 1–7 answer by button position; typed letters only make sense with letter names.
         if settings.answerInput == .buttons {
             if let digit = character.wholeNumberValue, let letter = NoteLetter(rawValue: digit - 1) {
@@ -267,6 +297,22 @@ final class Game {
         return true
     }
 
+    /// Adds a typed letter; answers as soon as the text spells a whole note name. Keystrokes that
+    /// can't lead to any name are dropped rather than counted as wrong, so typos aren't punished.
+    private func type(_ character: Character) {
+        guard !isShowingMiss else { return }
+        let text = typedText + String(character)
+        let names = NoteLetter.allCases.map { ($0, settings.naming.name(of: $0).lowercased()) }
+        if let (letter, _) = names.first(where: { $0.1 == text }) {
+            typedText = ""
+            answer(letter)
+        } else if names.contains(where: { $0.1.hasPrefix(text) }) {
+            typedText = text
+        } else {
+            rejectedKeystrokes += 1
+        }
+    }
+
     private func tick() {
         let now = Date().timeIntervalSince(roundStart)
         // Only publish whole-second changes so the UI doesn't redraw ten times a second.
@@ -281,6 +327,7 @@ final class Game {
         stopClock()
         isShowingMiss = false
         flash = nil
+        typedText = ""
         question = nil
         guard attempts > 0 || settings.mode == .sprint else {
             phase = .idle

@@ -14,11 +14,13 @@ struct ContentView: View {
             switch game.settings.answerInput {
             case .buttons: AnswerPad(game: game)
             case .piano: PianoPad(game: game)
+            case .keyboard: TypingPad(game: game)
             }
             HStack {
-                Text("\(answerHint)  ·  Space start  ·  Esc stop  ·  H hints\(game.settings.answerInput == .piano ? "  ·  K key names" : "")  ·  M mute")
+                Text(shortcutHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 Spacer()
                 if game.settings.answerInput == .piano {
                     Toggle("Show key names", isOn: $game.settings.showKeyNames)
@@ -34,7 +36,7 @@ struct ContentView: View {
                 .labelStyle(.titleAndIcon)
                 .fixedSize()
                 .disabled(game.phase == .playing)
-                .help("Note buttons accept any octave; on the piano you click the exact key")
+                .help("Note buttons and typing accept any octave; on the piano you click the exact key")
             }
         }
         .padding(24)
@@ -48,12 +50,21 @@ struct ContentView: View {
         }
     }
 
-    private var answerHint: String {
+    private var shortcutHint: String {
+        var parts: [String]
         switch (game.settings.answerInput, game.settings.naming) {
-        case (.piano, _): "Click the key in the right octave"
-        case (.buttons, .letters): "Type the note's letter or 1–7"
-        case (.buttons, _): "Press 1–7 to answer"
+        case (.buttons, .letters): parts = ["Type the note's letter or 1–7"]
+        case (.buttons, _): parts = ["Press 1–7 to answer"]
+        case (.piano, _): parts = ["Click the exact key"]
+        case (.keyboard, _): parts = ["Type the note's name, ⌫ to fix"]
         }
+        parts += ["Space start", "Esc stop"]
+        switch game.settings.answerInput {
+        case .buttons: parts += ["H hints", "M mute"]
+        case .piano: parts += ["H hints", "K key names", "M mute"]
+        case .keyboard: break // letters are typed during a round, so H and M aren't shortcuts then
+        }
+        return parts.joined(separator: "  ·  ")
     }
 
     @ToolbarContentBuilder
