@@ -10,8 +10,9 @@ struct TrendSection: View {
     /// The period under the pointer in either chart (its start); both show it, so they read across.
     @State private var hovered: Date?
 
-    /// Past four months a point a day is too dense to read: the charts go by week instead.
-    private var isWeekly: Bool { report.days.count > 120 }
+    /// Past about six weeks a point a day breaks into fragments wherever a day is skipped and
+    /// swings with small days: the charts go by week instead (so "Last 90 days" reads as a trend).
+    private var isWeekly: Bool { report.days.count > 45 }
 
     private var periods: [TrendPeriod] {
         isWeekly ? TrendPeriod.weeks(of: report.days) : report.days.map(TrendPeriod.init(day:))
