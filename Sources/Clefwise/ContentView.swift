@@ -4,6 +4,8 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var game: Game
     @State private var keyMonitor: Any?
+    /// The window this view is in: keys typed in another one (Progress) aren't answers.
+    @State private var hostWindow = WeakWindow()
     /// A file is being dragged over the window between rounds.
     @State private var isDropTargeted = false
 
@@ -44,6 +46,7 @@ struct ContentView: View {
         .padding(24)
         .frame(minWidth: 820, minHeight: 640)
         .background(Theme.background)
+        .background(WindowReader { [hostWindow] in hostWindow.window = $0 })
         .overlay {
             if isDropTargeted { DropHighlight() }
         }
@@ -179,9 +182,11 @@ struct ContentView: View {
 
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [game] event in
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [game, hostWindow] event in
             // Leave ⌘/⌃/⌥ shortcuts (⌘Q, ⌘W, …) to the system.
             guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
+            // Space in the Progress window isn't a round starting.
+            guard event.window === hostWindow.window else { return event }
             // The open panel and alerts are windows of their own: typing and Return belong to them.
             guard !(event.window is NSPanel), event.window?.attachedSheet == nil else { return event }
             let characters = event.charactersIgnoringModifiers ?? ""
@@ -192,6 +197,11 @@ struct ContentView: View {
             return handled ? nil : event
         }
     }
+}
+
+/// A window held without keeping it alive, shared with the key monitor's closure.
+private final class WeakWindow {
+    weak var window: NSWindow?
 }
 
 fileprivate extension KeyChoice {
@@ -216,6 +226,7 @@ fileprivate extension KeyChoice {
 
 private struct StatsBar: View {
     @Bindable var game: Game
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         HStack(spacing: 12) {
@@ -234,6 +245,18 @@ private struct StatsBar: View {
                 .layoutPriority(1)
             }
             Spacer()
+            // Between rounds only: mid-round its window would take the keys the answers come from,
+            // and Stop needs the room. Spelled out, unlike the toggles: an icon alone was easy to miss.
+            if game.phase != .playing {
+                Button {
+                    ProgressWindow.open(from: "statsBar", game: game, with: openWindow)
+                } label: {
+                    Label("Progress", systemImage: "chart.xyaxis.line")
+                }
+                .labelStyle(.titleAndIcon)
+                .help("Your progress over time, in a window of its own (⇧⌘P)")
+            }
+
             // Things you may want mid-round live here; round settings are in the toolbar.
             Group {
                 // The game logs the settings; these also log the clicks (H and M toggle them too).
