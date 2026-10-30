@@ -309,7 +309,23 @@ private extension GameTestBench {
         let answer = try #require(logged(AnswerGiven.self).last)
         #expect(answer.correct)
         #expect(answer.name == NamingSystem.sargam.name(of: question.pitch))
-        #expect(answer.keystrokes.map(\.result) == [.rejected, .armed] + (flat ? [.armed] : []) + [.submitted])
+        // The ♭ button click comes first, as "click ♭".
+        #expect(answer.keystrokes.map(\.result) == [.armed, .rejected, .armed] + (flat ? [.armed] : []) + [.submitted])
+        #expect(answer.keystrokes.first?.key == "click ♭")
+    }
+
+    @Test func unansweredQuestionKeepsItsKeystrokes() throws {
+        game.settings.answerInput = .keyboard
+        game.settings.naming = .solfege
+        game.start()
+        let question = try #require(game.question)
+        press("s") // a start: "sol" or "si", so it waits
+        game.stop()
+        let ended = try #require(logged(RoundEnded.self).last)
+        let unanswered = try #require(ended.unansweredQuestion)
+        #expect(unanswered.question == question.id)
+        #expect(unanswered.keystrokes.map(\.key) == ["s"])
+        #expect(unanswered.keystrokes.map(\.result) == [.typed])
     }
 
     // MARK: Settings

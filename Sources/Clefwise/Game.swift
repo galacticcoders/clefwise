@@ -596,6 +596,11 @@ final class Game {
 
     /// Arms ♯ or ♭ for the next note button; choosing the armed one again disarms it.
     func toggleArmedAccidental(_ accidental: Accidental) {
+        // A click on the sign button joins the question's keystrokes; a key arming it is already noted.
+        if let questionLog, !questionLog.keyPending {
+            noteKeystroke("click \(accidental.symbol)")
+            settleKeystroke(.armed)
+        }
         armedAccidental = armedAccidental == accidental ? .natural : accidental
     }
 
@@ -1154,6 +1159,9 @@ final class Game {
     /// Ends the round being logged, if there is one. `isNewBest`: a finished sprint set a best score.
     private func recordRoundEnd(_ reason: RoundEndReason, isNewBest: Bool = false) {
         guard let roundLog else { return }
+        let unanswered = questionLog.map {
+            UnansweredQuestion(question: $0.id, shownMs: Self.milliseconds(since: questionStart), keystrokes: $0.keystrokes)
+        }
         self.roundLog = nil
         questionLog = nil
         recorder.record(.roundEnded(RoundEnded(
@@ -1161,7 +1169,8 @@ final class Game {
             score: score, attempts: attempts, bestStreak: bestStreak,
             averageResponseMs: averageResponseTime.map { Int(($0 * 1000).rounded()) },
             bestScore: settings.mode == .sprint ? bestScore : nil, isNewBest: isNewBest,
-            notesToReview: notesToReview.map { Self.statKey($0.clef, $0.pitch) })))
+            notesToReview: notesToReview.map { Self.statKey($0.clef, $0.pitch) },
+            unansweredQuestion: unanswered)))
     }
 
     private func recordPieceOpened(_ score: Score, from url: URL, via source: PieceOpenSource) {

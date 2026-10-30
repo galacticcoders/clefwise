@@ -136,7 +136,7 @@ final class UsageLog: UsageRecorder, @unchecked Sendable {
                 let line = data[start..<end]
                 start = end + 1
                 guard !line.isEmpty else { continue }
-                if let event = try? readingDecoder.decode(LoggedEvent.self, from: line) {
+                if let event = try? LoggedEvent.decoder.decode(LoggedEvent.self, from: line) {
                     try body(event)
                 } else {
                     unreadable += 1
@@ -145,16 +145,4 @@ final class UsageLog: UsageRecorder, @unchecked Sendable {
         }
         return unreadable
     }
-
-    /// `LoggedEvent.decoder`, but with times parsed by `Date.ISO8601FormatStyle`, which is about
-    /// 40 times faster than `ISO8601DateFormatter` (most of the decoding time otherwise) and reads
-    /// the same millisecond.
-    private static let readingDecoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        let style = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
-        decoder.dateDecodingStrategy = .custom { decoder in
-            try style.parse(try decoder.singleValueContainer().decode(String.self))
-        }
-        return decoder
-    }()
 }

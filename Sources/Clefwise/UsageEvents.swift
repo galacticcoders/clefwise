@@ -165,6 +165,8 @@ struct AnswerGiven: Codable, Equatable {
 }
 
 struct Keystroke: Codable, Equatable {
+    /// The character typed, a key name ("Return", "Delete"…), or "click ♯" / "click ♭" for the
+    /// note buttons' sign buttons.
     var key: String
     /// Since the question appeared.
     var ms: Int
@@ -190,6 +192,15 @@ struct RoundEnded: Codable, Equatable {
     var bestScore: Int?
     var isNewBest: Bool
     var notesToReview: [String]
+    /// The question still on screen when the round ended (time up, stopped, quit…), if any.
+    var unansweredQuestion: UnansweredQuestion? = nil
+}
+
+/// A question left without an answer: how long it was up and the keys pressed meanwhile.
+struct UnansweredQuestion: Codable, Equatable {
+    var question: UUID
+    var shownMs: Int
+    var keystrokes: [Keystroke]
 }
 
 struct PieceOpened: Codable, Equatable {
@@ -311,7 +322,7 @@ struct LoggedEvent: Codable, Equatable {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .custom { date, encoder in
             var container = encoder.singleValueContainer()
-            try container.encode(timestampFormatter.string(from: date))
+            try container.encode(timestampStyle.format(date))
         }
         return encoder
     }()
@@ -320,19 +331,18 @@ struct LoggedEvent: Codable, Equatable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
             let text = try decoder.singleValueContainer().decode(String.self)
-            guard let date = timestampFormatter.date(from: text) else {
+            do {
+                return try timestampStyle.parse(text)
+            } catch {
                 throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Bad time \(text)"))
             }
-            return date
         }
         return decoder
     }()
 
-    private static let timestampFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
+    /// UTC with milliseconds, "2026-10-30T17:02:11.348Z". The format style is much faster to parse
+    /// than `ISO8601DateFormatter`, which matters when reading years of log.
+    private static let timestampStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 }
 
 extension UsageEvent {

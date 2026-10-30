@@ -162,7 +162,7 @@ extension UsageExport {
         | `pitch` | The exact key, for piano answers (see Pitch). |
         | `correct` | Whether it was right. |
         | `wrongOctave` | Piano only: the right note in the wrong octave. |
-        | `keystrokes` | Every key pressed while the question was up, in order, each with `key`, `ms` (since the question appeared) and `result`: `typed` (kept as part of a name), `rejected` (refused; the box shook), `deleted` (Backspace), `submitted` (Return, or a completed name submitting), `armed` (♯/♭ armed or disarmed on the note buttons), `other` (pressed but not part of answering). |
+        | `keystrokes` | Every key pressed while the question was up, in order, each with `key`, `ms` (since the question appeared) and `result`: `typed` (kept as part of a name), `rejected` (refused; the box shook), `deleted` (Backspace), `submitted` (Return, or a completed name submitting), `armed` (♯/♭ armed or disarmed on the note buttons; clicks on those buttons appear as keys `click ♯` / `click ♭`), `other` (pressed but not part of answering). |
         | `scoreAfter`, `streakAfter` | Score and current streak after this answer. |
 
         ### `inputIgnored`: an answer or keystroke that didn't count
@@ -190,6 +190,7 @@ extension UsageExport {
         | `bestScore` | The best sprint score for these settings (sprints on random notes only). |
         | `isNewBest` | This round set a new best score. |
         | `notesToReview` | The notes missed most, as listed in the round summary. |
+        | `unansweredQuestion` | The question still on screen when the round ended, if any: `question` id, `shownMs` (how long it was up) and its `keystrokes` (as in `answerGiven`). |
 
         ### `pieceOpened`: a MusicXML file was opened
 
