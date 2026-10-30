@@ -137,10 +137,13 @@ struct PiecePanel: View {
         return game.pieceURL?.deletingPathExtension().lastPathComponent ?? "Untitled piece"
     }
 
-    /// "Piano · 312 notes · 45 bars"; the part's name is left to the picker when there is one.
+    /// "Piano · 312 notes · 45 bars", or "156 of 312 notes" when the hand, start bar or chord setting
+    /// leaves some out; the part's name is left to the picker when there is one.
     private func details(of part: ScorePart, showsName: Bool) -> String {
         var parts = showsName && !part.name.isEmpty ? [part.name] : []
-        parts.append(part.notes.count == 1 ? "1 note" : "\(part.notes.count) notes")
+        let total = part.notes.count == 1 ? "1 note" : "\(part.notes.count) notes"
+        let asked = game.pieceRoundNoteCount
+        parts.append(asked == part.notes.count ? total : "\(asked) of \(total)")
         parts.append(part.measureCount == 1 ? "1 bar" : "\(part.measureCount) bars")
         return parts.joined(separator: "  ·  ")
     }

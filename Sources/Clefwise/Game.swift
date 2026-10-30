@@ -230,6 +230,8 @@ final class Game {
     var pieceError: String?
     /// The notes of the loaded piece the next round asks, kept up to date with the piece settings.
     private var selectedNotes: [ScoreNote] = []
+    /// How many notes the next piece round asks with the current hand, start bar and chord settings.
+    var pieceRoundNoteCount: Int { selectedNotes.count }
     /// The round in progress when it's on a piece; nil between rounds and in random rounds.
     private var pieceRound: PieceRound?
 

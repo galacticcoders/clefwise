@@ -51,7 +51,27 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
 - **Hints** (H) prints the name of every line and space and, with letter names, shows the
   mnemonics (Every Good Boy Does Fine / FACE, Good Boys Do Fine Always / All Cows Eat Grass).
 
-Keyboard: Space/Return start · Esc stop · H hints · K key names (piano) · M mute.
+Keyboard: Space/Return start · Esc stop · H hints · K key names (piano) · M mute · ⌘O open a piece.
+
+## Practise a piece
+
+Open a MusicXML file (`.musicxml`, `.xml` or compressed `.mxl`; in MuseScore use File → Export)
+with **File → Open Piece…** (⌘O), the **Practise a piece…** button, or by dropping it on the
+window. Then pick the part, the **hand** (right = upper staff, left = lower, or both), **in order**
+or **shuffled**, the **bar to start at**, and whether to ask **one note per chord** (top note in
+the right hand, bottom note in the left). Clef, key signature and range come from the piece, so
+those toolbar settings are greyed out; Mode, note names and the answer method still apply.
+
+- Notes come one at a time in reading order; chords bottom to top, both hands lower staff first.
+  Rests and tied continuations are skipped. In Practice mode the round ends with the last note;
+  a 60s Sprint wraps back to the start bar.
+- Since the rest of the bar isn't on screen, a note whose sharp or flat comes from earlier in the
+  bar gets its sign printed.
+- Under an 8va/8vb line the note is drawn where it's written, with the mark; the piano answer is
+  the key that actually sounds.
+- Notes in other clefs (C clefs, octave clefs) and double sharps/flats are left out, with a note
+  saying how many. Repeats aren't expanded.
+- The last piece reopens at launch. **Back to random notes** returns to normal practice.
 
 Notes you've missed recently come up more often (based on your last 8 tries at each note), so
 practice concentrates on what you don't know yet. History, best scores and settings are stored in
@@ -61,15 +81,19 @@ practice concentrates on what you don't know yet. History, best scores and setti
 
 ```
 Sources/Clefwise/
-  ClefwiseApp.swift   app entry + window
+  ClefwiseApp.swift   app entry, window, File → Open Piece…
   ContentView.swift   UI: stats, staff card, start/summary panels, answer keys
-  StaffView.swift     staff, clef, note, ledger lines and hint drawing (Canvas)
+  PiecePanel.swift    piece setup panel, opening and dropping files
+  StaffView.swift     staff, clef, key signature, note, ledger lines, 8va and hints (Canvas)
   PianoKeyboard.swift piano answer input
   TypingPad.swift     keyboard (typing) answer input
-  Game.swift          round logic, adaptive note picking, persistence
-  Music.swift         pitches, clefs, ranges
+  Game.swift          round logic (random and piece rounds), adaptive note picking, persistence
+  Music.swift         pitches, accidentals, key signatures, clefs, ranges, naming systems
+  Song.swift          a piece read from MusicXML
+  MusicXML.swift      MusicXML / .mxl importer
   Synth.swift         tiny additive synth for note playback
   Theme.swift         colors
+Tests/ClefwiseTests/  Swift Testing tests (`swift test`), with hand-written MusicXML fixtures
 Resources/AppIcon.icns
 build-app.sh          packages the release binary as a .app
 ```

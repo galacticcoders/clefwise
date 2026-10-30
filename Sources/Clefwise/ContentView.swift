@@ -138,7 +138,8 @@ struct ContentView: View {
     /// A menu with a short title rather than a picker: a toolbar picker is as wide as its longest
     /// item ("C major · no ♯/♭"), and the toolbar has no room to spare.
     private var keyMenu: some View {
-        Menu(game.settings.key.shortLabel) {
+        // With a piece open the menu is disabled and names the piece's key, not the setting.
+        Menu(game.isPractisingPiece ? KeyChoice.fixed(game.currentKeySignature).shortLabel : game.settings.key.shortLabel) {
             Picker("Key", selection: $game.settings.key) {
                 ForEach(KeyChoice.allCases) { choice in
                     if choice.startsMenuGroup { Divider() }
