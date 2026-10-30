@@ -124,6 +124,8 @@ final class Game {
     var settings: Settings {
         didSet {
             if settings.naming != oldValue.naming { typedText = "" }
+            // Between rounds the staff shows the newly chosen key instead of the last round's.
+            if settings.key != oldValue.key, phase != .playing { roundKey = nil }
             Self.save(settings, as: Keys.settings)
         }
     }
@@ -145,6 +147,9 @@ final class Game {
     private(set) var elapsed: TimeInterval = 0
     private(set) var summary: RoundSummary?
     private var bestScores: [String: Int]
+    /// Key signature every question of the round is written in, picked at `start()`. Kept after
+    /// the round so the staff still shows it, until the key setting changes.
+    private var roundKey: KeySignature?
 
     @ObservationIgnored private var noteStats: [String: NoteStat]
     @ObservationIgnored private var bestStreak = 0
@@ -168,16 +173,25 @@ final class Game {
     var accuracy: Double? { attempts > 0 ? Double(score) / Double(attempts) : nil }
     var bestScore: Int? { bestScores[bestScoreKey] }
     /// Each answer method plays differently (the piano needs the octave, typing takes keystrokes),
-    /// so each keeps its own best scores.
+    /// and so do key signatures and printed accidentals, so each setup keeps its own best scores.
+    /// Plain C major adds nothing, so scores saved before keys existed still count.
     private var bestScoreKey: String {
-        "\(settings.clefChoice.rawValue).\(settings.range.rawValue)"
+        var key = "\(settings.clefChoice.rawValue).\(settings.range.rawValue)"
             + (settings.answerInput == .buttons ? "" : ".\(settings.answerInput.rawValue)")
+        switch settings.key {
+        case .fixed(let signature) where signature != .cMajor: key += ".key\(signature.fifths)"
+        case .fixed: break
+        case .random: key += ".keyRandom"
+        }
+        if settings.addsAccidentals { key += ".acc" }
+        return key
     }
 
-    /// Key signature on the staff: the current round's, or the chosen one between rounds
-    /// (C major when the choice is random).
+    /// Key signature on the staff: the current or last round's, or the chosen one before any
+    /// round (C major when the choice is random).
     var currentKeySignature: KeySignature {
         if let question { return question.keySignature }
+        if let roundKey { return roundKey }
         if case .fixed(let key) = settings.key { return key }
         return .cMajor
     }
@@ -188,7 +202,11 @@ final class Game {
     }
 
     /// In keyboard mode: the typed text is a whole name but could still get a ♯/♭, so it waits for Return.
-    var typingNeedsReturn: Bool { false }
+    var typingNeedsReturn: Bool {
+        let answers = typeableAnswers
+        return answers.contains { $0.text == typedText }
+            && answers.contains { $0.text != typedText && $0.text.hasPrefix(typedText) }
+    }
 
     /// White keys (as diatonic indices) for the piano: whole octaves covering every note the settings can ask.
     var pianoKeys: ClosedRange<Int> {
@@ -213,8 +231,10 @@ final class Game {
         summary = nil
         flash = nil
         typedText = ""
+        armedAccidental = .natural
         isShowingMiss = false
         question = nil
+        roundKey = pickRoundKey()
         phase = .playing
         roundStart = Date()
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
@@ -235,8 +255,10 @@ final class Game {
         phase = .idle
     }
 
-    /// Note-button press: the letter plus whichever ♯/♭ is armed.
+    /// Note-button press: the letter plus whichever ♯/♭ is armed. Presses that can't count (during
+    /// the pause after a miss) leave the armed sign alone.
     func answer(_ letter: NoteLetter) {
+        guard phase == .playing, !isShowingMiss else { return }
         let accidental = armedAccidental
         armedAccidental = .natural
         answer(letter, accidental)
@@ -302,7 +324,11 @@ final class Game {
             }
             return true
         case 36, 76, 49: // Return, keypad Enter, Space
-            if phase != .playing { start() }
+            if phase != .playing {
+                start()
+            } else if keyCode != 49, settings.answerInput == .keyboard, accidentalsPossible {
+                confirmTyping()
+            }
             return true
         case 51 where settings.answerInput == .keyboard: // Delete (backspace)
             if !typedText.isEmpty { typedText.removeLast() }
@@ -311,14 +337,21 @@ final class Game {
             break
         }
         guard let character = characters.lowercased().first else { return false }
-        // In keyboard mode every letter typed during a round goes towards a note name.
-        if settings.answerInput == .keyboard, phase == .playing, character.isLetter {
+        // In keyboard mode every letter typed during a round goes towards a note name, and so
+        // does a ♯/♭ sign when notes can have one ("b" is a letter already).
+        if settings.answerInput == .keyboard, phase == .playing,
+           character.isLetter || (accidentalsPossible && "#♯♭".contains(character)) {
             type(character)
             return true
         }
         // Typing can't pick an octave, so these shortcuts only answer in button mode.
         // 1–7 answer by button position; typed letters only make sense with letter names.
+        // # or = arms a sharp and - a flat: "b" has to stay the note B.
         if settings.answerInput == .buttons {
+            if accidentalsPossible, let accidental = Self.armingKeys[character] {
+                if phase == .playing { toggleArmedAccidental(accidental) }
+                return true
+            }
             if let digit = character.wholeNumberValue, let letter = NoteLetter(rawValue: digit - 1) {
                 answer(letter)
                 return true
@@ -337,17 +370,50 @@ final class Game {
         return true
     }
 
-    /// Adds a typed letter; answers as soon as the text spells a whole note name. Keystrokes that
-    /// can't lead to any name are dropped rather than counted as wrong, so typos aren't punished.
+    private static let armingKeys: [Character: Accidental] = ["#": .sharp, "=": .sharp, "-": .flat]
+
+    /// Everything that can be typed as an answer, lowercased: each name, and when notes can be
+    /// sharp or flat also the name followed by ♯ or ♭.
+    private var typeableAnswers: [(text: String, letter: NoteLetter, accidental: Accidental)] {
+        let accidentals: [Accidental] = accidentalsPossible ? [.natural, .sharp, .flat] : [.natural]
+        return NoteLetter.allCases.flatMap { letter in
+            let name = settings.naming.name(of: letter).lowercased()
+            return accidentals.map { (name + ($0 == .natural ? "" : $0.symbol), letter, $0) }
+        }
+    }
+
+    /// Adds a typed character; answers as soon as the text is a whole answer nothing longer starts
+    /// with (a bare "f" might still become "f♯", so that one waits for Return). Keystrokes that
+    /// can't lead to any answer are dropped rather than counted as wrong, so typos aren't punished.
     private func type(_ character: Character) {
         guard !isShowingMiss else { return }
-        let text = typedText + String(character)
-        let names = NoteLetter.allCases.map { ($0, settings.naming.name(of: $0).lowercased()) }
-        if let (letter, _) = names.first(where: { $0.1 == text }) {
+        let answers = typeableAnswers
+        // # and a "b" after a whole name are stored as ♯ and ♭, so the text reads like the name.
+        let followsName = answers.contains { $0.text == typedText }
+        let addition = switch character {
+        case "#", "♯": Accidental.sharp.symbol
+        case "♭": Accidental.flat.symbol
+        case "b" where followsName: Accidental.flat.symbol
+        default: String(character)
+        }
+        let text = typedText + addition
+        let extensions = answers.filter { $0.text.hasPrefix(text) }
+        if extensions.count == 1, let match = extensions.first, match.text == text {
             typedText = ""
-            answer(letter)
-        } else if names.contains(where: { $0.1.hasPrefix(text) }) {
+            answer(match.letter, match.accidental)
+        } else if !extensions.isEmpty {
             typedText = text
+        } else {
+            rejectedKeystrokes += 1
+        }
+    }
+
+    /// Return in keyboard mode: answers with a whole name that was waiting for a possible ♯/♭.
+    private func confirmTyping() {
+        guard !isShowingMiss, !typedText.isEmpty else { return }
+        if let match = typeableAnswers.first(where: { $0.text == typedText }) {
+            typedText = ""
+            answer(match.letter, match.accidental)
         } else {
             rejectedKeystrokes += 1
         }
@@ -368,6 +434,7 @@ final class Game {
         isShowingMiss = false
         flash = nil
         typedText = ""
+        armedAccidental = .natural
         question = nil
         guard attempts > 0 || settings.mode == .sprint else {
             phase = .idle
@@ -380,8 +447,12 @@ final class Game {
             Self.save(bestScores, as: Keys.bestScores)
             isNewBest = true
         }
+        // F and F♯ share a staff position, so pitch height breaks the tie.
         let review = roundMisses
-            .sorted { $0.value != $1.value ? $0.value > $1.value : $0.key.pitch.diatonicIndex < $1.key.pitch.diatonicIndex }
+            .sorted {
+                $0.value != $1.value ? $0.value > $1.value
+                    : ($0.key.pitch.diatonicIndex, $0.key.pitch.midiNumber) < ($1.key.pitch.diatonicIndex, $1.key.pitch.midiNumber)
+            }
             .prefix(4)
             .map(\.key)
         summary = RoundSummary(
@@ -416,25 +487,60 @@ final class Game {
 
     // MARK: - Picking notes
 
+    /// The chosen key, or for "random" any key but C major, other than last round's.
+    private func pickRoundKey() -> KeySignature {
+        switch settings.key {
+        case .fixed(let key): key
+        case .random: KeySignature.all.filter { $0 != .cMajor && $0 != roundKey }.randomElement()!
+        }
+    }
+
     private func nextQuestion() {
         let previous = question
+        let key = roundKey ?? .cMajor
+        // With added accidentals on, about 30% of notes get a printed sign; the rest follow the key.
+        let printsAccidental = settings.addsAccidentals && Double.random(in: 0..<1) < 0.3
         let candidates = settings.clefChoice.clefs.flatMap { clef in
-            settings.range.positions.map { Question(clef: clef, pitch: clef.pitch(atPosition: $0)) }
-        }.filter { $0.clef != previous?.clef || $0.pitch != previous?.pitch }
+            settings.range.positions.flatMap { position in
+                let natural = clef.pitch(atPosition: position)
+                let fromKey = key.accidental(for: natural.letter)
+                let accidentals = printsAccidental ? Self.printableAccidentals(on: natural.letter, besides: fromKey) : [fromKey]
+                // A position with two possible signs splits its share, so every position stays as likely.
+                return accidentals.map {
+                    (question: Question(clef: clef, pitch: natural.with($0), keySignature: key,
+                                        printedAccidental: printsAccidental ? $0 : nil),
+                     share: 1 / Double(accidentals.count))
+                }
+            }
+        }.filter { $0.question.clef != previous?.clef || $0.question.pitch != previous?.pitch }
 
         // Notes you've been missing lately come up more often (up to ~5x a mastered note).
-        let weights = candidates.map { 0.4 + 2.5 * (noteStats[statKey(for: $0)] ?? NoteStat()).recentErrorRate }
+        let weights = candidates.map {
+            $0.share * (0.4 + 2.5 * (noteStats[statKey(for: $0.question)] ?? NoteStat()).recentErrorRate)
+        }
         var roll = Double.random(in: 0..<weights.reduce(0, +))
-        var choice = candidates[candidates.count - 1]
+        var choice = candidates[candidates.count - 1].question
         for (candidate, weight) in zip(candidates, weights) {
             if roll < weight {
-                choice = candidate
+                choice = candidate.question
                 break
             }
             roll -= weight
         }
         question = choice
         questionStart = Date()
+    }
+
+    /// Signs that change what the key gives `letter`, short of spelling E♯, B♯, C♭ or F♭.
+    private static func printableAccidentals(on letter: NoteLetter, besides fromKey: Accidental) -> [Accidental] {
+        Accidental.allCases.filter { accidental in
+            switch accidental {
+            case fromKey: false
+            case .sharp: letter != .e && letter != .b
+            case .flat: letter != .c && letter != .f
+            case .natural: true
+            }
+        }
     }
 
     private func statKey(for question: Question) -> String {
