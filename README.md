@@ -26,9 +26,10 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
   - *Note buttons*: click a name, press **1–7** (button position), or with letter names type
     **C D E F G A B**. Any octave counts.
   - *Piano*: click the exact key, so the octave has to be right too. The keyboard covers whole
-    octaves for the current clef and range, with a dot on middle C. Keys are blank unless you
-    tick *Show key names* (K). A miss lights up the right key and tells you if you only got the
-    octave wrong. Piano rounds keep their own best scores.
+    octaves for the current clef and range. Keys are blank unless you tick *Show key names* (K),
+    which names white and black keys (C♯/D♭…, Do♯/Re♭…, or komal/tivra swaras in sargam; black
+    keys stay blank when the keyboard is too wide to fit them). A miss lights up the right key
+    and tells you if you only got the octave wrong. Piano rounds keep their own best scores.
 - A correct answer plays the note. A miss shows the note in red with its name and highlights the
   right key for a moment.
 - **Hints** (H) prints the name of every line and space and, with letter names, shows the

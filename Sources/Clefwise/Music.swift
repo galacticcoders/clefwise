@@ -86,6 +86,16 @@ enum NamingSystem: String, CaseIterable, Identifiable, Codable {
     func names(of letters: [NoteLetter]) -> String {
         letters.map(name(of:)).joined(separator: " ")
     }
+
+    /// Name of the black key just above `letter`, as lines: its sharp and flat spellings,
+    /// or in sargam the komal (flat) / tivra (sharp, only Ma) swara.
+    func blackKeyName(above letter: NoteLetter) -> [String] {
+        guard letter != .e, let next = NoteLetter(rawValue: letter.rawValue + 1) else { return [] }
+        switch self {
+        case .letters, .solfege: return ["\(name(of: letter))♯", "\(name(of: next))♭"]
+        case .sargam: return letter == .f ? ["tivra", name(of: letter)] : ["komal", name(of: next)]
+        }
+    }
 }
 
 enum ClefChoice: String, CaseIterable, Identifiable, Codable {
