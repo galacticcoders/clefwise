@@ -244,7 +244,7 @@ extension ProgressReport {
         }
         let rounds: [RecentRound] = (0..<24).map { index in
             let attempts = 15 + Int(random.next() * 30)
-            return RecentRound(id: UUID(), started: now.addingTimeInterval(-Double(index) * 5400), durationMs: 60_000,
+            return RecentRound(id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index))!, started: now.addingTimeInterval(-Double(index) * 5400), durationMs: 60_000,
                             mode: index % 3 == 0 ? "practice" : "sprint", input: ["buttons", "piano", "keyboard"][index % 3],
                             naming: index % 4 == 0 ? "solfege" : "letters",
                             description: index % 5 == 0 ? "Minuet in G · Right hand" : "Treble · On the staff · G major",
