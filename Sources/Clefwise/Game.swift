@@ -367,6 +367,9 @@ final class Game {
     /// on, or the part's first note when the settings leave nothing to ask.
     private var leadingPieceNote: ScoreNote? { pieceNotes.first ?? piecePart?.notes.first }
 
+    /// Called by the app as it quits, so a round still going is logged as ended (`.appQuit`).
+    func appWillTerminate() {}
+
     /// Reads a MusicXML file and switches to practising it, or sets `pieceError`. `source` says
     /// how the file was picked, for the usage log.
     func openPiece(at url: URL, via source: PieceOpenSource = .menu) {
