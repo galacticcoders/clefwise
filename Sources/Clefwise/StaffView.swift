@@ -8,6 +8,9 @@ struct StaffView: View {
     var keySignature = KeySignature.cMajor
     /// Its `printedAccidental`, if any, is drawn in front of the note head.
     var note: Question?
+    /// When set, the staff is scaled so notes anywhere in these positions fit (a piece's highest and
+    /// lowest notes); nil keeps the usual layout, which fits three ledger lines either side.
+    var positionsToFit: ClosedRange<Int>? = nil
     var noteColor: Color = Theme.ink
     /// Shown in a pill beside the note, e.g. to reveal the answer after a miss.
     var noteLabel: String?
@@ -17,7 +20,7 @@ struct StaffView: View {
 
     var body: some View {
         Canvas { context, size in
-            let staff = StaffGeometry(size: size)
+            let staff = StaffGeometry(size: size, fitting: fittedPositions)
             drawLines(in: &context, staff)
             let clefEnd = drawClef(in: &context, staff)
             let keySignatureEnd = drawKeySignature(after: clefEnd, in: &context, staff)
@@ -32,6 +35,14 @@ struct StaffView: View {
                 drawNote(note, at: noteX, in: &context, staff)
             }
         }
+    }
+
+    /// `positionsToFit` widened to any hint labels, so they aren't cut off either.
+    private var fittedPositions: ClosedRange<Int>? {
+        guard let positionsToFit, let hintPositions else { return positionsToFit }
+        let lowest = min(positionsToFit.lowerBound, hintPositions.lowerBound)
+        let highest = max(positionsToFit.upperBound, hintPositions.upperBound)
+        return lowest...highest
     }
 
     private func drawLines(in context: inout GraphicsContext, _ staff: StaffGeometry) {
@@ -130,10 +141,13 @@ struct StaffView: View {
         context.fill(head, with: .color(noteColor))
 
         // A little air before the head, or before the ledger lines, which would otherwise cut through the sign.
+        var accidentalBounds: CGRect?
         if let accidental = note.printedAccidental {
             let sign = accidentalPath(accidental, at: position, staff)
             let right = x - (ledgerPositions.isEmpty ? headWidth / 2 + space * 0.25 : space * (1.05 + 0.15))
-            context.fill(sign.offsetBy(dx: right - sign.boundingRect.maxX, dy: 0), with: .color(noteColor))
+            let placed = sign.offsetBy(dx: right - sign.boundingRect.maxX, dy: 0)
+            context.fill(placed, with: .color(noteColor))
+            accidentalBounds = placed.cgPath.boundingBoxOfPath
         }
 
         // Stem goes up from the right of the head below the middle line, down from the left otherwise,
@@ -145,6 +159,14 @@ struct StaffView: View {
         let stem = Path(CGRect(x: stemX - stemWidth / 2, y: min(y, stemEnd), width: stemWidth, height: abs(stemEnd - y)))
         context.fill(stem, with: .color(noteColor))
 
+        if note.octaveShift != 0 {
+            // The mark goes outside the staff and everything drawn for the note. The head's ink, that is:
+            // its `boundingRect` also takes in the ellipse's control points.
+            let drawn = head.cgPath.boundingBoxOfPath.union(stem.boundingRect).union(accidentalBounds ?? .null)
+            let column = min(drawn.minY, staff.y(8))...max(drawn.maxY, staff.y(0))
+            drawOctaveMark(note.octaveShift, at: x, outside: column, accidental: accidentalBounds, in: &context, staff)
+        }
+
         if let noteLabel {
             let text = context.resolve(pillText(noteLabel, size: space * 0.8).foregroundStyle(.white))
             let textSize = text.measure(in: CGSize(width: 1000, height: 1000))
@@ -153,6 +175,54 @@ struct StaffView: View {
             context.fill(Path(roundedRect: pill, cornerRadius: pill.height / 2), with: .color(noteColor))
             context.draw(text, at: CGPoint(x: pill.midX, y: pill.midY))
         }
+    }
+
+    /// "8va" above a note that sounds an octave higher than written ("15ma" for two), "8vb" or "15mb"
+    /// below one that sounds lower: the number before the note, then a dashed line over it that hooks
+    /// back towards it. `column` is the vertical span of the staff and the note, which the mark keeps out of.
+    private func drawOctaveMark(_ shift: Int, at x: CGFloat, outside column: ClosedRange<CGFloat>, accidental: CGRect?,
+                                in context: inout GraphicsContext, _ staff: StaffGeometry) {
+        let space = staff.space
+        let above = shift > 0
+        let fontSize = space * 0.85
+        let label = "\(abs(shift) * 7 + 1)\(abs(shift) == 1 ? "v" : "m")\(above ? "a" : "b")"
+        let text = context.resolve(Text(label).font(.system(size: fontSize, weight: .bold, design: .serif).italic())
+            .foregroundStyle(noteColor))
+        let textSize = text.measure(in: CGSize(width: 1000, height: 1000))
+        // The line runs through the middle of the digits, which stand about three quarters of an em tall.
+        let halfDigit = fontSize * 0.37
+        let clearance = space * 0.4 + halfDigit
+        var lineY = above ? column.lowerBound - clearance : column.upperBound + clearance
+        // A note at the very edge of a piece's range leaves less room than that; stay on the canvas.
+        lineY = min(max(lineY, halfDigit + space * 0.15), staff.height - halfDigit - space * 0.15)
+
+        var textRight = x - space * 0.8
+        var lineStart = textRight + space * 0.2
+        if let accidental, lineY - halfDigit < accidental.maxY + space * 0.15,
+           lineY + halfDigit > accidental.minY - space * 0.15 {
+            // Squeezed against the edge, the number can't clear the accidental: set it before the sign
+            // and start the line after it.
+            textRight = accidental.minX - space * 0.25
+            lineStart = accidental.maxX + space * 0.2
+        }
+        let baseline = text.firstBaseline(in: textSize)
+        context.draw(text, in: CGRect(x: textRight - textSize.width, y: lineY + halfDigit - baseline,
+                                      width: textSize.width, height: textSize.height))
+
+        // Dashes spread evenly from the number to the hook, which stops short of the answer pill and the
+        // hint labels; the last dash turns down (or up) into the hook.
+        let hookX = x + space * 1.2
+        let dash = space * 0.3
+        let count = max(2, Int(((hookX - lineStart + space * 0.2) / (space * 0.5)).rounded()))
+        let step = (hookX - lineStart - dash) / CGFloat(count - 1)
+        var line = Path()
+        for index in 0..<count {
+            let start = lineStart + CGFloat(index) * step
+            line.move(to: CGPoint(x: start, y: lineY))
+            line.addLine(to: CGPoint(x: start + dash, y: lineY))
+        }
+        line.addLine(to: CGPoint(x: hookX, y: lineY + (above ? 1 : -1) * space * 0.45))
+        context.stroke(line, with: .color(noteColor), lineWidth: staff.lineWidth * 1.2)
     }
 
     /// The label in the rounded face, except ♯ and ♭: the rounded face has no sharp of its own and
@@ -199,15 +269,31 @@ private struct StaffGeometry {
     let right: CGFloat
     let bottomLineY: CGFloat
     let noteX: CGFloat
+    /// The whole canvas's, which octave marks stay inside.
+    let height: CGFloat
 
-    init(size: CGSize) {
-        // 13 spaces tall leaves room for three ledger lines above and below plus stems.
-        space = min(size.height / 13, size.width / 22)
+    /// With `positions`, notes anywhere in them fit; without, the usual three ledger lines either side do.
+    init(size: CGSize, fitting positions: ClosedRange<Int>?) {
+        // Room above and below the middle line, in spaces. Usually 6.5 each way, 13 spaces tall: notes on
+        // the third ledger line (positions -6 and 14), half a space for the head and a space of air.
+        var above: CGFloat = 6.5
+        var below: CGFloat = 6.5
+        if let positions {
+            // The same room past a piece's outermost notes. On a side the piece barely uses, just enough for
+            // the clef, the stems and an octave mark beyond them, so a lopsided range doesn't waste half the height.
+            above = max(CGFloat(positions.upperBound - 4) / 2 + 1.5, 5)
+            below = max(CGFloat(4 - positions.lowerBound) / 2 + 1.5, 5)
+        }
+        // The staff never grows past its usual size, and moves off centre only as far as the range needs.
+        let spacesTall = max(13, above + below)
+        let middleFromTop = min(max(spacesTall / 2, above), spacesTall - below)
+        space = min(size.height / spacesTall, size.width / 22)
         let width = min(size.width - space, space * 30)
         left = (size.width - width) / 2
         right = left + width
-        bottomLineY = size.height / 2 + space * 2
+        bottomLineY = size.height / 2 + (middleFromTop - spacesTall / 2) * space + space * 2
         noteX = left + width * 0.55
+        height = size.height
     }
 
     var lineWidth: CGFloat { max(1, space * 0.08) }
