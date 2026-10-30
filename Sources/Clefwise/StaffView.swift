@@ -4,6 +4,9 @@ import SwiftUI
 /// Draws a five-line staff with a clef and, optionally, one quarter note.
 struct StaffView: View {
     let clef: Clef
+    /// Drawn after the clef. (Questions carry their own too; this one is used with or without a note.)
+    var keySignature = KeySignature.cMajor
+    /// Its `printedAccidental`, if any, is drawn in front of the note head.
     var note: Question?
     var noteColor: Color = Theme.ink
     /// Shown in a pill beside the note, e.g. to reveal the answer after a miss.

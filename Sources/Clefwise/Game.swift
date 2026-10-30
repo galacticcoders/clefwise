@@ -77,7 +77,9 @@ final class Game {
     /// Brief highlight on the answer that was just given.
     struct Flash: Equatable {
         let letter: NoteLetter
-        /// The exact key, when answered on the piano.
+        let accidental: Accidental
+        /// The exact key, when answered on the piano. Compare keys by `midiNumber`: a black key
+        /// may be spelled C♯ on the piano and D♭ in the question.
         let pitch: Pitch?
         let isCorrect: Bool
         let id = UUID()
@@ -93,6 +95,9 @@ final class Game {
         /// Write note names on the piano keys.
         var showKeyNames = false
         var isMuted = false
+        var key = KeyChoice.fixed(.cMajor)
+        /// Now and then print a ♯, ♭ or ♮ in front of a note, on top of the key signature.
+        var addsAccidentals = false
 
         init() {}
 
@@ -107,6 +112,8 @@ final class Game {
             showHints = try container.decodeIfPresent(Bool.self, forKey: .showHints) ?? showHints
             showKeyNames = try container.decodeIfPresent(Bool.self, forKey: .showKeyNames) ?? showKeyNames
             isMuted = try container.decodeIfPresent(Bool.self, forKey: .isMuted) ?? isMuted
+            key = try container.decodeIfPresent(KeyChoice.self, forKey: .key) ?? key
+            addsAccidentals = try container.decodeIfPresent(Bool.self, forKey: .addsAccidentals) ?? addsAccidentals
         }
     }
 
@@ -130,6 +137,8 @@ final class Game {
     private(set) var typedText = ""
     /// Bumped when a keystroke can't lead to any note name, so the input box can shake.
     private(set) var rejectedKeystrokes = 0
+    /// ♯ or ♭ chosen on the note buttons for the next letter pressed; back to natural after each answer.
+    private(set) var armedAccidental = Accidental.natural
     private(set) var score = 0
     private(set) var attempts = 0
     private(set) var streak = 0
@@ -164,6 +173,22 @@ final class Game {
         "\(settings.clefChoice.rawValue).\(settings.range.rawValue)"
             + (settings.answerInput == .buttons ? "" : ".\(settings.answerInput.rawValue)")
     }
+
+    /// Key signature on the staff: the current round's, or the chosen one between rounds
+    /// (C major when the choice is random).
+    var currentKeySignature: KeySignature {
+        if let question { return question.keySignature }
+        if case .fixed(let key) = settings.key { return key }
+        return .cMajor
+    }
+
+    /// Whether questions can be sharp or flat, so the answer inputs need a way to say so.
+    var accidentalsPossible: Bool {
+        settings.addsAccidentals || settings.key != .fixed(.cMajor)
+    }
+
+    /// In keyboard mode: the typed text is a whole name but could still get a ♯/♭, so it waits for Return.
+    var typingNeedsReturn: Bool { false }
 
     /// White keys (as diatonic indices) for the piano: whole octaves covering every note the settings can ask.
     var pianoKeys: ClosedRange<Int> {
@@ -210,16 +235,31 @@ final class Game {
         phase = .idle
     }
 
-    /// Answers with a note name (answer buttons and typing); any octave counts.
+    /// Note-button press: the letter plus whichever ♯/♭ is armed.
     func answer(_ letter: NoteLetter) {
-        guard let question else { return }
-        submit(Flash(letter: letter, pitch: nil, isCorrect: question.pitch.letter == letter))
+        let accidental = armedAccidental
+        armedAccidental = .natural
+        answer(letter, accidental)
     }
 
-    /// Answers with a piano key, so the octave has to be right too.
+    /// Answers with a note name (buttons and typing); any octave counts.
+    func answer(_ letter: NoteLetter, _ accidental: Accidental) {
+        guard let question else { return }
+        submit(Flash(letter: letter, accidental: accidental, pitch: nil,
+                     isCorrect: settings.naming.accepts(letter, accidental, for: question.pitch)))
+    }
+
+    /// Answers with a piano key, so the octave has to be right too. Compared by sound, so the
+    /// black key counts whether the question spells it C♯ or D♭.
     func answer(_ pitch: Pitch) {
         guard let question else { return }
-        submit(Flash(letter: pitch.letter, pitch: pitch, isCorrect: question.pitch == pitch))
+        submit(Flash(letter: pitch.letter, accidental: pitch.accidental, pitch: pitch,
+                     isCorrect: question.pitch.midiNumber == pitch.midiNumber))
+    }
+
+    /// Arms ♯ or ♭ for the next note button; choosing the armed one again disarms it.
+    func toggleArmedAccidental(_ accidental: Accidental) {
+        armedAccidental = armedAccidental == accidental ? .natural : accidental
     }
 
     private func submit(_ response: Flash) {

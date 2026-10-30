@@ -14,26 +14,103 @@ enum NoteLetter: Int, CaseIterable, Identifiable, Codable {
     }
 }
 
-/// A natural (white-key) pitch in scientific pitch notation: C4 is middle C.
+enum Accidental: Int, CaseIterable, Codable {
+    case flat = -1, natural = 0, sharp = 1
+
+    var symbol: String {
+        switch self {
+        case .flat: "♭"
+        case .natural: "♮"
+        case .sharp: "♯"
+        }
+    }
+}
+
+/// A pitch in scientific pitch notation (C4 is middle C), spelled with a letter and accidental.
+/// F♯4 and G♭4 sound the same but sit on different staff positions, so they're different pitches here.
 struct Pitch: Hashable, Codable {
     let letter: NoteLetter
+    let accidental: Accidental
     let octave: Int
 
-    init(_ letter: NoteLetter, _ octave: Int) {
+    init(_ letter: NoteLetter, _ octave: Int, _ accidental: Accidental = .natural) {
         self.letter = letter
+        self.accidental = accidental
         self.octave = octave
     }
 
     /// Counts white keys from C0, so one step is one line-or-space on the staff.
-    init(diatonicIndex: Int) {
+    init(diatonicIndex: Int, accidental: Accidental = .natural) {
         let octave = diatonicIndex >= 0 ? diatonicIndex / 7 : (diatonicIndex - 6) / 7
-        self.init(NoteLetter(rawValue: diatonicIndex - octave * 7)!, octave)
+        self.init(NoteLetter(rawValue: diatonicIndex - octave * 7)!, octave, accidental)
     }
 
+    /// Staff steps from C0; the accidental doesn't move the note on the staff.
     var diatonicIndex: Int { octave * 7 + letter.rawValue }
-    var name: String { "\(letter.name)\(octave)" }
-    var midiNumber: Int { (octave + 1) * 12 + letter.semitone }
+    /// Letter, accidental and octave, e.g. "F♯4"; naturals have no sign ("C4").
+    var name: String { "\(letter.name)\(accidental == .natural ? "" : accidental.symbol)\(octave)" }
+    var midiNumber: Int { (octave + 1) * 12 + letter.semitone + accidental.rawValue }
+    /// 0–11 counting semitones from C; F♯ and G♭ share one.
+    var pitchClass: Int { ((midiNumber % 12) + 12) % 12 }
     var frequency: Double { 440 * pow(2, Double(midiNumber - 69) / 12) }
+
+    func with(_ accidental: Accidental) -> Pitch {
+        Pitch(letter, octave, accidental)
+    }
+}
+
+/// How many sharps (positive) or flats (negative) a key signature has. Kept within ±5 so no
+/// note is ever spelled E♯, B♯, C♭ or F♭.
+struct KeySignature: Hashable, Codable {
+    let fifths: Int
+
+    static let cMajor = KeySignature(fifths: 0)
+    /// C first, then the sharp keys, then the flat keys.
+    static let all = [0, 1, 2, 3, 4, 5, -1, -2, -3, -4, -5].map(KeySignature.init(fifths:))
+
+    private static let sharpOrder: [NoteLetter] = [.f, .c, .g, .d, .a, .e, .b]
+    private static let flatOrder: [NoteLetter] = [.b, .e, .a, .d, .g, .c, .f]
+
+    /// Letters the signature alters, in the order they're written.
+    var alteredLetters: [NoteLetter] {
+        fifths >= 0 ? Array(Self.sharpOrder.prefix(fifths)) : Array(Self.flatOrder.prefix(-fifths))
+    }
+
+    /// The accidental a note on `letter` gets from the signature when none is printed.
+    func accidental(for letter: NoteLetter) -> Accidental {
+        guard alteredLetters.contains(letter) else { return .natural }
+        return fifths > 0 ? .sharp : .flat
+    }
+
+    /// Staff positions (0 = bottom line) of the signature's sharps or flats, in writing order.
+    func staffPositions(for clef: Clef) -> [Int] {
+        let treble = fifths >= 0 ? [8, 5, 9, 6, 3, 7, 4] : [4, 7, 3, 6, 2, 5, 1]
+        let shift = clef == .treble ? 0 : -2
+        return treble.prefix(abs(fifths)).map { $0 + shift }
+    }
+
+    var majorKey: String { ["D♭", "A♭", "E♭", "B♭", "F", "C", "G", "D", "A", "E", "B"][fifths + 5] }
+    var minorKey: String { ["B♭", "F", "C", "G", "D", "A", "E", "B", "F♯", "C♯", "G♯"][fifths + 5] }
+    /// "no ♯/♭", "1♯", "3♭"…
+    var countLabel: String {
+        fifths == 0 ? "no ♯/♭" : "\(abs(fifths))\(fifths > 0 ? Accidental.sharp.symbol : Accidental.flat.symbol)"
+    }
+}
+
+enum KeyChoice: Hashable, Codable, Identifiable {
+    case fixed(KeySignature)
+    /// A new random key signature each round.
+    case random
+
+    static var allCases: [KeyChoice] { KeySignature.all.map(KeyChoice.fixed) + [.random] }
+
+    var id: Self { self }
+    var label: String {
+        switch self {
+        case .fixed(let key): "\(key.majorKey) major · \(key.countLabel)"
+        case .random: "Random key"
+        }
+    }
 }
 
 enum Clef: String, CaseIterable, Codable {
@@ -85,6 +162,29 @@ enum NamingSystem: String, CaseIterable, Identifiable, Codable {
 
     func names(of letters: [NoteLetter]) -> String {
         letters.map(name(of:)).joined(separator: " ")
+    }
+
+    /// Name of a spelled pitch, without octave: "F♯", "Fa♯". Sargam has one name per semitone
+    /// (Sa = C), so F♯ and G♭ are both "tivra Ma".
+    func name(of pitch: Pitch) -> String {
+        switch self {
+        case .letters, .solfege:
+            return name(of: pitch.letter) + (pitch.accidental == .natural ? "" : pitch.accidental.symbol)
+        case .sargam:
+            return ["Sa", "komal Re", "Re", "komal Ga", "Ga", "Ma", "tivra Ma", "Pa", "komal Dha", "Dha", "komal Ni", "Ni"][pitch.pitchClass]
+        }
+    }
+
+    /// Whether answering `letter` + `accidental` names `pitch` (any octave). Letters and solfège
+    /// go by spelling: G♭ isn't F♯, because the note sits on the F line. Sargam goes by swara,
+    /// so either spelling of tivra Ma counts.
+    func accepts(_ letter: NoteLetter, _ accidental: Accidental, for pitch: Pitch) -> Bool {
+        switch self {
+        case .letters, .solfege:
+            return letter == pitch.letter && accidental == pitch.accidental
+        case .sargam:
+            return Pitch(letter, pitch.octave, accidental).pitchClass == pitch.pitchClass
+        }
     }
 
     /// Name of the black key just above `letter`, as lines: its sharp and flat spellings,
@@ -143,7 +243,18 @@ enum NoteRange: String, CaseIterable, Identifiable, Codable {
 struct Question: Equatable {
     let id = UUID()
     let clef: Clef
+    /// The note as played, accidental included (F♯ in G major even though no sign is printed).
     let pitch: Pitch
+    let keySignature: KeySignature
+    /// Sign printed right before the note; nil when the key signature already gives its accidental.
+    let printedAccidental: Accidental?
+
+    init(clef: Clef, pitch: Pitch, keySignature: KeySignature = .cMajor, printedAccidental: Accidental? = nil) {
+        self.clef = clef
+        self.pitch = pitch
+        self.keySignature = keySignature
+        self.printedAccidental = printedAccidental
+    }
 
     var position: Int { clef.position(of: pitch) }
 }
