@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// Per-note history used to bring up notes you struggle with more often.
-struct NoteStat: Codable {
+struct NoteStat: Codable, Equatable {
     var attempts = 0
     var correct = 0
     /// Most recent results, oldest first.
@@ -271,10 +271,14 @@ final class Game {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var pendingAdvance: Task<Void, Never>?
     @ObservationIgnored private let synth = Synth()
+    /// Where usage events go (the usage log on disk in the app; memory in tests).
+    @ObservationIgnored let recorder: UsageRecorder
 
-    /// `defaults` is where settings, note stats and best scores are kept; tests pass their own.
-    init(defaults: UserDefaults = .standard) {
+    /// `defaults` is where settings, note stats and best scores are kept, `recorder` where usage
+    /// events go; tests pass their own.
+    init(defaults: UserDefaults = .standard, recorder: UsageRecorder = UsageLog.shared) {
         self.defaults = defaults
+        self.recorder = recorder
         settings = Self.load(Settings.self, from: Keys.settings, in: defaults) ?? Settings()
         noteStats = Self.load([String: NoteStat].self, from: Keys.noteStats, in: defaults) ?? [:]
         bestScores = Self.load([String: Int].self, from: Keys.bestScores, in: defaults) ?? [:]
@@ -363,8 +367,9 @@ final class Game {
     /// on, or the part's first note when the settings leave nothing to ask.
     private var leadingPieceNote: ScoreNote? { pieceNotes.first ?? piecePart?.notes.first }
 
-    /// Reads a MusicXML file and switches to practising it, or sets `pieceError`.
-    func openPiece(at url: URL) {
+    /// Reads a MusicXML file and switches to practising it, or sets `pieceError`. `source` says
+    /// how the file was picked, for the usage log.
+    func openPiece(at url: URL, via source: PieceOpenSource = .menu) {
         do {
             open(try MusicXMLImporter.load(from: url), from: url)
         } catch {
@@ -485,8 +490,9 @@ final class Game {
     // MARK: - Round flow
 
     /// Starts a round: on the loaded piece if there is one (or sets `pieceError` when the piece
-    /// settings leave no notes), otherwise on random notes from the toolbar settings.
-    func start() {
+    /// settings leave no notes), otherwise on random notes from the toolbar settings. `source`
+    /// says what started it, for the usage log.
+    func start(via source: StartSource = .button) {
         if let piece, let part = piecePart {
             guard !selectedNotes.isEmpty else {
                 pieceError = emptySelectionMessage
