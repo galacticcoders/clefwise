@@ -15,9 +15,21 @@ struct ContentView: View {
             case .buttons: AnswerPad(game: game)
             case .piano: PianoPad(game: game)
             }
-            Text("\(answerHint)  ·  Space start  ·  Esc stop  ·  H hints  ·  M mute")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("\(answerHint)  ·  Space start  ·  Esc stop  ·  H hints  ·  M mute")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                // Next to the answer area, where you'd look for it.
+                Picker("Answer with", selection: $game.settings.answerInput) {
+                    ForEach(Game.AnswerInput.allCases) { Label($0.label, systemImage: $0.symbol).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelStyle(.titleAndIcon)
+                .fixedSize()
+                .disabled(game.phase == .playing)
+                .help("Note buttons accept any octave; on the piano you click the exact key")
+            }
         }
         .padding(24)
         .frame(minWidth: 820, minHeight: 640)
@@ -58,13 +70,6 @@ struct ContentView: View {
                 }
                 .pickerStyle(.segmented)
                 .help("Race the clock, or practice without one")
-
-                Picker("Answer with", selection: $game.settings.answerInput) {
-                    ForEach(Game.AnswerInput.allCases) { Label($0.label, systemImage: $0.symbol).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelStyle(.iconOnly)
-                .help("Answer with note buttons (any octave) or piano keys (exact octave)")
             }
             .disabled(game.phase == .playing)
 

@@ -13,6 +13,8 @@ struct PianoPad: View {
             onPress: { game.answer($0) }
         )
         .disabled(game.phase != .playing)
+        // Fade as one layer, otherwise white key edges show through the dimmed black keys.
+        .compositingGroup()
         .opacity(game.phase == .playing ? 1 : 0.5)
     }
 

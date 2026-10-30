@@ -22,7 +22,7 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
   - *Practice*: no clock; press Stop (Esc) to see your summary.
 - Pick **note names**: letters (C D E F G A B), solfège (Do Re Mi Fa Sol La Si) or sargam
   (Sa Re Ga Ma Pa Dha Ni). Solfège and sargam are used as fixed names: Do = Sa = C.
-- Pick how to **answer**:
+- Pick how to **answer** with the *Answer with* switch under the answer area:
   - *Note buttons*: click a name, press **1–7** (button position), or with letter names type
     **C D E F G A B**. Any octave counts.
   - *Piano*: click the exact key, so the octave has to be right too. The keyboard covers whole
