@@ -28,7 +28,7 @@ struct PiecePanel: View {
 
                 VStack(spacing: 4) {
                     Button {
-                        game.start()
+                        game.start(via: .button)
                     } label: {
                         Label("Start", systemImage: "play.fill")
                             .frame(minWidth: 110)
@@ -41,10 +41,13 @@ struct PiecePanel: View {
                 }
 
                 HStack(spacing: 20) {
-                    Button("Open another…", systemImage: "folder") { PieceFile.choose(for: game) }
+                    Button("Open another…", systemImage: "folder") { PieceFile.choose(for: game, via: .openAnother) }
                         .help("Practise a different MusicXML file (⌘O)")
-                    Button("Back to random notes", systemImage: "shuffle") { game.closePiece() }
-                        .help("Close the piece and name random notes from the toolbar settings again")
+                    Button("Back to random notes", systemImage: "shuffle") {
+                        game.recorder.recordUIAction("backToRandomNotes")
+                        game.closePiece()
+                    }
+                    .help("Close the piece and name random notes from the toolbar settings again")
                 }
                 .buttonStyle(.borderless)
             }
@@ -168,8 +171,8 @@ struct PiecePanel: View {
 enum PieceFile {
     static let extensions: Set<String> = ["musicxml", "mxl", "xml"]
 
-    /// Asks for a file in a sheet on the window, then opens it.
-    static func choose(for game: Game) {
+    /// Asks for a file in a sheet on the window, then opens it. `source` is what asked, for the usage log.
+    static func choose(for game: Game, via source: PieceOpenSource) {
         // The menu item greys out during a round, but SwiftUI only notices when the menu opens, so ⌘O still gets here.
         guard game.phase != .playing else {
             NSSound.beep()
@@ -180,22 +183,35 @@ enum PieceFile {
         panel.message = "Choose a MusicXML file (.musicxml, .mxl or .xml) to practise."
         panel.prompt = "Practise"
         guard let window = NSApp.mainWindow else {
-            if panel.runModal() == .OK, let url = panel.url { open(url, in: game) }
+            openChoice(of: panel, response: panel.runModal(), in: game, via: source)
             return
         }
         Task {
-            if await panel.beginSheetModal(for: window) == .OK, let url = panel.url { open(url, in: game) }
+            openChoice(of: panel, response: await panel.beginSheetModal(for: window), in: game, via: source)
         }
+    }
+
+    /// Opens the file picked in `panel`. Cancelling opens nothing for the game to log, so it's logged here.
+    private static func openChoice(of panel: NSOpenPanel, response: NSApplication.ModalResponse, in game: Game,
+                                   via source: PieceOpenSource) {
+        guard response == .OK, let url = panel.url else {
+            game.recorder.recordUIAction("openPanelCancelled", detail: source.rawValue)
+            return
+        }
+        open(url, in: game, via: source)
     }
 
     /// Opens a file; errors land in `game.pieceError`. A summary left from the last round would
     /// hide the new piece's setup, so it goes once the piece is in.
-    static func open(_ url: URL, in game: Game) {
+    static func open(_ url: URL, in game: Game, via source: PieceOpenSource) {
         guard extensions.contains(url.pathExtension.lowercased()) else {
+            // The game never gets the file, so it's logged here. Mostly these are drops, but the open
+            // panel lets other XML through too (.svg, .xhtml…).
+            game.recorder.recordUIAction(source == .drop ? "dropRefused" : "fileRefused", detail: url.lastPathComponent)
             game.pieceError = "“\(url.lastPathComponent)” isn't a MusicXML file (.musicxml, .mxl or .xml)."
             return
         }
-        game.openPiece(at: url)
+        game.openPiece(at: url, via: source)
         if game.pieceError == nil, game.phase == .finished { game.dismissSummary() }
     }
 }
