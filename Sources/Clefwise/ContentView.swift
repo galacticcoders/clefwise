@@ -550,16 +550,6 @@ private struct AnswerPad: View {
     }
 }
 
-extension NamingSystem {
-    /// What a letter plus sign is called: "F♯", "Sol♭", "komal Re". Nil in sargam for combinations
-    /// that aren't a swara of their own (komal Sa would just be Ni).
-    func answerName(of letter: NoteLetter, _ accidental: Accidental) -> String? {
-        let full = name(of: Pitch(letter, 4, accidental))
-        guard self == .sargam, accidental != .natural else { return full }
-        return full.hasSuffix(" \(name(of: letter))") ? full : nil
-    }
-}
-
 /// A note name and its ♯/♭ in the serif face of the answer keys and typing box.
 struct SpelledName: View {
     let name: String

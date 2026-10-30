@@ -146,9 +146,7 @@ struct StaffView: View {
         context.fill(stem, with: .color(noteColor))
 
         if let noteLabel {
-            let text = context.resolve(
-                Text(noteLabel).font(.system(size: space * 0.8, weight: .bold, design: .rounded)).foregroundStyle(.white)
-            )
+            let text = context.resolve(pillText(noteLabel, size: space * 0.8).foregroundStyle(.white))
             let textSize = text.measure(in: CGSize(width: 1000, height: 1000))
             let pill = CGRect(x: x + space * 1.8, y: y - textSize.height / 2 - space * 0.2,
                               width: textSize.width + space * 0.9, height: textSize.height + space * 0.4)
@@ -157,13 +155,31 @@ struct StaffView: View {
         }
     }
 
+    /// The label in the rounded face, except ♯ and ♭: the rounded face has no sharp of its own and
+    /// falls back to one that reads as "#", while the serif face's fallback is a proper sign.
+    private func pillText(_ label: String, size: CGFloat) -> Text {
+        let rounded = Font.system(size: size, weight: .bold, design: .rounded)
+        let serif = Font.system(size: size * 1.15, weight: .bold, design: .serif)
+        let characters = Array(label)
+        return characters.indices.reduce(Text("")) { text, index in
+            var piece = Text(String(characters[index])).font("♯♭".contains(characters[index]) ? serif : rounded)
+            // That ♭ comes with wide margins on both sides; pull its neighbours in.
+            if index + 1 < characters.count, characters[index + 1] == "♭" || characters[index] == "♭" {
+                piece = piece.kerning(-size * 0.3)
+            }
+            return Text("\(text)\(piece)")
+        }
+    }
+
     /// The sign sized and set on `position` as engravers do: ♯ and ♮ centred on the line or space,
     /// ♭ with its bowl there. It starts at about x = 0; callers line it up by its bounds.
     private func accidentalPath(_ accidental: Accidental, at position: Int, _ staff: StaffGeometry) -> Path {
         // Height in spaces, and how much of it hangs below the line or space.
+        // Sharps and naturals a touch under the usual 2.7–2.8: Apple Symbols draws them wider and
+        // heavier than engraving fonts, and at full height they dwarf the note.
         let (height, below): (CGFloat, CGFloat) = switch accidental {
-        case .sharp: (2.8, 1.4)
-        case .natural: (2.7, 1.35)
+        case .sharp: (2.5, 1.25)
+        case .natural: (2.5, 1.25)
         case .flat: (2.3, 0.6)
         }
         let glyph = MusicGlyph.path(for: accidental)

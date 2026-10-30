@@ -175,6 +175,22 @@ enum NamingSystem: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// Whether `letter` with `accidental` is a name of its own. Sargam only has komal Re, Ga, Dha,
+    /// Ni and tivra Ma (komal Sa would just be Ni); letters and solfège can sharpen or flatten anything.
+    func hasName(_ letter: NoteLetter, _ accidental: Accidental) -> Bool {
+        guard self == .sargam else { return true }
+        switch accidental {
+        case .natural: return true
+        case .flat: return [.d, .e, .a, .b].contains(letter)
+        case .sharp: return letter == .f
+        }
+    }
+
+    /// What a letter plus sign is called: "F♯", "Sol♭", "komal Re"; nil when it has no name of its own.
+    func answerName(of letter: NoteLetter, _ accidental: Accidental) -> String? {
+        hasName(letter, accidental) ? name(of: Pitch(letter, 4, accidental)) : nil
+    }
+
     /// Whether answering `letter` + `accidental` names `pitch` (any octave). Letters and solfège
     /// go by spelling: G♭ isn't F♯, because the note sits on the F line. Sargam goes by swara,
     /// so either spelling of tivra Ma counts.

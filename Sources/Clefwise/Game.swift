@@ -256,17 +256,18 @@ final class Game {
     }
 
     /// Note-button press: the letter plus whichever ♯/♭ is armed. Presses that can't count (during
-    /// the pause after a miss) leave the armed sign alone.
+    /// the pause after a miss, or a combination with no name like komal Sa) leave the armed sign alone.
     func answer(_ letter: NoteLetter) {
-        guard phase == .playing, !isShowingMiss else { return }
+        guard phase == .playing, !isShowingMiss, settings.naming.hasName(letter, armedAccidental) else { return }
         let accidental = armedAccidental
         armedAccidental = .natural
         answer(letter, accidental)
     }
 
-    /// Answers with a note name (buttons and typing); any octave counts.
+    /// Answers with a note name (buttons and typing); any octave counts. Combinations with no name
+    /// of their own are ignored rather than judged by sound, so "komal Sa" never passes for Ni.
     func answer(_ letter: NoteLetter, _ accidental: Accidental) {
-        guard let question else { return }
+        guard let question, settings.naming.hasName(letter, accidental) else { return }
         submit(Flash(letter: letter, accidental: accidental, pitch: nil,
                      isCorrect: settings.naming.accepts(letter, accidental, for: question.pitch)))
     }
@@ -378,7 +379,9 @@ final class Game {
         let accidentals: [Accidental] = accidentalsPossible ? [.natural, .sharp, .flat] : [.natural]
         return NoteLetter.allCases.flatMap { letter in
             let name = settings.naming.name(of: letter).lowercased()
-            return accidentals.map { (name + ($0 == .natural ? "" : $0.symbol), letter, $0) }
+            return accidentals
+                .filter { settings.naming.hasName(letter, $0) }
+                .map { (name + ($0 == .natural ? "" : $0.symbol), letter, $0) }
         }
     }
 
