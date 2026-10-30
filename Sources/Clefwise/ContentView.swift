@@ -58,6 +58,10 @@ struct ContentView: View {
         case (.piano, _): parts = ["Click the exact key"]
         case (.keyboard, _): parts = ["Type the note's name, ⌫ to fix"]
         }
+        // Words rather than ♯/♭, which are too small to read at caption size.
+        if game.settings.answerInput == .buttons, game.accidentalsPossible {
+            parts += game.settings.naming == .sargam ? ["# tivra", "− komal"] : ["# sharp", "− flat"]
+        }
         parts += ["Space start", "Esc stop"]
         switch game.settings.answerInput {
         case .buttons: parts += ["H hints", "M mute"]
@@ -82,10 +86,16 @@ struct ContentView: View {
                 }
                 .help("How far above and below the staff notes can go")
 
+                keyMenu
+
+                Toggle("Accidentals", isOn: $game.settings.addsAccidentals)
+                    .toggleStyle(.checkbox)
+                    .help("Now and then put a ♯, ♭ or ♮ in front of a note, on top of the key signature")
+
+                // A pop-up rather than segments, so the key controls fit without the toolbar overflowing.
                 Picker("Mode", selection: $game.settings.mode) {
                     ForEach(Game.Mode.allCases) { Text($0.label).tag($0) }
                 }
-                .pickerStyle(.segmented)
                 .help("Race the clock, or practice without one")
             }
             .disabled(game.phase == .playing)
@@ -95,6 +105,22 @@ struct ContentView: View {
             }
             .help("Name notes with letters, solfège (Do = C) or sargam (Sa = C)")
         }
+    }
+
+    /// A menu with a short title rather than a picker: a toolbar picker is as wide as its longest
+    /// item ("C major · no ♯/♭"), and the toolbar has no room to spare.
+    private var keyMenu: some View {
+        Menu(game.settings.key.shortLabel) {
+            Picker("Key", selection: $game.settings.key) {
+                ForEach(KeyChoice.allCases) { choice in
+                    if choice.startsMenuGroup { Divider() }
+                    Text(choice.label).tag(choice)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        }
+        .help("Key signature: the sharps or flats that hold for every note")
     }
 
     private func installKeyMonitor() {
@@ -108,6 +134,24 @@ struct ContentView: View {
                 game.handleKey(characters: characters, keyCode: keyCode)
             }
             return handled ? nil : event
+        }
+    }
+}
+
+fileprivate extension KeyChoice {
+    /// "G major", "Random key".
+    var shortLabel: String {
+        switch self {
+        case .fixed(let key): "\(key.majorKey) major"
+        case .random: "Random key"
+        }
+    }
+
+    /// The first sharp key, the first flat key and Random each start a new block in the key menu.
+    var startsMenuGroup: Bool {
+        switch self {
+        case .fixed(let key): abs(key.fifths) == 1
+        case .random: true
         }
     }
 }
@@ -198,6 +242,7 @@ private struct StaffCard: View {
 
             StaffView(
                 clef: game.displayedClef,
+                keySignature: game.currentKeySignature,
                 note: game.question,
                 noteColor: game.isShowingMiss ? Theme.wrong : Theme.ink,
                 noteLabel: game.isShowingMiss ? game.question.map(answerLabel) : nil,
@@ -223,10 +268,11 @@ private struct StaffCard: View {
     }
 
     private func answerLabel(_ question: Question) -> String {
-        let name = game.settings.naming.name(of: question.pitch.letter)
+        let name = game.settings.naming.name(of: question.pitch)
         let label = question.pitch == Pitch(.c, 4) ? "Middle \(name)" : name
         // On the piano, say so when the name was right but the octave wasn't.
-        if let chosen = game.flash?.pitch, chosen.letter == question.pitch.letter, chosen != question.pitch {
+        if let chosen = game.flash?.pitch, chosen.pitchClass == question.pitch.pitchClass,
+           chosen.midiNumber != question.pitch.midiNumber {
             return "\(label) · wrong octave"
         }
         return label
@@ -260,6 +306,10 @@ private struct StartPanel: View {
 
     private var details: String {
         var parts = [game.settings.clefChoice.summary, game.settings.range.label]
+        // Plain C major goes unsaid, as before keys existed.
+        if game.accidentalsPossible {
+            parts.append(game.settings.key.shortLabel + (game.settings.addsAccidentals ? " + accidentals" : ""))
+        }
         if game.settings.mode == .sprint, let best = game.bestScore {
             parts.append("Best: \(best)")
         }
@@ -315,13 +365,13 @@ private struct SummaryPanel: View {
         .panel()
     }
 
-    /// "A4", or "La (A4)" with other naming systems; adds the clef when clefs were mixed.
+    /// "F♯4", or "Fa♯ (F♯4)" with other naming systems; adds the clef when clefs were mixed.
     private func reviewLabel(_ note: StaffNote) -> String {
         let naming = game.settings.naming
         var details: [String] = []
         if naming != .letters { details.append(note.pitch.name) }
         if summary.mixedClefs { details.append(note.clef.name.lowercased()) }
-        let name = naming == .letters ? note.pitch.name : naming.name(of: note.pitch.letter)
+        let name = naming == .letters ? note.pitch.name : naming.name(of: note.pitch)
         return details.isEmpty ? name : "\(name) (\(details.joined(separator: ", ")))"
     }
 }
@@ -378,6 +428,11 @@ private struct AnswerPad: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            // Only when a note can be sharp or flat, so C major without accidentals looks as it always did.
+            if game.accidentalsPossible {
+                modifierButton(.flat)
+                    .padding(.trailing, 8)
+            }
             ForEach(NoteLetter.allCases) { letter in
                 Button {
                     game.answer(letter)
@@ -385,36 +440,142 @@ private struct AnswerPad: View {
                     keyLabel(for: letter)
                 }
                 .buttonStyle(AnswerKeyStyle(highlight: highlight(for: letter)))
+                .disabled(!canAnswer(letter))
+            }
+            if game.accidentalsPossible {
+                modifierButton(.sharp)
+                    .padding(.leading, 8)
             }
         }
         .disabled(game.phase != .playing)
     }
 
+    /// ♭ or ♯: arms the sign for the next letter pressed.
+    private func modifierButton(_ accidental: Accidental) -> some View {
+        Button {
+            game.toggleArmedAccidental(accidental)
+        } label: {
+            VStack(spacing: 0) {
+                Text(accidental.symbol)
+                    .font(.system(size: 30, weight: .semibold, design: .serif))
+                Text(Self.word(for: accidental, in: game.settings.naming))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .topLeading) {
+                // The shortcut; a minus sign reads better than a hyphen this small.
+                Text(accidental == .sharp ? "#" : "−")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .opacity(0.45)
+                    .padding(7)
+            }
+        }
+        .buttonStyle(AnswerKeyStyle(highlight: highlight(for: accidental)))
+        .help(accidental == .sharp ? "Sharp the next note you press (# or =)" : "Flat the next note you press (-)")
+    }
+
+    private static func word(for accidental: Accidental, in naming: NamingSystem) -> String {
+        switch (accidental, naming) {
+        case (.flat, .sargam): "komal"
+        case (.sharp, .sargam): "tivra"
+        case (.flat, _): "flat"
+        default: "sharp"
+        }
+    }
+
+    /// The letter's name with the sign it would answer: the armed one, or while it's highlighted,
+    /// the one it was answered or revealed with ("F♯"). Sargam puts komal/tivra on a line of its own.
     private func keyLabel(for letter: NoteLetter) -> some View {
         let naming = game.settings.naming
         let name = naming.name(of: letter)
-        return Text(name)
-            .font(.system(size: name.count > 1 ? 24 : 30, weight: .semibold, design: .serif))
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .topLeading) {
-                // With letter names the letter is the shortcut; otherwise show the number key.
-                if naming != .letters {
-                    Text("\(letter.rawValue + 1)")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .opacity(0.45)
-                        .padding(7)
-                }
+        let accidental = shownAccidental(for: letter)
+        let size: CGFloat = name.count > 1 ? 24 : 30
+        let isAlteredSwara = naming == .sargam && accidental != .natural && naming.answerName(of: letter, accidental) != nil
+        return VStack(spacing: 0) {
+            if isAlteredSwara {
+                Text(Self.word(for: accidental, in: naming))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
             }
+            SpelledName(name: name, accidental: naming == .sargam ? .natural : accidental, size: size)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .topLeading) {
+            // With letter names the letter is the shortcut; otherwise show the number key.
+            if naming != .letters {
+                Text("\(letter.rawValue + 1)")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .opacity(0.45)
+                    .padding(7)
+            }
+        }
+    }
+
+    private func shownAccidental(for letter: NoteLetter) -> Accidental {
+        if let flash = game.flash, flash.letter == letter { return flash.accidental }
+        if let revealed, revealed.letter == letter { return revealed.accidental }
+        return game.armedAccidental
+    }
+
+    /// Sargam has komal only for Re, Ga, Dha and Ni and tivra only for Ma; the other swaras are
+    /// greyed out while one is armed, which also shows where komal and tivra apply.
+    private func canAnswer(_ letter: NoteLetter) -> Bool {
+        game.settings.naming.answerName(of: letter, game.armedAccidental) != nil
+    }
+
+    /// After a miss: the button and sign that name the note. Sargam goes by swara, so a C♯ is komal Re.
+    private var revealed: (letter: NoteLetter, accidental: Accidental)? {
+        guard game.isShowingMiss, let pitch = game.question?.pitch else { return nil }
+        guard game.settings.naming == .sargam else { return (pitch.letter, pitch.accidental) }
+        let pitchClass = pitch.pitchClass
+        if let natural = NoteLetter.allCases.first(where: { $0.semitone == pitchClass }) { return (natural, .natural) }
+        if pitchClass == Pitch(.f, 4, .sharp).pitchClass { return (.f, .sharp) }
+        return (NoteLetter.allCases.first { $0.semitone == pitchClass + 1 }!, .flat)
     }
 
     private func highlight(for letter: NoteLetter) -> KeyHighlight {
         if let flash = game.flash, flash.letter == letter {
             return flash.isCorrect ? .correct : .wrong
         }
-        if game.isShowingMiss, game.question?.pitch.letter == letter {
+        if revealed?.letter == letter {
             return .reveal
         }
         return .none
+    }
+
+    private func highlight(for accidental: Accidental) -> KeyHighlight {
+        if game.armedAccidental == accidental { return .armed }
+        // After a miss, shows the sign the answer needed (the letter alone may have been right).
+        if revealed?.accidental == accidental { return .reveal }
+        return .none
+    }
+}
+
+extension NamingSystem {
+    /// What a letter plus sign is called: "F♯", "Sol♭", "komal Re". Nil in sargam for combinations
+    /// that aren't a swara of their own (komal Sa would just be Ni).
+    func answerName(of letter: NoteLetter, _ accidental: Accidental) -> String? {
+        let full = name(of: Pitch(letter, 4, accidental))
+        guard self == .sargam, accidental != .natural else { return full }
+        return full.hasSuffix(" \(name(of: letter))") ? full : nil
+    }
+}
+
+/// A note name and its ♯/♭ in the serif face of the answer keys and typing box.
+struct SpelledName: View {
+    let name: String
+    let accidental: Accidental
+    let size: CGFloat
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text(name)
+            if accidental != .natural {
+                // The serif face has no ♯/♭; the fallback's ♭ comes with wide margins.
+                Text(accidental.symbol)
+                    .padding(.horizontal, accidental == .flat ? -size * 0.2 : 0)
+            }
+        }
+        .font(.system(size: size, weight: .semibold, design: .serif))
     }
 }
 
@@ -428,6 +589,8 @@ enum KeyHighlight {
     case wrong
     /// The right answer, shown after a miss.
     case reveal
+    /// A ♯/♭ button that's switched on for the next note.
+    case armed
 
     var fill: Color {
         switch self {
@@ -435,6 +598,7 @@ enum KeyHighlight {
         case .correct: Theme.correct
         case .wrong: Theme.wrong
         case .reveal: Theme.correctTint
+        case .armed: Theme.accent
         }
     }
 
@@ -443,13 +607,14 @@ enum KeyHighlight {
         case .none: Theme.keyBorder
         case .correct, .reveal: Theme.correct
         case .wrong: Theme.wrong
+        case .armed: Theme.accent
         }
     }
 
     var foreground: Color {
         switch self {
         case .none: Theme.ink
-        case .correct, .wrong: .white
+        case .correct, .wrong, .armed: .white
         case .reveal: Theme.correct
         }
     }
