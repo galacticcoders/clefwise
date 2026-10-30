@@ -78,6 +78,8 @@ final class Game {
         var naming = NamingSystem.letters
         var answerInput = AnswerInput.buttons
         var showHints = false
+        /// Write note names on the piano keys.
+        var showKeyNames = false
         var isMuted = false
 
         init() {}
@@ -91,6 +93,7 @@ final class Game {
             naming = try container.decodeIfPresent(NamingSystem.self, forKey: .naming) ?? naming
             answerInput = try container.decodeIfPresent(AnswerInput.self, forKey: .answerInput) ?? answerInput
             showHints = try container.decodeIfPresent(Bool.self, forKey: .showHints) ?? showHints
+            showKeyNames = try container.decodeIfPresent(Bool.self, forKey: .showKeyNames) ?? showKeyNames
             isMuted = try container.decodeIfPresent(Bool.self, forKey: .isMuted) ?? isMuted
         }
     }
@@ -257,6 +260,7 @@ final class Game {
         }
         switch character {
         case "h": settings.showHints.toggle()
+        case "k" where settings.answerInput == .piano: settings.showKeyNames.toggle()
         case "m": settings.isMuted.toggle()
         default: return false
         }

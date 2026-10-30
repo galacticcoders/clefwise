@@ -16,10 +16,16 @@ struct ContentView: View {
             case .piano: PianoPad(game: game)
             }
             HStack {
-                Text("\(answerHint)  ·  Space start  ·  Esc stop  ·  H hints  ·  M mute")
+                Text("\(answerHint)  ·  Space start  ·  Esc stop  ·  H hints\(game.settings.answerInput == .piano ? "  ·  K key names" : "")  ·  M mute")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
+                if game.settings.answerInput == .piano {
+                    Toggle("Show key names", isOn: $game.settings.showKeyNames)
+                        .toggleStyle(.checkbox)
+                        .help("Write note names on the piano keys (K)")
+                        .padding(.trailing, 12)
+                }
                 // Next to the answer area, where you'd look for it.
                 Picker("Answer with", selection: $game.settings.answerInput) {
                     ForEach(Game.AnswerInput.allCases) { Label($0.label, systemImage: $0.symbol).tag($0) }

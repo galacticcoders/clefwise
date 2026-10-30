@@ -26,15 +26,15 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
   - *Note buttons*: click a name, press **1–7** (button position), or with letter names type
     **C D E F G A B**. Any octave counts.
   - *Piano*: click the exact key, so the octave has to be right too. The keyboard covers whole
-    octaves for the current clef and range; Cs are labelled and middle C has a dot. A miss lights
-    up the right key and tells you if you only got the octave wrong. Piano rounds keep their own
-    best scores.
+    octaves for the current clef and range, with a dot on middle C. Keys are blank unless you
+    tick *Show key names* (K). A miss lights up the right key and tells you if you only got the
+    octave wrong. Piano rounds keep their own best scores.
 - A correct answer plays the note. A miss shows the note in red with its name and highlights the
   right key for a moment.
 - **Hints** (H) prints the name of every line and space and, with letter names, shows the
   mnemonics (Every Good Boy Does Fine / FACE, Good Boys Do Fine Always / All Cows Eat Grass).
 
-Keyboard: Space/Return start · Esc stop · H hints · M mute.
+Keyboard: Space/Return start · Esc stop · H hints · K key names (piano) · M mute.
 
 Notes you've missed recently come up more often (based on your last 8 tries at each note), so
 practice concentrates on what you don't know yet. History, best scores and settings are stored in

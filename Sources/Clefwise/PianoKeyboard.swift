@@ -8,7 +8,7 @@ struct PianoPad: View {
         PianoKeyboard(
             keys: game.pianoKeys,
             naming: game.settings.naming,
-            labelsAllKeys: game.settings.showHints,
+            showsNames: game.settings.showKeyNames,
             highlight: highlight(for:),
             onPress: { game.answer($0) }
         )
@@ -34,8 +34,8 @@ struct PianoKeyboard: View {
     /// Diatonic indices of the white keys to draw.
     let keys: ClosedRange<Int>
     let naming: NamingSystem
-    /// Label every white key rather than just the Cs.
-    let labelsAllKeys: Bool
+    /// Write the note name on every white key.
+    let showsNames: Bool
     let highlight: (Pitch) -> KeyHighlight
     let onPress: (Pitch) -> Void
 
@@ -84,7 +84,7 @@ struct PianoKeyboard: View {
                     .frame(width: 6, height: 6)
                     .opacity(0.5)
             }
-            if labelsAllKeys || pitch.letter == .c {
+            if showsNames {
                 let name = naming.name(of: pitch.letter)
                 Text(naming == .letters && pitch.letter == .c ? "\(name)\(pitch.octave)" : name)
                     .font(.system(size: min(13, keyWidth * 0.4), weight: .semibold, design: .rounded))
