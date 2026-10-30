@@ -14,6 +14,15 @@ struct ClefwiseApp: App {
         }
         .defaultSize(width: 1000, height: 780)
         .windowResizability(.contentMinSize)
+        .commands {
+            // One window, so nothing to make new: File starts with opening a piece instead.
+            CommandGroup(replacing: .newItem) {
+                // Like the toolbar settings, a new piece waits for the round to end.
+                Button("Open Piece…") { PieceFile.choose(for: game) }
+                    .keyboardShortcut("o")
+                    .disabled(game.phase == .playing)
+            }
+        }
     }
 }
 
