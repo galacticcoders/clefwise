@@ -52,11 +52,21 @@ final class Game {
         var label: String { self == .sprint ? "60s Sprint" : "Practice" }
     }
 
+    enum AnswerInput: String, CaseIterable, Identifiable, Codable {
+        case buttons, piano
+
+        var id: Self { self }
+        var label: String { self == .buttons ? "Note buttons" : "Piano" }
+        var symbol: String { self == .buttons ? "rectangle.split.3x1" : "pianokeys" }
+    }
+
     enum Phase { case idle, playing, finished }
 
-    /// Brief highlight on the answer key that was just pressed.
+    /// Brief highlight on the answer that was just given.
     struct Flash: Equatable {
         let letter: NoteLetter
+        /// The exact key, when answered on the piano.
+        let pitch: Pitch?
         let isCorrect: Bool
         let id = UUID()
     }
@@ -66,6 +76,7 @@ final class Game {
         var range = NoteRange.staff
         var mode = Mode.sprint
         var naming = NamingSystem.letters
+        var answerInput = AnswerInput.buttons
         var showHints = false
         var isMuted = false
 
@@ -78,6 +89,7 @@ final class Game {
             range = try container.decodeIfPresent(NoteRange.self, forKey: .range) ?? range
             mode = try container.decodeIfPresent(Mode.self, forKey: .mode) ?? mode
             naming = try container.decodeIfPresent(NamingSystem.self, forKey: .naming) ?? naming
+            answerInput = try container.decodeIfPresent(AnswerInput.self, forKey: .answerInput) ?? answerInput
             showHints = try container.decodeIfPresent(Bool.self, forKey: .showHints) ?? showHints
             isMuted = try container.decodeIfPresent(Bool.self, forKey: .isMuted) ?? isMuted
         }
@@ -124,7 +136,19 @@ final class Game {
     var timeRemaining: TimeInterval { max(0, Self.sprintLength - elapsed) }
     var accuracy: Double? { attempts > 0 ? Double(score) / Double(attempts) : nil }
     var bestScore: Int? { bestScores[bestScoreKey] }
-    private var bestScoreKey: String { "\(settings.clefChoice.rawValue).\(settings.range.rawValue)" }
+    /// Piano answers need the right octave, so they keep their own best scores.
+    private var bestScoreKey: String {
+        "\(settings.clefChoice.rawValue).\(settings.range.rawValue)" + (settings.answerInput == .piano ? ".piano" : "")
+    }
+
+    /// White keys (as diatonic indices) for the piano: whole octaves covering every note the settings can ask.
+    var pianoKeys: ClosedRange<Int> {
+        let indices = settings.clefChoice.clefs.flatMap { clef in
+            [settings.range.positions.lowerBound, settings.range.positions.upperBound]
+                .map { clef.pitch(atPosition: $0).diatonicIndex }
+        }
+        return (indices.min()! / 7 * 7)...(indices.max()! / 7 * 7 + 6)
+    }
 
     // MARK: - Round flow
 
@@ -161,13 +185,25 @@ final class Game {
         phase = .idle
     }
 
+    /// Answers with a note name (answer buttons and typing); any octave counts.
     func answer(_ letter: NoteLetter) {
+        guard let question else { return }
+        submit(Flash(letter: letter, pitch: nil, isCorrect: question.pitch.letter == letter))
+    }
+
+    /// Answers with a piano key, so the octave has to be right too.
+    func answer(_ pitch: Pitch) {
+        guard let question else { return }
+        submit(Flash(letter: pitch.letter, pitch: pitch, isCorrect: question.pitch == pitch))
+    }
+
+    private func submit(_ response: Flash) {
         guard phase == .playing, !isShowingMiss, let question else { return }
-        let isCorrect = question.pitch.letter == letter
+        let isCorrect = response.isCorrect
         attempts += 1
         noteStats[statKey(for: question), default: NoteStat()].record(isCorrect)
         Self.save(noteStats, as: Keys.noteStats)
-        showFlash(Flash(letter: letter, isCorrect: isCorrect), for: isCorrect ? Self.correctFlash : Self.missPause)
+        showFlash(response, for: isCorrect ? Self.correctFlash : Self.missPause)
 
         if isCorrect {
             score += 1
@@ -207,14 +243,17 @@ final class Game {
             break
         }
         guard let character = characters.lowercased().first else { return false }
-        // 1–7 always answer by key position; typed letters only make sense with letter names.
-        if let digit = character.wholeNumberValue, let letter = NoteLetter(rawValue: digit - 1) {
-            answer(letter)
-            return true
-        }
-        if settings.naming == .letters, let letter = NoteLetter(character: character) {
-            answer(letter)
-            return true
+        // Typing names a note but can't pick an octave, so it only answers in button mode.
+        // 1–7 answer by button position; typed letters only make sense with letter names.
+        if settings.answerInput == .buttons {
+            if let digit = character.wholeNumberValue, let letter = NoteLetter(rawValue: digit - 1) {
+                answer(letter)
+                return true
+            }
+            if settings.naming == .letters, let letter = NoteLetter(character: character) {
+                answer(letter)
+                return true
+            }
         }
         switch character {
         case "h": settings.showHints.toggle()

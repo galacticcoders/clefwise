@@ -22,8 +22,13 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
   - *Practice*: no clock; press Stop (Esc) to see your summary.
 - Pick **note names**: letters (C D E F G A B), solfège (Do Re Mi Fa Sol La Si) or sargam
   (Sa Re Ga Ma Pa Dha Ni). Solfège and sargam are used as fixed names: Do = Sa = C.
-- Answer with the on-screen keys, with **1–7** (key position), or with letter names by typing
-  **C D E F G A B**.
+- Pick how to **answer**:
+  - *Note buttons*: click a name, press **1–7** (button position), or with letter names type
+    **C D E F G A B**. Any octave counts.
+  - *Piano*: click the exact key, so the octave has to be right too. The keyboard covers whole
+    octaves for the current clef and range; Cs are labelled and middle C has a dot. A miss lights
+    up the right key and tells you if you only got the octave wrong. Piano rounds keep their own
+    best scores.
 - A correct answer plays the note. A miss shows the note in red with its name and highlights the
   right key for a moment.
 - **Hints** (H) prints the name of every line and space and, with letter names, shows the
@@ -42,6 +47,7 @@ Sources/Clefwise/
   ClefwiseApp.swift   app entry + window
   ContentView.swift   UI: stats, staff card, start/summary panels, answer keys
   StaffView.swift     staff, clef, note, ledger lines and hint drawing (Canvas)
+  PianoKeyboard.swift piano answer input
   Game.swift          round logic, adaptive note picking, persistence
   Music.swift         pitches, clefs, ranges
   Synth.swift         tiny additive synth for note playback

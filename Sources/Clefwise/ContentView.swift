@@ -11,8 +11,11 @@ struct ContentView: View {
             StaffCard(game: game)
             MnemonicBar(clef: game.displayedClef, naming: game.settings.naming)
                 .opacity(game.settings.showHints ? 1 : 0)
-            AnswerPad(game: game)
-            Text("\(game.settings.naming == .letters ? "Type the note's letter or 1–7" : "Press 1–7 to answer")  ·  Space start  ·  Esc stop  ·  H hints  ·  M mute")
+            switch game.settings.answerInput {
+            case .buttons: AnswerPad(game: game)
+            case .piano: PianoPad(game: game)
+            }
+            Text("\(answerHint)  ·  Space start  ·  Esc stop  ·  H hints  ·  M mute")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -20,11 +23,18 @@ struct ContentView: View {
         .frame(minWidth: 820, minHeight: 640)
         .background(Theme.background)
         .navigationTitle("Clefwise")
-        .navigationSubtitle("Learn to read notes on the staff")
         .toolbar { settingsToolbar }
         .onAppear(perform: installKeyMonitor)
         .onDisappear {
             if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        }
+    }
+
+    private var answerHint: String {
+        switch (game.settings.answerInput, game.settings.naming) {
+        case (.piano, _): "Click the key in the right octave"
+        case (.buttons, .letters): "Type the note's letter or 1–7"
+        case (.buttons, _): "Press 1–7 to answer"
         }
     }
 
@@ -48,6 +58,13 @@ struct ContentView: View {
                 }
                 .pickerStyle(.segmented)
                 .help("Race the clock, or practice without one")
+
+                Picker("Answer with", selection: $game.settings.answerInput) {
+                    ForEach(Game.AnswerInput.allCases) { Label($0.label, systemImage: $0.symbol).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelStyle(.iconOnly)
+                .help("Answer with note buttons (any octave) or piano keys (exact octave)")
             }
             .disabled(game.phase == .playing)
 
@@ -55,16 +72,6 @@ struct ContentView: View {
                 ForEach(NamingSystem.allCases) { Text($0.label).tag($0) }
             }
             .help("Name notes with letters, solfège (Do = C) or sargam (Sa = C)")
-
-            Toggle(isOn: $game.settings.showHints) {
-                Label("Hints", systemImage: "lightbulb")
-            }
-            .help("Show note names and mnemonics (H)")
-
-            Toggle(isOn: $game.settings.isMuted) {
-                Label("Mute", systemImage: game.settings.isMuted ? "speaker.slash" : "speaker.wave.2")
-            }
-            .help("Mute sounds (M)")
         }
     }
 
@@ -86,7 +93,7 @@ struct ContentView: View {
 // MARK: - Stats
 
 private struct StatsBar: View {
-    let game: Game
+    @Bindable var game: Game
 
     var body: some View {
         HStack(spacing: 12) {
@@ -97,11 +104,26 @@ private struct StatsBar: View {
             StatTile(title: "Streak", value: "\(game.streak)")
             StatTile(title: "Accuracy", value: game.accuracy.map { "\(Int(($0 * 100).rounded()))%" } ?? "–")
             Spacer()
+            // Things you may want mid-round live here; round settings are in the toolbar.
+            Group {
+                Toggle(isOn: $game.settings.showHints) {
+                    Label("Hints", systemImage: "lightbulb")
+                }
+                .help("Show note names and mnemonics (H)")
+
+                Toggle(isOn: $game.settings.isMuted) {
+                    Label("Mute", systemImage: game.settings.isMuted ? "speaker.slash" : "speaker.wave.2")
+                }
+                .help("Mute sounds (M)")
+            }
+            .toggleStyle(.button)
+            .labelStyle(.iconOnly)
+
             if game.phase == .playing {
                 Button("Stop", systemImage: "stop.fill") { game.stop() }
-                    .controlSize(.large)
             }
         }
+        .controlSize(.large)
     }
 
     private var timeText: String {
@@ -180,7 +202,12 @@ private struct StaffCard: View {
 
     private func answerLabel(_ question: Question) -> String {
         let name = game.settings.naming.name(of: question.pitch.letter)
-        return question.pitch == Pitch(.c, 4) ? "Middle \(name)" : name
+        let label = question.pitch == Pitch(.c, 4) ? "Middle \(name)" : name
+        // On the piano, say so when the name was right but the octave wasn't.
+        if let chosen = game.flash?.pitch, chosen.letter == question.pitch.letter, chosen != question.pitch {
+            return "\(label) · wrong octave"
+        }
+        return label
     }
 }
 
@@ -358,7 +385,7 @@ private struct AnswerPad: View {
             }
     }
 
-    private func highlight(for letter: NoteLetter) -> AnswerKeyStyle.Highlight {
+    private func highlight(for letter: NoteLetter) -> KeyHighlight {
         if let flash = game.flash, flash.letter == letter {
             return flash.isCorrect ? .correct : .wrong
         }
@@ -369,10 +396,45 @@ private struct AnswerPad: View {
     }
 }
 
-private struct AnswerKeyStyle: ButtonStyle {
-    enum Highlight { case none, correct, wrong, reveal }
+/// Feedback shown on an answer button or piano key.
+enum KeyHighlight {
+    /// Not involved in the latest answer.
+    case none
+    /// Pressed, and right.
+    case correct
+    /// Pressed, and wrong.
+    case wrong
+    /// The right answer, shown after a miss.
+    case reveal
 
-    let highlight: Highlight
+    var fill: Color {
+        switch self {
+        case .none: .white
+        case .correct: Theme.correct
+        case .wrong: Theme.wrong
+        case .reveal: Theme.correctTint
+        }
+    }
+
+    var border: Color {
+        switch self {
+        case .none: Theme.keyBorder
+        case .correct, .reveal: Theme.correct
+        case .wrong: Theme.wrong
+        }
+    }
+
+    var foreground: Color {
+        switch self {
+        case .none: Theme.ink
+        case .correct, .wrong: .white
+        case .reveal: Theme.correct
+        }
+    }
+}
+
+private struct AnswerKeyStyle: ButtonStyle {
+    let highlight: KeyHighlight
 
     func makeBody(configuration: Configuration) -> some View {
         AnswerKey(configuration: configuration, highlight: highlight)
@@ -380,48 +442,23 @@ private struct AnswerKeyStyle: ButtonStyle {
 
     private struct AnswerKey: View {
         let configuration: Configuration
-        let highlight: Highlight
+        let highlight: KeyHighlight
         @Environment(\.isEnabled) private var isEnabled
 
         var body: some View {
             configuration.label
-                .foregroundStyle(foreground)
+                .foregroundStyle(highlight.foreground)
                 .frame(width: 76, height: 76)
-                .background(fill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .background(highlight.fill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(border, lineWidth: highlight == .reveal ? 3 : 1.5)
+                        .strokeBorder(highlight.border, lineWidth: highlight == .reveal ? 3 : 1.5)
                 }
                 .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
                 .scaleEffect(configuration.isPressed ? 0.94 : 1)
                 .opacity(isEnabled ? 1 : 0.5)
                 .animation(.easeOut(duration: 0.12), value: highlight)
                 .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
-        }
-
-        private var fill: Color {
-            switch highlight {
-            case .none: .white
-            case .correct: Theme.correct
-            case .wrong: Theme.wrong
-            case .reveal: Theme.correct.opacity(0.12)
-            }
-        }
-
-        private var border: Color {
-            switch highlight {
-            case .none: Theme.keyBorder
-            case .correct, .reveal: Theme.correct
-            case .wrong: Theme.wrong
-            }
-        }
-
-        private var foreground: Color {
-            switch highlight {
-            case .none: Theme.ink
-            case .correct, .wrong: .white
-            case .reveal: Theme.correct
-            }
         }
     }
 }
