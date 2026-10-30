@@ -25,13 +25,13 @@ struct ContentView: View {
                     .lineLimit(1)
                 Spacer()
                 if game.settings.answerInput == .piano {
-                    Toggle("Show key names", isOn: $game.settings.showKeyNames)
+                    Toggle("Show key names", isOn: showKeyNames)
                         .toggleStyle(.checkbox)
                         .help("Write note names on the piano keys (K)")
                         .padding(.trailing, 12)
                 }
                 // Next to the answer area, where you'd look for it.
-                Picker("Answer with", selection: $game.settings.answerInput) {
+                Picker("Answer with", selection: answerInput) {
                     ForEach(Game.AnswerInput.allCases) { Label($0.label, systemImage: $0.symbol).tag($0) }
                 }
                 .pickerStyle(.segmented)
@@ -51,8 +51,13 @@ struct ContentView: View {
         .toolbar { settingsToolbar }
         // Like the toolbar settings, a new piece waits for the round to end.
         .dropDestination(for: URL.self) { urls, _ in
-            guard game.phase != .playing, let url = urls.first else { return false }
-            PieceFile.open(url, in: game)
+            guard let url = urls.first else { return false }
+            guard game.phase != .playing else {
+                // The game never gets the file, so it's logged here.
+                game.recorder.recordUIAction("dropRefused", detail: url.lastPathComponent)
+                return false
+            }
+            PieceFile.open(url, in: game, via: .drop)
             return true
         } isTargeted: {
             isDropTargeted = $0 && game.phase != .playing
@@ -70,6 +75,15 @@ struct ContentView: View {
 
     private var isShowingPieceError: Binding<Bool> {
         Binding(get: { game.pieceError != nil }, set: { if !$0 { game.pieceError = nil } })
+    }
+
+    // The game logs the settings; these also log the clicks (K shows key names too).
+    private var showKeyNames: Binding<Bool> {
+        $game.settings.showKeyNames.recordingChanges(as: "keyNamesCheckbox", to: game.recorder)
+    }
+
+    private var answerInput: Binding<Game.AnswerInput> {
+        $game.settings.answerInput.recordingChanges(as: "answerInputSwitch", to: game.recorder) { $0.rawValue }
     }
 
     private var shortcutHint: String {
@@ -150,6 +164,12 @@ struct ContentView: View {
             .labelsHidden()
         }
         .help(pieceHelp("Key signature: the sharps or flats that hold for every note", piece: "The piece sets the key signature"))
+        // SwiftUI doesn't say when a menu opens, so this one is told apart by its items.
+        .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { notification in
+            guard let menu = notification.object as? NSMenu,
+                  menu.items.contains(where: { $0.title == KeyChoice.random.label }) else { return }
+            game.recorder.recordUIAction("keyMenu")
+        }
     }
 
     /// Says why a setting is greyed out while a piece is open, and how to get it back.
@@ -216,12 +236,13 @@ private struct StatsBar: View {
             Spacer()
             // Things you may want mid-round live here; round settings are in the toolbar.
             Group {
-                Toggle(isOn: $game.settings.showHints) {
+                // The game logs the settings; these also log the clicks (H and M toggle them too).
+                Toggle(isOn: $game.settings.showHints.recordingChanges(as: "hintsButton", to: game.recorder)) {
                     Label("Hints", systemImage: "lightbulb")
                 }
                 .help("Show note names and mnemonics (H)")
 
-                Toggle(isOn: $game.settings.isMuted) {
+                Toggle(isOn: $game.settings.isMuted.recordingChanges(as: "muteButton", to: game.recorder)) {
                     Label("Mute", systemImage: game.settings.isMuted ? "speaker.slash" : "speaker.wave.2")
                 }
                 .help("Mute sounds (M)")
@@ -230,7 +251,10 @@ private struct StatsBar: View {
             .labelStyle(.iconOnly)
 
             if game.phase == .playing {
-                Button("Stop", systemImage: "stop.fill") { game.stop() }
+                Button("Stop", systemImage: "stop.fill") {
+                    game.recorder.recordUIAction("stopButton")
+                    game.stop()
+                }
             }
         }
         .controlSize(.large)
@@ -374,7 +398,7 @@ private struct StartPanel: View {
             Text(details)
                 .foregroundStyle(.secondary)
             Button {
-                game.start()
+                game.start(via: .button)
             } label: {
                 Label("Start", systemImage: "play.fill")
                     .frame(minWidth: 110)
@@ -390,7 +414,7 @@ private struct StartPanel: View {
                 .padding(.vertical, 4)
             // Spelled out here as well as in the File menu, so it's found without looking for it.
             HStack(spacing: 10) {
-                Button("Practise a piece…", systemImage: "music.note.list") { PieceFile.choose(for: game) }
+                Button("Practise a piece…", systemImage: "music.note.list") { PieceFile.choose(for: game, via: .button) }
                     .help("Open a MusicXML file and read its notes (⌘O)")
                 Text("MusicXML file, or drop one here")
                     .font(.caption)
@@ -461,8 +485,11 @@ private struct SummaryPanel: View {
                     .foregroundStyle(summary.notesToReview.isEmpty ? Theme.correct : Theme.wrong)
             }
             HStack(spacing: 12) {
-                Button("Done") { game.dismissSummary() }
-                Button("Play again") { game.start() }
+                Button("Done") {
+                    game.recorder.recordUIAction("summaryDone")
+                    game.dismissSummary()
+                }
+                Button("Play again") { game.start(via: .playAgain) }
                     .buttonStyle(.borderedProminent)
             }
             .controlSize(.large)

@@ -67,15 +67,22 @@ final class InMemoryDefaults: UserDefaults {
     override func removeObject(forKey key: String) { values[key] = nil }
 }
 
-/// A game with its own throwaway defaults and no sound.
+/// A game with its own throwaway defaults, its usage events kept in memory, and no sound.
 @MainActor
 class GameTestBench {
     let defaults: UserDefaults = InMemoryDefaults()
+    /// Never the real usage log: every `Game` in the tests gets one of these.
+    let recorder = MemoryUsageRecorder()
     let game: Game
 
     init() {
-        game = Game(defaults: defaults)
+        game = Game(defaults: defaults, recorder: recorder)
         game.settings.isMuted = true
+    }
+
+    /// The app starting again on the same defaults, with its own log.
+    func relaunch(recorder: MemoryUsageRecorder = MemoryUsageRecorder()) -> Game {
+        Game(defaults: defaults, recorder: recorder)
     }
 
     /// Answers the current question right, on the piano; returns what was asked.
@@ -483,12 +490,12 @@ class GameTestBench {
         game.settings.piece.startBar = 3
         #expect(game.settings.piecePath == missing.path)
 
-        let relaunched = Game(defaults: defaults)
+        let relaunched = relaunch()
         #expect(relaunched.settings.piece.startBar == 3) // it did read the saved settings
         #expect(relaunched.piece == nil)
         #expect(relaunched.settings.piecePath == nil)
         #expect(relaunched.pieceError == nil)
-        #expect(Game(defaults: defaults).settings.piecePath == nil)
+        #expect(relaunch().settings.piecePath == nil)
     }
 
     @Test func aPieceThatNoLongerReadsIsForgottenAtLaunch() throws {
@@ -497,7 +504,7 @@ class GameTestBench {
         defer { try? FileManager.default.removeItem(at: junk) }
         game.open(twoHands, from: junk)
 
-        let relaunched = Game(defaults: defaults)
+        let relaunched = relaunch()
         #expect(relaunched.piece == nil)
         #expect(relaunched.settings.piecePath == nil)
         #expect(relaunched.pieceError == nil)

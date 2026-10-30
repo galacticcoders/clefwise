@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// Per-note history used to bring up notes you struggle with more often.
-struct NoteStat: Codable {
+struct NoteStat: Codable, Equatable {
     var attempts = 0
     var correct = 0
     /// Most recent results, oldest first.
@@ -200,6 +200,7 @@ final class Game {
                 updateSelection()
             }
             save(settings, as: Keys.settings)
+            recordSettingChanges()
         }
     }
 
@@ -266,18 +267,31 @@ final class Game {
     @ObservationIgnored private var bestStreak = 0
     @ObservationIgnored private var roundMisses: [StaffNote: Int] = [:]
     @ObservationIgnored private var responseTimes: [TimeInterval] = []
-    @ObservationIgnored private var roundStart = Date()
-    @ObservationIgnored private var questionStart = Date()
+    /// Monotonic, so round and answer times don't jump when the Mac's clock is set.
+    @ObservationIgnored private var roundStart = ContinuousClock.now
+    @ObservationIgnored private var questionStart = ContinuousClock.now
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var pendingAdvance: Task<Void, Never>?
     @ObservationIgnored private let synth = Synth()
+    /// Where usage events go (the usage log on disk in the app; memory in tests).
+    @ObservationIgnored let recorder: UsageRecorder
+    /// The saved settings as last logged, to tell which ones a change touched.
+    @ObservationIgnored private var settingsAsLogged = JSONValue.null
+    /// The round being logged, from `roundStarted` to `roundEnded`.
+    @ObservationIgnored private var roundLog: RoundLog?
+    /// The question on screen, from `questionShown` until it's answered.
+    @ObservationIgnored private var questionLog: QuestionLog?
 
-    /// `defaults` is where settings, note stats and best scores are kept; tests pass their own.
-    init(defaults: UserDefaults = .standard) {
+    /// `defaults` is where settings, note stats and best scores are kept, `recorder` where usage
+    /// events go; tests pass their own.
+    init(defaults: UserDefaults = .standard, recorder: UsageRecorder = UsageLog.shared) {
         self.defaults = defaults
+        self.recorder = recorder
         settings = Self.load(Settings.self, from: Keys.settings, in: defaults) ?? Settings()
         noteStats = Self.load([String: NoteStat].self, from: Keys.noteStats, in: defaults) ?? [:]
         bestScores = Self.load([String: Int].self, from: Keys.bestScores, in: defaults) ?? [:]
+        settingsAsLogged = JSONValue(encoding: settings)
+        recordStatsSnapshotOnce()
         reopenLastPiece()
     }
 
@@ -363,24 +377,34 @@ final class Game {
     /// on, or the part's first note when the settings leave nothing to ask.
     private var leadingPieceNote: ScoreNote? { pieceNotes.first ?? piecePart?.notes.first }
 
-    /// Reads a MusicXML file and switches to practising it, or sets `pieceError`.
-    func openPiece(at url: URL) {
+    /// Called by the app as it quits, so a round still going is logged as ended (`.appQuit`).
+    func appWillTerminate() {
+        guard phase == .playing else { return }
+        abandonRound(as: .appQuit)
+    }
+
+    /// Reads a MusicXML file and switches to practising it, or sets `pieceError`. `source` says
+    /// how the file was picked, for the usage log.
+    func openPiece(at url: URL, via source: PieceOpenSource = .menu) {
         do {
-            open(try MusicXMLImporter.load(from: url), from: url)
+            open(try MusicXMLImporter.load(from: url), from: url, via: source)
         } catch {
             pieceError = error.localizedDescription
+            recordPieceOpenFailed(url.path, via: source, error.localizedDescription)
         }
     }
 
     /// Switches to practising `score` (also how tests and previews load one without a file).
     /// A round in progress is dropped without a summary. Reopening the same file keeps its
     /// piece settings; another file starts from bar 1.
-    func open(_ score: Score, from url: URL) {
+    func open(_ score: Score, from url: URL, via source: PieceOpenSource = .menu) {
         guard !score.parts.isEmpty else {
-            pieceError = "There are no notes to practise in this file."
+            pieceError = Self.noNotesMessage
+            recordPieceOpenFailed(url.path, via: source, Self.noNotesMessage)
             return
         }
         abandonRound()
+        recordPieceOpened(score, from: url, via: source)
         piece = score
         pieceURL = url
         pieceError = nil
@@ -395,6 +419,7 @@ final class Game {
     /// Back to random notes; a round in progress is dropped without a summary.
     func closePiece() {
         abandonRound()
+        recorder.record(.pieceClosed(PieceClosed(path: pieceURL?.path)))
         piece = nil
         pieceURL = nil
         pieceError = nil
@@ -402,17 +427,30 @@ final class Game {
         updateSelection()
     }
 
+    private static let noNotesMessage = "There are no notes to practise in this file."
+
     /// At launch, picks up last session's piece. One that's gone or no longer reads is quietly
-    /// forgotten: nobody just asked to open it.
+    /// forgotten (only the log hears why): nobody just asked to open it.
     private func reopenLastPiece() {
         guard let path = settings.piecePath else { return }
         let url = URL(fileURLWithPath: path)
-        if FileManager.default.isReadableFile(atPath: path),
-           let score = try? MusicXMLImporter.load(from: url), !score.parts.isEmpty {
-            open(score, from: url)
+        let failure: String
+        if !FileManager.default.isReadableFile(atPath: path) {
+            failure = "The file is gone or can't be read."
         } else {
-            settings.piecePath = nil
+            do {
+                let score = try MusicXMLImporter.load(from: url)
+                if !score.parts.isEmpty {
+                    open(score, from: url, via: .launch)
+                    return
+                }
+                failure = Self.noNotesMessage
+            } catch {
+                failure = error.localizedDescription
+            }
         }
+        recordPieceOpenFailed(path, via: .launch, failure)
+        settings.piecePath = nil
     }
 
     /// `options` with the part and start bar brought within what `score` has.
@@ -485,8 +523,9 @@ final class Game {
     // MARK: - Round flow
 
     /// Starts a round: on the loaded piece if there is one (or sets `pieceError` when the piece
-    /// settings leave no notes), otherwise on random notes from the toolbar settings.
-    func start() {
+    /// settings leave no notes), otherwise on random notes from the toolbar settings. `source`
+    /// says what started it, for the usage log.
+    func start(via source: StartSource = .button) {
         if let piece, let part = piecePart {
             guard !selectedNotes.isEmpty else {
                 pieceError = emptySelectionMessage
@@ -499,6 +538,8 @@ final class Game {
             pieceRound = nil
             roundKey = pickRoundKey()
         }
+        // Starting over mid-round drops the round in progress (only the log sees it end).
+        recordRoundEnd(.abandoned)
         stopClock()
         score = 0
         attempts = 0
@@ -514,12 +555,13 @@ final class Game {
         isShowingMiss = false
         question = nil
         phase = .playing
-        roundStart = Date()
+        roundStart = .now
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+        recordRoundStart(via: source)
         nextQuestion()
     }
 
@@ -533,38 +575,75 @@ final class Game {
         phase = .idle
     }
 
-    /// Note-button press: the letter plus whichever ♯/♭ is armed. Presses that can't count (during
-    /// the pause after a miss, or a combination with no name like komal Sa) leave the armed sign alone.
+    /// Note-button click: the letter plus whichever ♯/♭ is armed.
     func answer(_ letter: NoteLetter) {
-        guard phase == .playing, !isShowingMiss, settings.naming.hasName(letter, armedAccidental) else { return }
-        let accidental = armedAccidental
-        armedAccidental = .natural
-        answer(letter, accidental)
+        pressNoteButton(letter, via: .click)
     }
 
-    /// Answers with a note name (buttons and typing); any octave counts. Combinations with no name
-    /// of their own are ignored rather than judged by sound, so "komal Sa" never passes for Ni.
+    /// Answers with a note name, as if clicked; any octave counts.
     func answer(_ letter: NoteLetter, _ accidental: Accidental) {
-        guard let question, settings.naming.hasName(letter, accidental) else { return }
-        submit(Flash(letter: letter, accidental: accidental, pitch: nil,
-                     isCorrect: settings.naming.accepts(letter, accidental, for: question.pitch)))
+        answerName(letter, accidental, via: .click)
     }
 
     /// Answers with a piano key, so the octave has to be right too. Compared by sound, so the
     /// black key counts whether the question spells it C♯ or D♭.
     func answer(_ pitch: Pitch) {
-        guard let question else { return }
+        guard let question = questionTakingAnswers(from: .piano, detail: pitch.name) else { return }
         submit(Flash(letter: pitch.letter, accidental: pitch.accidental, pitch: pitch,
-                     isCorrect: question.pitch.midiNumber == pitch.midiNumber))
+                     isCorrect: question.pitch.midiNumber == pitch.midiNumber),
+               to: question, via: .piano)
     }
 
     /// Arms ♯ or ♭ for the next note button; choosing the armed one again disarms it.
     func toggleArmedAccidental(_ accidental: Accidental) {
+        // A click on the sign button joins the question's keystrokes; a key arming it is already noted.
+        if let questionLog, !questionLog.keyPending {
+            noteKeystroke("click \(accidental.symbol)")
+            settleKeystroke(.armed)
+        }
         armedAccidental = armedAccidental == accidental ? .natural : accidental
     }
 
-    private func submit(_ response: Flash) {
-        guard phase == .playing, !isShowingMiss, let question else { return }
+    /// A note button, clicked or by shortcut. Presses that can't count (during the pause after a
+    /// miss, or a combination with no name like komal Sa) leave the armed sign alone.
+    private func pressNoteButton(_ letter: NoteLetter, via source: AnswerSource) {
+        if answerName(letter, armedAccidental, via: source) { armedAccidental = .natural }
+    }
+
+    /// Answers with a note name (buttons and typing); false when the answer can't count.
+    /// Combinations with no name of their own are ignored rather than judged by sound, so
+    /// "komal Sa" never passes for Ni.
+    @discardableResult
+    private func answerName(_ letter: NoteLetter, _ accidental: Accidental, via source: AnswerSource) -> Bool {
+        let name = settings.naming.answerName(of: letter, accidental)
+        guard let question = questionTakingAnswers(
+            from: source, detail: name ?? settings.naming.name(of: letter) + accidental.symbol, hasName: name != nil
+        ) else { return false }
+        submit(Flash(letter: letter, accidental: accidental, pitch: nil,
+                     isCorrect: settings.naming.accepts(letter, accidental, for: question.pitch)),
+               to: question, via: source)
+        return true
+    }
+
+    /// The question an answer goes to, or nil when it can't count right now: no round, the pause
+    /// after a miss, or (`hasName` false) a sign with no name. Those are logged as ignored.
+    private func questionTakingAnswers(from source: AnswerSource, detail: String, hasName: Bool = true) -> Question? {
+        let reason: String
+        if phase != .playing || question == nil {
+            reason = "noRound"
+        } else if isShowingMiss {
+            reason = "missPause"
+        } else if !hasName {
+            reason = "noName"
+        } else {
+            return question
+        }
+        recordIgnored(reason, from: source, detail: detail)
+        settleKeystroke(.rejected) // when a key sent it
+        return nil
+    }
+
+    private func submit(_ response: Flash, to question: Question, via source: AnswerSource) {
         let isCorrect = response.isCorrect
         attempts += 1
         noteStats[statKey(for: question), default: NoteStat()].record(isCorrect)
@@ -575,12 +654,14 @@ final class Game {
             score += 1
             streak += 1
             bestStreak = max(bestStreak, streak)
-            responseTimes.append(Date().timeIntervalSince(questionStart))
+            responseTimes.append(Self.seconds(from: questionStart))
+            recordAnswer(response, to: question, via: source)
             if !settings.isMuted { synth.play(question.pitch) }
             nextQuestion()
         } else {
             streak = 0
             roundMisses[StaffNote(clef: question.clef, pitch: question.pitch), default: 0] += 1
+            recordAnswer(response, to: question, via: source)
             if !settings.isMuted { synth.playMiss() }
             isShowingMiss = true
             pendingAdvance = Task { [weak self] in
@@ -594,6 +675,10 @@ final class Game {
 
     /// Handles a key press; returns false to let the system handle it instead.
     func handleKey(characters: String, keyCode: UInt16) -> Bool {
+        // The question's log takes the key now; what the key turns out to do settles its result,
+        // and a key that does none of those things is `other`.
+        noteKeystroke(Self.keyName(characters: characters, keyCode: keyCode))
+        defer { settleKeystroke(.other) }
         switch keyCode {
         case 53: // Escape
             switch phase {
@@ -604,22 +689,22 @@ final class Game {
             return true
         case 36, 76, 49: // Return, keypad Enter, Space
             if phase != .playing {
-                start()
+                start(via: .key)
             } else if keyCode != 49, settings.answerInput == .keyboard, accidentalsPossible {
                 confirmTyping()
             }
             return true
         case 51 where settings.answerInput == .keyboard: // Delete (backspace)
-            if !typedText.isEmpty { typedText.removeLast() }
+            if !typedText.isEmpty {
+                typedText.removeLast()
+                settleKeystroke(.deleted)
+            }
             return true
         default:
             break
         }
         guard let character = characters.lowercased().first else { return false }
-        // In keyboard mode every letter typed during a round goes towards a note name, and so
-        // does a ♯/♭ sign when notes can have one ("b" is a letter already).
-        if settings.answerInput == .keyboard, phase == .playing,
-           character.isLetter || (accidentalsPossible && "#♯♭".contains(character)) {
+        if settings.answerInput == .keyboard, phase == .playing, isTypeable(character) {
             type(character)
             return true
         }
@@ -628,15 +713,20 @@ final class Game {
         // # or = arms a sharp and - a flat: "b" has to stay the note B.
         if settings.answerInput == .buttons {
             if accidentalsPossible, let accidental = Self.armingKeys[character] {
-                if phase == .playing { toggleArmedAccidental(accidental) }
+                if phase == .playing {
+                    toggleArmedAccidental(accidental)
+                    settleKeystroke(.armed)
+                } else {
+                    recordIgnored("noRound", from: .shortcut, detail: String(character))
+                }
                 return true
             }
             if let digit = character.wholeNumberValue, let letter = NoteLetter(rawValue: digit - 1) {
-                answer(letter)
+                pressNoteButton(letter, via: .shortcut)
                 return true
             }
             if settings.naming == .letters, let letter = NoteLetter(character: character) {
-                answer(letter)
+                pressNoteButton(letter, via: .shortcut)
                 return true
             }
         }
@@ -644,9 +734,20 @@ final class Game {
         case "h": settings.showHints.toggle()
         case "k" where settings.answerInput == .piano: settings.showKeyNames.toggle()
         case "m": settings.isMuted.toggle()
-        default: return false
+        default:
+            // Typing a name with no round going (during one it would have been typed above).
+            if settings.answerInput == .keyboard, isTypeable(character) {
+                recordIgnored("noRound", from: .typing, detail: String(character))
+            }
+            return false
         }
         return true
+    }
+
+    /// In keyboard mode every letter typed during a round goes towards a note name, and so does
+    /// a ♯/♭ sign when notes can have one ("b" is a letter already).
+    private func isTypeable(_ character: Character) -> Bool {
+        character.isLetter || (accidentalsPossible && "#♯♭".contains(character))
     }
 
     private static let armingKeys: [Character: Accidental] = ["#": .sharp, "=": .sharp, "-": .flat]
@@ -667,7 +768,10 @@ final class Game {
     /// with (a bare "f" might still become "f♯", so that one waits for Return). Keystrokes that
     /// can't lead to any answer are dropped rather than counted as wrong, so typos aren't punished.
     private func type(_ character: Character) {
-        guard !isShowingMiss else { return }
+        guard !isShowingMiss else {
+            recordIgnored("missPause", from: .typing, detail: String(character))
+            return
+        }
         let answers = typeableAnswers
         // # and a "b" after a whole name are stored as ♯ and ♭, so the text reads like the name.
         let followsName = answers.contains { $0.text == typedText }
@@ -681,11 +785,13 @@ final class Game {
         let extensions = answers.filter { $0.text.hasPrefix(text) }
         if extensions.count == 1, let match = extensions.first, match.text == text {
             typedText = ""
-            answer(match.letter, match.accidental)
+            answerName(match.letter, match.accidental, via: .typing)
         } else if !extensions.isEmpty {
             typedText = text
+            settleKeystroke(.typed)
         } else {
             rejectedKeystrokes += 1
+            settleKeystroke(.rejected)
         }
     }
 
@@ -694,17 +800,20 @@ final class Game {
         guard !isShowingMiss, !typedText.isEmpty else { return }
         if let match = typeableAnswers.first(where: { $0.text == typedText }) {
             typedText = ""
-            answer(match.letter, match.accidental)
+            answerName(match.letter, match.accidental, via: .typing)
         } else {
             rejectedKeystrokes += 1
+            settleKeystroke(.rejected)
         }
     }
 
-    private func tick() {
-        let now = Date().timeIntervalSince(roundStart)
+    /// The round clock, ten times a second. Tests pass a later `now` to run a sprint out.
+    func tick(at now: ContinuousClock.Instant = .now) {
+        guard phase == .playing else { return }
+        let seconds = Self.seconds(from: roundStart, to: now)
         // Only publish whole-second changes so the UI doesn't redraw ten times a second.
-        if Int(now) != Int(elapsed) { elapsed = now }
-        if settings.mode == .sprint, now >= Self.sprintLength {
+        if Int(seconds) != Int(elapsed) { elapsed = seconds }
+        if settings.mode == .sprint, seconds >= Self.sprintLength {
             elapsed = Self.sprintLength
             finish(timeRanOut: true)
         }
@@ -720,35 +829,32 @@ final class Game {
         question = nil
         let pieceRound = pieceRound
         self.pieceRound = nil
-        guard attempts > 0 || settings.mode == .sprint else {
-            phase = .idle
-            return
-        }
 
+        // Only sprints keep best scores and the guard below only turns away practice rounds, so
+        // this can come first, and every round's end is logged with it.
         var isNewBest = false
         if pieceRound == nil, settings.mode == .sprint, score > (bestScores[bestScoreKey] ?? 0) {
             bestScores[bestScoreKey] = score
             save(bestScores, as: Keys.bestScores)
             isNewBest = true
         }
-        // F and F♯ share a staff position, so pitch height breaks the tie.
-        let review = roundMisses
-            .sorted {
-                $0.value != $1.value ? $0.value > $1.value
-                    : ($0.key.pitch.diatonicIndex, $0.key.pitch.midiNumber) < ($1.key.pitch.diatonicIndex, $1.key.pitch.midiNumber)
-            }
-            .prefix(4)
-            .map(\.key)
+        recordRoundEnd(timeRanOut ? .timeUp : finishedPiece ? .pieceComplete : .stopped, isNewBest: isNewBest)
+        // A practice round stopped before any answer has nothing to sum up.
+        guard attempts > 0 || settings.mode == .sprint else {
+            phase = .idle
+            return
+        }
+
         summary = RoundSummary(
             mode: settings.mode,
             score: score,
             attempts: attempts,
             bestStreak: bestStreak,
-            averageSeconds: responseTimes.isEmpty ? nil : responseTimes.reduce(0, +) / Double(responseTimes.count),
+            averageSeconds: averageResponseTime,
             bestScore: pieceRound == nil && settings.mode == .sprint ? bestScores[bestScoreKey] : nil,
             isNewBest: isNewBest,
             timeRanOut: timeRanOut,
-            notesToReview: review,
+            notesToReview: notesToReview,
             mixedClefs: pieceRound.map { round in round.notes.contains { $0.clef != round.notes[0].clef } }
                 ?? (settings.clefChoice == .both),
             pieceTitle: pieceRound?.title,
@@ -757,9 +863,26 @@ final class Game {
         phase = .finished
     }
 
+    private var averageResponseTime: TimeInterval? {
+        responseTimes.isEmpty ? nil : responseTimes.reduce(0, +) / Double(responseTimes.count)
+    }
+
+    /// The round's most missed notes, at most four. F and F♯ share a staff position, so pitch
+    /// height breaks the tie.
+    private var notesToReview: [StaffNote] {
+        roundMisses
+            .sorted {
+                $0.value != $1.value ? $0.value > $1.value
+                    : ($0.key.pitch.diatonicIndex, $0.key.pitch.midiNumber) < ($1.key.pitch.diatonicIndex, $1.key.pitch.midiNumber)
+            }
+            .prefix(4)
+            .map(\.key)
+    }
+
     /// Drops the round in progress, or the last one's summary, without scoring it: for when the
-    /// piece it's on is closed or replaced.
-    private func abandonRound() {
+    /// piece it's on is closed or replaced, or the app quits. `reason` is what the log says ended it.
+    private func abandonRound(as reason: RoundEndReason = .abandoned) {
+        recordRoundEnd(reason)
         stopClock()
         isShowingMiss = false
         flash = nil
@@ -790,6 +913,16 @@ final class Game {
         }
     }
 
+    private static func seconds(from start: ContinuousClock.Instant, to end: ContinuousClock.Instant = .now) -> TimeInterval {
+        let elapsed = (end - start).components
+        return Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+    }
+
+    /// Since `start`, to the nearest millisecond: how the log keeps times.
+    private static func milliseconds(since start: ContinuousClock.Instant) -> Int {
+        Int((seconds(from: start) * 1000).rounded())
+    }
+
     // MARK: - Picking notes
 
     /// The chosen key, or for "random" any key but C major, other than last round's.
@@ -803,10 +936,11 @@ final class Game {
     /// Moves on to the next note, or ends an in-order practice round on a piece after its last note.
     private func nextQuestion() {
         guard var pieceRound else {
-            question = randomQuestion()
-            questionStart = Date()
+            let pick = randomQuestion()
+            show(pick.question, pickChance: pick.chance)
             return
         }
+        var pickChance: Double?
         switch pieceRound.order {
         case .inOrder:
             // No question yet means the round is just starting.
@@ -818,24 +952,33 @@ final class Game {
             // A sprint goes round again from the start bar until time's up.
             pieceRound.index = next % pieceRound.notes.count
         case .shuffled:
-            pieceRound.index = shuffledIndex(in: pieceRound)
+            let pick = shuffledIndex(in: pieceRound)
+            pieceRound.index = pick.index
+            pickChance = pick.chance
         }
         self.pieceRound = pieceRound
-        question = pieceRound.notes[pieceRound.index].question
-        questionStart = Date()
+        show(pieceRound.notes[pieceRound.index].question, pickChance: pickChance)
+    }
+
+    /// `pickChance`: how likely the weighted pick was to choose this note, for the log.
+    private func show(_ question: Question, pickChance: Double?) {
+        self.question = question
+        questionStart = .now
+        recordQuestionShown(pickChance: pickChance)
     }
 
     /// A shuffled round's next note, weighted like random rounds and never the one just asked
-    /// unless the round has no other.
-    private func shuffledIndex(in round: PieceRound) -> Int {
+    /// unless the round has no other; and the chance the note had (any of its places).
+    private func shuffledIndex(in round: PieceRound) -> (index: Int, chance: Double) {
         let previous = question.map { Self.statKey($0.clef, $0.pitch) }
         let others = round.places.filter { $0.statKey != previous }
         let candidates = others.isEmpty ? round.places : others
-        let choice = candidates[Self.weightedIndex(candidates.map { weight(forStatKey: $0.statKey) })]
-        return choice.indices.randomElement()!
+        let pick = Self.weightedIndex(candidates.map { weight(forStatKey: $0.statKey) })
+        return (candidates[pick.index].indices.randomElement()!, pick.chance)
     }
 
-    private func randomQuestion() -> Question {
+    /// A random note from the toolbar settings, and the chance it had of being picked.
+    private func randomQuestion() -> (question: Question, chance: Double) {
         let previous = question
         let key = roundKey ?? .cMajor
         // With added accidentals on, about 30% of notes get a printed sign; the rest follow the key.
@@ -855,7 +998,8 @@ final class Game {
         }.filter { $0.question.clef != previous?.clef || $0.question.pitch != previous?.pitch }
 
         let weights = candidates.map { $0.share * weight(forStatKey: statKey(for: $0.question)) }
-        return candidates[Self.weightedIndex(weights)].question
+        let pick = Self.weightedIndex(weights)
+        return (candidates[pick.index].question, pick.chance)
     }
 
     /// Notes you've been missing lately come up more often (up to ~5x a mastered note).
@@ -863,14 +1007,15 @@ final class Game {
         0.4 + 2.5 * (noteStats[key] ?? NoteStat()).recentErrorRate
     }
 
-    /// An index into `weights`, each as likely as its weight.
-    private static func weightedIndex(_ weights: [Double]) -> Int {
-        var roll = Double.random(in: 0..<weights.reduce(0, +))
+    /// An index into `weights`, each as likely as its weight, and the chance it had.
+    private static func weightedIndex(_ weights: [Double]) -> (index: Int, chance: Double) {
+        let total = weights.reduce(0, +)
+        var roll = Double.random(in: 0..<total)
         for (index, weight) in weights.enumerated() {
-            if roll < weight { return index }
+            if roll < weight { return (index, weight / total) }
             roll -= weight
         }
-        return weights.count - 1
+        return (weights.count - 1, weights[weights.count - 1] / total)
     }
 
     /// Signs that change what the key gives `letter`, short of spelling E♯, B♯, C♭ or F♭.
@@ -894,12 +1039,179 @@ final class Game {
         "\(clef.rawValue).\(pitch.name)"
     }
 
+    // MARK: - Usage log
+
+    private struct RoundLog {
+        let id = UUID()
+        var questionsShown = 0
+    }
+
+    /// Kept for the question's `answerGiven`.
+    private struct QuestionLog {
+        let id: UUID
+        var keystrokes: [Keystroke] = []
+        /// The last keystroke is the key `handleKey` is still handling: its result isn't known yet.
+        var keyPending = false
+    }
+
+    /// Once per defaults store: the note stats and best scores kept from before there was a log.
+    private func recordStatsSnapshotOnce() {
+        guard defaults.object(forKey: Keys.usageLogStarted) == nil else { return }
+        recorder.record(.statsSnapshot(StatsSnapshot(reason: "beforeUsageLog", noteStats: noteStats,
+                                                     bestScores: bestScores)))
+        defaults.set(Date(), forKey: Keys.usageLogStarted)
+    }
+
+    /// One `settingChanged` per saved value that differs from what was last logged, by its dotted
+    /// path in the saved JSON ("naming", "piece.hand", "key.fixed._0.fifths"). Comparing with the
+    /// last logged settings rather than `oldValue` logs a change once, already fitted to the piece,
+    /// though fitting it re-runs `didSet` from inside.
+    private func recordSettingChanges() {
+        let saved = JSONValue(encoding: settings)
+        guard saved != settingsAsLogged else { return }
+        let old = Self.leaves(of: settingsAsLogged), new = Self.leaves(of: saved)
+        settingsAsLogged = saved
+        for setting in Set(old.keys).union(new.keys).sorted() where old[setting] != new[setting] {
+            recorder.record(.settingChanged(SettingChanged(setting: setting, from: old[setting] ?? .null,
+                                                           to: new[setting] ?? .null)))
+        }
+    }
+
+    /// `value`'s leaves by dotted path. Arrays and empty objects are leaves; a key that's missing
+    /// (an optional setting that's nil) has none.
+    private static func leaves(of value: JSONValue, at path: String = "") -> [String: JSONValue] {
+        guard case .object(let members) = value, !members.isEmpty else { return [path: value] }
+        return members.reduce(into: [:]) { leaves, member in
+            leaves.merge(Self.leaves(of: member.value, at: path.isEmpty ? member.key : "\(path).\(member.key)")) { $1 }
+        }
+    }
+
+    private func recordRoundStart(via source: StartSource) {
+        let roundLog = RoundLog()
+        self.roundLog = roundLog
+        recorder.record(.roundStarted(RoundStarted(
+            round: roundLog.id, via: source, settings: JSONValue(encoding: settings),
+            keyFifths: (pieceRound.map { $0.notes[0].keySignature } ?? roundKey ?? .cMajor).fifths,
+            piece: pieceRound.flatMap(pieceContext(for:)))))
+    }
+
+    private func pieceContext(for round: PieceRound) -> PieceContext? {
+        guard let piece, let part = piecePart else { return nil }
+        let options = settings.piece
+        return PieceContext(title: piece.title, path: pieceURL?.path ?? "", part: part.name, partIndex: options.part,
+                            hand: options.hand.rawValue, order: options.order.rawValue, startBar: options.startBar,
+                            oneNotePerChord: options.oneNotePerChord, noteCount: round.notes.count,
+                            measureCount: part.measureCount)
+    }
+
+    private func recordQuestionShown(pickChance: Double?) {
+        guard let question, let roundLog else { return }
+        questionLog = QuestionLog(id: question.id)
+        self.roundLog?.questionsShown += 1
+        let note = pieceRound.map { $0.notes[$0.index] }
+        recorder.record(.questionShown(QuestionShown(
+            round: roundLog.id, question: question.id, index: roundLog.questionsShown,
+            clef: question.clef.rawValue, pitch: LoggedPitch(question.pitch), written: LoggedPitch(question.writtenPitch),
+            position: question.position, keyFifths: question.keySignature.fifths,
+            printedAccidental: question.printedAccidental?.rawValue, octaveShift: question.octaveShift,
+            pieceNote: note.map { PieceNoteRef(measure: $0.measure, staff: $0.staff, onset: $0.onset, chord: $0.chord) },
+            pickChance: pickChance, naming: settings.naming.rawValue, input: settings.answerInput.rawValue,
+            hintsVisible: settings.showHints,
+            // Key names are only drawn on the piano.
+            keyNamesVisible: settings.answerInput == .piano && settings.showKeyNames)))
+    }
+
+    /// Adds a key to the keystrokes of the question on screen, if one is up and not yet answered;
+    /// what the key does then settles its result.
+    private func noteKeystroke(_ key: String) {
+        questionLog?.keystrokes.append(Keystroke(key: key, ms: Self.milliseconds(since: questionStart), result: .other))
+        questionLog?.keyPending = true
+    }
+
+    /// What the key being handled did; only the first call for a key counts.
+    private func settleKeystroke(_ result: KeystrokeResult) {
+        guard var log = questionLog, log.keyPending else { return }
+        log.keystrokes[log.keystrokes.count - 1].result = result
+        log.keyPending = false
+        questionLog = log
+    }
+
+    private func recordAnswer(_ response: Flash, to question: Question, via source: AnswerSource) {
+        settleKeystroke(.submitted) // when a key sent the answer
+        guard let roundLog, let questionLog else { return }
+        self.questionLog = nil
+        recorder.record(.answerGiven(AnswerGiven(
+            round: roundLog.id, question: questionLog.id, responseMs: Self.milliseconds(since: questionStart),
+            source: source, letter: response.letter.name, accidental: response.accidental.rawValue,
+            // Names leave the octave out, so any will do for a named answer.
+            name: settings.naming.name(of: response.pitch ?? Pitch(response.letter, 4, response.accidental)),
+            pitch: response.pitch.map(LoggedPitch.init), correct: response.isCorrect,
+            wrongOctave: response.pitch.map {
+                $0.pitchClass == question.pitch.pitchClass && $0.midiNumber != question.pitch.midiNumber
+            },
+            keystrokes: questionLog.keystrokes, scoreAfter: score, streakAfter: streak)))
+    }
+
+    private func recordIgnored(_ reason: String, from source: AnswerSource, detail: String) {
+        recorder.record(.inputIgnored(InputIgnored(round: roundLog?.id, reason: reason, source: source, detail: detail)))
+    }
+
+    /// Ends the round being logged, if there is one. `isNewBest`: a finished sprint set a best score.
+    private func recordRoundEnd(_ reason: RoundEndReason, isNewBest: Bool = false) {
+        guard let roundLog else { return }
+        let unanswered = questionLog.map {
+            UnansweredQuestion(question: $0.id, shownMs: Self.milliseconds(since: questionStart), keystrokes: $0.keystrokes)
+        }
+        self.roundLog = nil
+        questionLog = nil
+        recorder.record(.roundEnded(RoundEnded(
+            round: roundLog.id, reason: reason, durationMs: Self.milliseconds(since: roundStart),
+            score: score, attempts: attempts, bestStreak: bestStreak,
+            averageResponseMs: averageResponseTime.map { Int(($0 * 1000).rounded()) },
+            bestScore: settings.mode == .sprint ? bestScore : nil, isNewBest: isNewBest,
+            notesToReview: notesToReview.map { Self.statKey($0.clef, $0.pitch) },
+            unansweredQuestion: unanswered)))
+    }
+
+    private func recordPieceOpened(_ score: Score, from url: URL, via source: PieceOpenSource) {
+        recorder.record(.pieceOpened(PieceOpened(
+            path: url.path, title: score.title, via: source,
+            parts: score.parts.map {
+                PartInfo(name: $0.name, notes: $0.notes.count, measures: $0.measureCount, staves: $0.staffCount,
+                         skipped: $0.skippedNoteCount)
+            })))
+    }
+
+    private func recordPieceOpenFailed(_ path: String, via source: PieceOpenSource, _ error: String) {
+        recorder.record(.pieceOpenFailed(PieceOpenFailed(path: path, via: source, error: error)))
+    }
+
+    /// How the log writes a key: the character it types, or a name for keys that type none.
+    private static func keyName(characters: String, keyCode: UInt16) -> String {
+        switch keyCode {
+        case 36: return "Return"
+        case 76: return "Enter"
+        case 49: return "Space"
+        case 53: return "Escape"
+        case 51: return "Delete"
+        case 48: return "Tab"
+        default:
+            // Arrows and function keys come as private-use characters.
+            let printable = !characters.isEmpty && characters.unicodeScalars.allSatisfy {
+                ![.control, .privateUse].contains($0.properties.generalCategory)
+            }
+            return printable ? characters : "key \(keyCode)"
+        }
+    }
+
     // MARK: - Persistence
 
     private enum Keys {
         static let settings = "settings"
         static let noteStats = "noteStats"
         static let bestScores = "bestScores"
+        /// When the usage log first saw this store (and took its stats snapshot).
+        static let usageLogStarted = "usageLogStarted"
     }
 
     private static func load<T: Decodable>(_ type: T.Type, from key: String, in defaults: UserDefaults) -> T? {
