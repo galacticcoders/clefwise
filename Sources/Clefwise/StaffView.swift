@@ -1,7 +1,7 @@
 import CoreText
 import SwiftUI
 
-/// Draws a five-line staff with a clef and, optionally, one quarter note.
+/// Draws a five-line staff with a clef, a key signature and, optionally, one quarter note.
 struct StaffView: View {
     let clef: Clef
     /// Drawn after the clef. (Questions carry their own too; this one is used with or without a note.)
@@ -19,12 +19,17 @@ struct StaffView: View {
         Canvas { context, size in
             let staff = StaffGeometry(size: size)
             drawLines(in: &context, staff)
-            drawClef(in: &context, staff)
+            let clefEnd = drawClef(in: &context, staff)
+            let keySignatureEnd = drawKeySignature(after: clefEnd, in: &context, staff)
+            // On a narrow staff, slide the note right so its own accidental (and ledger lines) clear a
+            // long key signature by about a space.
+            let noteX = max(staff.noteX, keySignatureEnd + staff.space * 3.5)
             if let hintPositions {
-                drawHints(for: hintPositions, in: &context, staff)
+                // Keep clear of the note's ledger lines, with a little air.
+                drawHints(for: hintPositions, rightOf: noteX + staff.space * 1.55, in: &context, staff)
             }
             if let note {
-                drawNote(at: note.position, in: &context, staff)
+                drawNote(note, at: noteX, in: &context, staff)
             }
         }
     }
@@ -39,24 +44,54 @@ struct StaffView: View {
         context.stroke(lines, with: .color(Theme.ink), lineWidth: staff.lineWidth)
     }
 
-    private func drawClef(in context: inout GraphicsContext, _ staff: StaffGeometry) {
+    /// Returns the clef's right edge.
+    private func drawClef(in context: inout GraphicsContext, _ staff: StaffGeometry) -> CGFloat {
         // Vertical extent of each clef, in staff spaces above the bottom line.
         let (bottom, top): (CGFloat, CGFloat) = clef == .treble ? (-1.55, 5.45) : (0.48, 4.05)
-        let glyph = ClefGlyph.path(for: clef)
+        let glyph = MusicGlyph.path(for: clef)
         let scale = (top - bottom) * staff.space / glyph.boundingBoxOfPath.height
+        let left = staff.left + staff.space * 0.5
         let transform = CGAffineTransform(scaleX: scale, y: scale)
-            .concatenating(CGAffineTransform(translationX: staff.left + staff.space * 0.5,
-                                             y: staff.bottomLineY - top * staff.space))
+            .concatenating(CGAffineTransform(translationX: left, y: staff.bottomLineY - top * staff.space))
         context.fill(Path(glyph).applying(transform), with: .color(Theme.ink))
+        return left + glyph.boundingBoxOfPath.width * scale
     }
 
-    private func drawHints(for positions: ClosedRange<Int>, in context: inout GraphicsContext, _ staff: StaffGeometry) {
-        let font = Font.system(size: staff.space * 0.62, weight: .semibold, design: .rounded)
-        let labels = positions.map { position in
-            context.resolve(Text(naming.name(of: clef.pitch(atPosition: position).letter)).font(font).foregroundStyle(Theme.hint))
+    /// Returns where the signature ends (the clef's edge when there's none).
+    private func drawKeySignature(after clefEnd: CGFloat, in context: inout GraphicsContext, _ staff: StaffGeometry) -> CGFloat {
+        let accidental: Accidental = keySignature.fifths > 0 ? .sharp : .flat
+        var end = clefEnd
+        // Measured from the clef's real edge, so the bass clef's dots get the same air as the treble's curl.
+        var left = clefEnd + staff.space * 0.6
+        for position in keySignature.staffPositions(for: clef) {
+            let sign = accidentalPath(accidental, at: position, staff)
+            context.fill(sign.offsetBy(dx: left - sign.boundingRect.minX, dy: 0), with: .color(Theme.ink))
+            end = left + sign.boundingRect.width
+            left = end + staff.space * 0.15
         }
-        // Two columns (lines, then spaces) as wide as the longest name, so "Sol" or "Dha" don't collide.
-        let column = max(staff.space * 0.6, labels.map { $0.measure(in: CGSize(width: 1000, height: 1000)).width }.max() ?? 0)
+        return end
+    }
+
+    private func drawHints(for positions: ClosedRange<Int>, rightOf minX: CGFloat,
+                           in context: inout GraphicsContext, _ staff: StaffGeometry) {
+        // Names carry the key signature's sharps and flats: in G major the top line reads "F♯".
+        let names = positions.map { position in
+            let pitch = clef.pitch(atPosition: position)
+            return naming.name(of: pitch.with(keySignature.accidental(for: pitch.letter)))
+        }
+        // Two columns (lines, then spaces) as wide as the longest name, so "Sol" or "komal Dha" don't collide.
+        func layout(fontSize: CGFloat) -> (labels: [GraphicsContext.ResolvedText], column: CGFloat) {
+            let font = Font.system(size: fontSize, weight: .semibold, design: .rounded)
+            let labels = names.map { context.resolve(Text($0).font(font).foregroundStyle(Theme.hint)) }
+            let widest = labels.map { $0.measure(in: CGSize(width: 1000, height: 1000)).width }.max() ?? 0
+            return (labels, max(staff.space * 0.6, widest))
+        }
+        var (labels, column) = layout(fontSize: staff.space * 0.62)
+        // Long sargam names on a narrow staff would reach the note; shrink them to fit instead.
+        let room = (staff.right - minX - staff.space * 0.7) / 2
+        if column > room {
+            (labels, column) = layout(fontSize: staff.space * 0.62 * room / column)
+        }
         let spaceX = staff.right - staff.space * 0.4 - column / 2
         let lineX = spaceX - column - staff.space * 0.3
         for (position, label) in zip(positions, labels) {
@@ -72,9 +107,9 @@ struct StaffView: View {
         }
     }
 
-    private func drawNote(at position: Int, in context: inout GraphicsContext, _ staff: StaffGeometry) {
+    private func drawNote(_ note: Question, at x: CGFloat, in context: inout GraphicsContext, _ staff: StaffGeometry) {
         let space = staff.space
-        let x = staff.noteX
+        let position = note.position
         let y = staff.y(position)
 
         // Ledger lines for notes above or below the staff.
@@ -93,6 +128,13 @@ struct StaffView: View {
         let head = Path(ellipseIn: CGRect(x: -headWidth / 2, y: -headHeight / 2, width: headWidth, height: headHeight))
             .applying(CGAffineTransform(rotationAngle: -.pi / 9).concatenating(CGAffineTransform(translationX: x, y: y)))
         context.fill(head, with: .color(noteColor))
+
+        // A little air before the head, or before the ledger lines, which would otherwise cut through the sign.
+        if let accidental = note.printedAccidental {
+            let sign = accidentalPath(accidental, at: position, staff)
+            let right = x - (ledgerPositions.isEmpty ? headWidth / 2 + space * 0.25 : space * (1.05 + 0.15))
+            context.fill(sign.offsetBy(dx: right - sign.boundingRect.maxX, dy: 0), with: .color(noteColor))
+        }
 
         // Stem goes up from the right of the head below the middle line, down from the left otherwise,
         // and always reaches at least the middle line.
@@ -113,6 +155,23 @@ struct StaffView: View {
             context.fill(Path(roundedRect: pill, cornerRadius: pill.height / 2), with: .color(noteColor))
             context.draw(text, at: CGPoint(x: pill.midX, y: pill.midY))
         }
+    }
+
+    /// The sign sized and set on `position` as engravers do: ♯ and ♮ centred on the line or space,
+    /// ♭ with its bowl there. It starts at about x = 0; callers line it up by its bounds.
+    private func accidentalPath(_ accidental: Accidental, at position: Int, _ staff: StaffGeometry) -> Path {
+        // Height in spaces, and how much of it hangs below the line or space.
+        let (height, below): (CGFloat, CGFloat) = switch accidental {
+        case .sharp: (2.8, 1.4)
+        case .natural: (2.7, 1.35)
+        case .flat: (2.3, 0.6)
+        }
+        let glyph = MusicGlyph.path(for: accidental)
+        let scale = height * staff.space / glyph.boundingBoxOfPath.height
+        let outline = Path(glyph).applying(CGAffineTransform(scaleX: scale, y: scale)
+            .concatenating(CGAffineTransform(translationX: 0, y: staff.y(position) + (below - height) * staff.space)))
+        // Apple Symbols' accidentals are lighter than engraved ones; thicken them to sit with the clef and note.
+        return outline.union(outline.strokedPath(StrokeStyle(lineWidth: staff.space * 0.04, lineJoin: .round)))
     }
 }
 
@@ -142,14 +201,25 @@ private struct StaffGeometry {
     }
 }
 
-/// Clef outlines from the system "Apple Symbols" font, shifted so the bounding box starts at
-/// the origin with y pointing down.
-private enum ClefGlyph {
+/// Clef and accidental outlines from the system "Apple Symbols" font, shifted so the bounding box
+/// starts at the origin with y pointing down.
+private enum MusicGlyph {
     private static let treble = outline(of: "\u{1D11E}")
     private static let bass = outline(of: "\u{1D122}")
+    private static let sharp = outline(of: "\u{266F}")
+    private static let flat = outline(of: "\u{266D}")
+    private static let natural = outline(of: "\u{266E}")
 
     static func path(for clef: Clef) -> CGPath {
         clef == .treble ? treble : bass
+    }
+
+    static func path(for accidental: Accidental) -> CGPath {
+        switch accidental {
+        case .sharp: sharp
+        case .flat: flat
+        case .natural: natural
+        }
     }
 
     private static func outline(of character: String) -> CGPath {
