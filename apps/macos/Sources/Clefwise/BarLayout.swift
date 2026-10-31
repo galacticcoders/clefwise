@@ -7,18 +7,14 @@ struct BarTextMetrics {
     var hintWidth: CGFloat?
     /// The answer pill's text (at 0.8 spaces); nil without a label.
     var labelSize: CGSize?
-    /// "8va", "15ma", "8vb" and "15mb" (at 0.85 spaces), by octave shift.
-    var octaveTextWidths: [Int: CGFloat] = [1: 1.5, -1: 1.55, 2: 2.1, -2: 2.15]
-
-    func octaveTextWidth(_ shift: Int) -> CGFloat { octaveTextWidths[shift] ?? 2.15 }
 }
 
-/// Where everything in one bar goes: staves, clefs, columns of notes by time, heads, stems,
-/// accidentals, dots, rests, ties, octave marks, the highlight and the answer pill. Pure geometry
-/// (`BarStaffView` draws it), so it can be tested without rendering.
+/// Where everything in one bar goes: staves, clefs, key and time signatures, columns of notes by
+/// time, heads, stems, flags and beams, accidentals, dots, rests, ties, octave marks, the highlight
+/// and the answer pill. Pure geometry (`BarStaffView` draws it), so it can be tested without rendering.
 ///
-/// Horizontally the bar runs from after the widest clef and key signature to the right edge (less
-/// the hint column). Every distinct offset on the drawn staves gets one column, so notes struck
+/// Horizontally the bar runs from after the widest clef and key signature (and the time signature,
+/// where the bar prints one) to the right edge (less the hint column). Every distinct offset on the drawn staves gets one column, so notes struck
 /// together line up across a grand staff. Each column gets room growing with the square root of
 /// the time until the next one, and never less than its ink needs: wherever ink on a staff would
 /// meet the next column's at the same height (`closestDistance`), so a head may tuck under a flag
@@ -28,8 +24,10 @@ struct BarTextMetrics {
 /// for the upper staff's low ledger notes and the lower staff's high ones. Only a bar whose own ink
 /// reaches further (a second voice's stems, an octave mark over high notes) gets more room.
 ///
-/// Beams, later: group chords, put their stem tips on one slanted line in place of
-/// `PlannedChord.stemTip`, and draw beams instead of flags (`Chord.flagAnchor`).
+/// Beams join the chords of a group (a level-1 `begin`…`end` run on one staff and voice): one stem
+/// direction for the group, the stem tips on one beam line (`fitBeam`), flags only on notes left
+/// unbeamed. Spacing and the vertical room are planned with the beams fitted at estimated widths;
+/// once the columns are placed, every beam is fitted again where its stems really are.
 struct BarLayout {
     struct Staff {
         let display: BarDisplay.Staff
@@ -79,11 +77,61 @@ struct BarLayout {
         let stemUp: Bool
         /// nil for whole notes.
         let stem: CGRect?
-        /// The stem's tip at its right edge, where flags start; nil without flags.
-        let flagAnchor: CGPoint?
+        /// Where the flags' origin goes (the stem's left edge at its nominal end); nil without flags.
+        let flagOrigin: CGPoint?
+        /// Index in `beams` of the group it's beamed in; nil for a note with flags or none.
+        let beam: Int?
         /// Low to high.
         let heads: [Head]
         let ledgers: [Ledger]
+
+        /// Flags, or none: a beamed chord has its beams instead.
+        var flags: Int { beam == nil ? value.flags : 0 }
+    }
+
+    /// The beams of one group: its primary beam over every stem, and the shorter beams and hooks
+    /// of the sixteenths and shorter, stacked towards the notes.
+    struct Beam {
+        let staff: Int
+        let voice: Int
+        let stemUp: Bool
+        /// Indices in `chords`, left to right.
+        let chords: [Int]
+        /// Every note it joins, for drawing it muted once they're all answered.
+        let symbols: [Int]
+        let segments: [BeamSegment]
+    }
+
+    /// One beam (or hook) of a group: a parallelogram with vertical ends, `thickness` tall.
+    struct BeamSegment {
+        /// 0 for the primary beam (eighths), 1 for sixteenths…
+        let level: Int
+        let isHook: Bool
+        /// Its upper edge's ends.
+        let topLeft: CGPoint
+        let topRight: CGPoint
+        let thickness: CGFloat
+
+        /// The upper edge's height at `x`.
+        func top(at x: CGFloat) -> CGFloat {
+            guard topRight.x > topLeft.x else { return topLeft.y }
+            return topLeft.y + (topRight.y - topLeft.y) * (x - topLeft.x) / (topRight.x - topLeft.x)
+        }
+
+        var path: Path {
+            var path = Path()
+            path.move(to: topLeft)
+            path.addLine(to: topRight)
+            path.addLine(to: CGPoint(x: topRight.x, y: topRight.y + thickness))
+            path.addLine(to: CGPoint(x: topLeft.x, y: topLeft.y + thickness))
+            path.closeSubpath()
+            return path
+        }
+
+        var frame: CGRect {
+            CGRect(x: topLeft.x, y: min(topLeft.y, topRight.y), width: topRight.x - topLeft.x,
+                   height: abs(topRight.y - topLeft.y) + thickness)
+        }
     }
 
     struct Rest {
@@ -107,12 +155,12 @@ struct BarLayout {
         let up: Bool
     }
 
+    /// A smaller clef (Bravura's change clef) before the first note it applies to.
     struct ClefChange {
         let staff: Int
         let clef: Clef
         let column: Int
         let left: CGFloat
-        static let scale: CGFloat = 0.7
     }
 
     struct OctaveMark {
@@ -124,8 +172,8 @@ struct BarLayout {
         let hookX: CGFloat
         /// Through the middle of the digits.
         let lineY: CGFloat
-        let fontSize: CGFloat
-        var halfDigit: CGFloat { fontSize * 0.37 }
+        /// Half the digits' height.
+        let halfDigit: CGFloat
     }
 
     struct Hints {
@@ -148,6 +196,7 @@ struct BarLayout {
     private(set) var staves: [Staff] = []
     private(set) var columns: [Column] = []
     private(set) var chords: [Chord] = []
+    private(set) var beams: [Beam] = []
     private(set) var rests: [Rest] = []
     private(set) var ties: [Tie] = []
     private(set) var clefChanges: [ClefChange] = []
@@ -155,7 +204,11 @@ struct BarLayout {
     /// Left and right ends of the staff lines.
     private(set) var staffLeft: CGFloat = 0
     private(set) var staffRight: CGFloat = 0
-    /// After the widest clef and key signature: where the bar's music starts.
+    /// The time signature the bar starts with, drawn on every staff after the key signatures; nil
+    /// when the bar prints none.
+    private(set) var timeSignature: TimeSignature?
+    private(set) var timeSignatureLeft: CGFloat = 0
+    /// After the widest clef and key signature, and the time signature: where the bar's music starts.
     private(set) var barStart: CGFloat = 0
     /// Where the music ends: before the hint column, or the closing bar line.
     private(set) var notesEnd: CGFloat = 0
@@ -178,12 +231,12 @@ struct BarLayout {
         static let accidentalGap: CGFloat = 0.25
         static let ledgerGap: CGFloat = 0.15
         static let accidentalColumnGap: CGFloat = 0.15
-        static let ledgerOverhang: CGFloat = 0.41
+        static let ledgerOverhang = SMuFL.legerLineExtension
         static let dotGap: CGFloat = 0.3
         static let dotSpacing: CGFloat = 0.5
-        static let thinBarLine: CGFloat = 0.13
-        static let thickBarLine: CGFloat = 0.45
-        static let barLineSeparation: CGFloat = 0.35
+        static let thinBarLine = SMuFL.thinBarlineThickness
+        static let thickBarLine = SMuFL.thickBarlineThickness
+        static let barLineSeparation = SMuFL.thinThickBarlineSeparation
         /// Brace and the gap before the opening line, on a grand staff.
         static let braceRoom: CGFloat = 1.4
         static let margin: CGFloat = 0.5
@@ -191,6 +244,23 @@ struct BarLayout {
         /// Content needs this much more than its bare minimum before the staff shrinks for it.
         static let comfort: CGFloat = 1.05
         static let hintColumnLimit: CGFloat = 3
+        /// Room an octave mark takes beyond the notes and stems under it, in staff positions.
+        static let octaveMarkRoom: CGFloat = 2.8
+
+        // Beams
+        static let beamThickness = SMuFL.beamThickness
+        /// From one beam's outer edge to the next one's, towards the notes.
+        static let beamPitch = SMuFL.beamThickness + SMuFL.beamSpacing
+        /// A hook (a partial beam) is about a note head wide.
+        static let hookLength: CGFloat = 1.18
+        /// The steepest a beam rises over its group, in spaces: by a quarter of a space a step
+        /// between its first and last notes, at most a space, and less over a narrow group.
+        static let beamRisePerStep: CGFloat = 0.25
+        static let maxBeamRise: CGFloat = 1
+        /// The shortest stem in a beamed group, from its head's centre to the beam's outer edge.
+        static let shortestBeamedStem: CGFloat = 3.25
+        /// How far a beam may be nudged towards the notes from there to avoid a white wedge.
+        static let beamNudge: CGFloat = 0.25
     }
 
     // MARK: - Planning (in spaces, relative to each column's x)
@@ -214,30 +284,56 @@ struct BarLayout {
         let stemUp: Bool
         let reachesMiddle: Bool
         var heads: [PlannedHead]
+        /// Index in the planned beams of the group it's beamed in.
+        var beam: Int?
         /// Where the stem's tip may go (staff positions): inside the staff's strip of canvas.
         var tipLimits: ClosedRange<CGFloat> = -.infinity...(.infinity)
+        /// A beamed chord's stem tip: the primary beam's outer edge at its stem (a staff position).
+        var beamTip: CGFloat?
         var shift: CGFloat = 0
         var dotX: CGFloat = 0
 
         var halfWidth: CGFloat { NoteShapes.headInkWidth(value.kind) / 2 }
         var lowest: Int { heads.first!.position }
         var highest: Int { heads.last!.position }
+        /// The head nearest the stem's tip.
+        var nearest: Int { stemUp ? highest : lowest }
         var stemDX: CGFloat { (stemUp ? 1 : -1) * NoteShapes.stemOffset }
+        var flagCount: Int { beam == nil && value.hasStem ? value.flags : 0 }
+        /// The flags' ink in spaces, y down from their origin; nil without flags.
+        var flagBox: CGRect? {
+            NoteShapes.flagBounds(flagCount, up: stemUp)
+        }
+        /// How far (staff positions) the flags reach past the stem's nominal tip, outwards.
+        var flagReach: CGFloat {
+            guard let box = flagBox else { return 0 }
+            return 2 * max(0, stemUp ? -box.minY : box.maxY)
+        }
 
-        /// Stem tip as a staff position (fractional): 3.5 spaces past the last head (more for three
-        /// or four flags), to the middle line at least on a staff with one voice, and shortened
-        /// (not below `NoteShapes.shortestStem`) where it would leave the staff's strip of canvas.
+        /// Stem tip as a staff position (fractional): the beam's outer edge for a beamed chord;
+        /// otherwise 3.5 spaces past the last head, to the middle line at least on a staff with one
+        /// voice, and shortened (not below `NoteShapes.shortestStem`) where it or its flags would
+        /// leave the staff's strip of canvas.
         var stemTip: CGFloat {
+            if let beamTip { return beamTip }
             let length = NoteShapes.stemLength(flags: value.flags) * 2
-            let shortest = NoteShapes.shortestStem(flags: value.flags) * 2
+            let shortest = NoteShapes.shortestStem(flags: flagCount) * 2
             if stemUp {
                 var tip = CGFloat(highest) + length
                 if reachesMiddle { tip = max(tip, 4) }
-                return max(min(tip, tipLimits.upperBound), CGFloat(highest) + shortest)
+                return max(min(tip, tipLimits.upperBound - flagReach), CGFloat(highest) + shortest)
             }
             var tip = CGFloat(lowest) - length
             if reachesMiddle { tip = min(tip, 4) }
-            return min(max(tip, tipLimits.lowerBound), CGFloat(lowest) - shortest)
+            return min(max(tip, tipLimits.lowerBound + flagReach), CGFloat(lowest) - shortest)
+        }
+
+        /// Where the stem's ink ends: past the flags' origin as Bravura's flag anchors say, or in the
+        /// middle of the primary beam, where the beam covers its end.
+        var stemEnd: CGFloat {
+            // Half the beam's thickness, in staff positions (two to a space).
+            if beamTip != nil { return stemTip + (stemUp ? -1 : 1) * Metrics.beamThickness / 2 * 2 }
+            return stemTip + (flagCount > 0 ? 2 * SMuFL.flagStemAnchor(flagCount, up: stemUp) : 0)
         }
 
         func ledgerPositions() -> [(position: Int, left: CGFloat, right: CGFloat)] {
@@ -261,9 +357,10 @@ struct BarLayout {
         var headsLeft: CGFloat { heads.map { shift + $0.dx }.min()! - halfWidth }
         var headsRight: CGFloat { heads.map { shift + $0.dx }.max()! + halfWidth }
 
+        /// The flags start at the stem's left edge.
         var flagRight: CGFloat? {
-            guard value.flags > 0 else { return nil }
-            return shift + stemDX + NoteShapes.stemWidth / 2 + NoteShapes.flags(value.flags).cgPath.boundingBoxOfPath.maxX
+            guard let box = flagBox else { return nil }
+            return shift + stemDX - NoteShapes.stemWidth / 2 + box.maxX
         }
 
         var left: CGFloat {
@@ -304,14 +401,13 @@ struct BarLayout {
             if value.hasStem {
                 let stemX = shift + stemDX
                 let from = CGFloat(stemUp ? lowest : highest)
+                let tip = stemUp ? max(stemTip, stemEnd) : min(stemTip, stemEnd)
                 result.append(Slab(staff: staff, x: (stemX - NoteShapes.stemWidth / 2)...(stemX + NoteShapes.stemWidth / 2),
-                                   y: min(from, stemTip)...max(from, stemTip)))
-                if value.flags > 0 {
-                    let box = NoteShapes.flags(value.flags).cgPath.boundingBoxOfPath
-                    let left = stemX + NoteShapes.stemWidth / 2
-                    let reach = 2 * box.maxY
+                                   y: min(from, tip)...max(from, tip)))
+                if let box = flagBox {
+                    let left = stemX - NoteShapes.stemWidth / 2
                     result.append(Slab(staff: staff, x: (left + box.minX)...(left + box.maxX),
-                                       y: stemUp ? (stemTip - reach)...stemTip : stemTip...(stemTip + reach)))
+                                       y: (stemTip - 2 * box.maxY)...(stemTip - 2 * box.minY)))
                 }
             }
             return result
@@ -336,6 +432,11 @@ struct BarLayout {
         let dots: Int
         /// The line a whole rest hangs from, a half rest sits on, or the others are centred on.
         var position: Int
+        var voice = 1
+        /// The score put it there (`<display-step>`): a beam over it keeps clear of it rather than moving it.
+        var isPlacedByScore = false
+        /// Where it goes before any beam over it moves it.
+        var unbeamedPosition = 0
 
         var bounds: CGRect { NoteShapes.rest(kind).cgPath.boundingBoxOfPath }
         var slabs: [Slab] {
@@ -356,6 +457,16 @@ struct BarLayout {
         var right: CGFloat {
             dots > 0 ? dotX + CGFloat(dots - 1) * Metrics.dotSpacing + NoteShapes.dotRadius : bounds.maxX
         }
+    }
+
+    /// A beamed group as planned: indices in the planned chords, left to right, with each one's
+    /// beam parts (level 1 first).
+    private struct PlannedBeam {
+        let staff: Int
+        let voice: Int
+        let stemUp: Bool
+        let chords: [Int]
+        let parts: [[BeamPart]]
     }
 
     // MARK: - Layout
@@ -388,27 +499,38 @@ struct BarLayout {
         let multiVoice = voices.map { $0.count > 1 }
         let nominal = Self.verticalPlan(bar.staves)
 
-        var planned = Self.planChords(symbols: symbols, drawn: drawn.filter { !symbols[$0].isRest },
-                                      staffOf: staffOf, columnOf: columnOf, multiVoice: multiVoice)
+        var (planned, plannedBeams) = Self.planChords(symbols: symbols, drawn: drawn.filter { !symbols[$0].isRest },
+                                                      staffOf: staffOf, columnOf: columnOf, multiVoice: multiVoice)
+        var plannedRests: [PlannedRest] = []
+        // Until the columns are placed, beams are fitted at a guess of the room each column gets.
+        var guessedX = [CGFloat(0)]
+        for column in offsets.indices.dropFirst() {
+            guessedX.append(guessedX[column - 1] + max(NoteShapes.headWidth + Metrics.gap,
+                                                       4.5 * Self.idealRoom(offsets[column] - offsets[column - 1])))
+        }
+        func fitBeams(columnX: (Int) -> CGFloat) {
+            Self.fitBeams(plannedBeams, &planned, rests: &plannedRests, columnX: columnX)
+        }
         func limitStems(_ plan: VerticalPlan) {
             for index in planned.indices {
                 // Room for an octave mark beyond the stems of the notes under it.
                 var limits = plan.limits[planned[index].staff]
                 let shifts = planned[index].heads.map { symbols[$0.symbol].octaveShift }
                 if planned[index].stemUp, shifts.contains(where: { $0 > 0 }) {
-                    limits = limits.lowerBound...max(limits.lowerBound, limits.upperBound - 2.6)
+                    limits = limits.lowerBound...max(limits.lowerBound, limits.upperBound - Metrics.octaveMarkRoom)
                 } else if !planned[index].stemUp, shifts.contains(where: { $0 < 0 }) {
-                    limits = min(limits.upperBound, limits.lowerBound + 2.6)...limits.upperBound
+                    limits = min(limits.upperBound, limits.lowerBound + Metrics.octaveMarkRoom)...limits.upperBound
                 }
                 planned[index].tipLimits = limits
                 Self.placeDots(&planned[index], multiVoice: multiVoice[planned[index].staff])
             }
+            fitBeams { guessedX[$0] }
         }
         limitStems(nominal)
         Self.shiftVoices(&planned)
         Self.placeAccidentals(&planned)
 
-        let plannedRests = drawn.filter { symbols[$0].isRest }.map { index in
+        plannedRests = drawn.filter { symbols[$0].isRest }.map { index in
             let symbol = symbols[index]
             let kind = symbol.isWholeBarRest ? NoteValue.Kind.whole : symbol.value.kind
             let column = symbol.isWholeBarRest ? nil : columnOf(symbol.offset)
@@ -429,8 +551,13 @@ struct BarLayout {
                     }
                 }
             }
+            rest.voice = symbol.voice
+            rest.isPlacedByScore = symbol.restPosition != nil
+            rest.unbeamedPosition = rest.position
             return rest
         }
+        // Again, now that the signs and rests are placed, which the beams keep clear of.
+        fitBeams { guessedX[$0] }
 
         // Room for what this bar draws beyond the staff's usual room, if anything.
         var content = bar.staves.map { _ in CGFloat(0)...CGFloat(8) }
@@ -477,14 +604,12 @@ struct BarLayout {
         for rest in plannedRests { if let column = rest.column { slabs[column] += rest.slabs } }
         for change in changes {
             let contentLeft = staffLefts[change.staff * max(1, offsets.count) + change.column] ?? -NoteShapes.headWidth / 2
-            let width = StaffMetrics.clefWidth(change.clef) * ClefChange.scale
+            let width = StaffMetrics.clefWidth(change.clef, change: true)
             let left = contentLeft - 0.35 - width
             changeLefts.append(left)
             lefts[change.column] = min(lefts[change.column], left)
-            let (bottom, top) = StaffMetrics.clefExtent(change.clef)
-            let anchor: CGFloat = change.clef == .treble ? 1 : 3
-            slabs[change.column].append(Slab(staff: change.staff, x: left...(left + width),
-                                             y: (2 * (anchor + (bottom - anchor) * ClefChange.scale))...(2 * (anchor + (top - anchor) * ClefChange.scale))))
+            let (bottom, top) = StaffMetrics.clefExtent(change.clef, change: true)
+            slabs[change.column].append(Slab(staff: change.staff, x: left...(left + width), y: (2 * bottom)...(2 * top)))
         }
 
         // Ties need room out to the bar line, or in from it (between columns, their slabs keep it).
@@ -533,7 +658,9 @@ struct BarLayout {
         // The staff's size: what the height allows (as `StaffView`), unless the bar needs more width.
         let staffLeftSpaces = Metrics.margin + (isGrandStaff ? Metrics.braceRoom : 0)
         let clefAndKey = bar.staves.map { StaffMetrics.clefWidth($0.clef) + Self.keySignatureWidth($0.keySignature, clef: $0.clef) }
-        let neededSpaces = staffLeftSpaces + 0.5 + (clefAndKey.max() ?? 0)
+        timeSignature = bar.measure.printsTime ? bar.measure.time : nil
+        let timeWidth = timeSignature.map { StaffMetrics.beforeTimeSignature + StaffMetrics.timeSignatureWidth($0) } ?? 0
+        let neededSpaces = staffLeftSpaces + 0.5 + (clefAndKey.max() ?? 0) + timeWidth
             + segments.reduce(0) { $0 + $1.min } * Metrics.comfort + hintArea + barLineWidth + Metrics.margin
 
         var space = min(size.height / vertical.spacesTall, size.width / 22)
@@ -565,6 +692,10 @@ struct BarLayout {
         }
         staves = builtStaves
         barStart = staves.map(\.keySignatureEnd).max()!
+        if let timeSignature {
+            timeSignatureLeft = barStart + StaffMetrics.beforeTimeSignature * space
+            barStart = timeSignatureLeft + StaffMetrics.timeSignatureWidth(timeSignature) * space
+        }
         let barLineLeft = staffRight - barLineWidth * space
         if let hintColumn {
             let right = barLineLeft
@@ -585,8 +716,12 @@ struct BarLayout {
         }
         columns = built
 
+        // The beams where their stems really are.
+        fitBeams { built[$0].x / space }
+
         // Everything in points.
         for chord in planned { chords.append(place(chord)) }
+        placeBeams(plannedBeams, planned: planned)
         for rest in plannedRests { rests.append(place(rest)) }
         for (index, change) in changes.enumerated() {
             clefChanges.append(ClefChange(staff: change.staff, clef: change.clef, column: change.column,
@@ -594,7 +729,7 @@ struct BarLayout {
         }
         collectInk()
         placeTies(symbols: symbols, drawn: drawn, multiVoice: multiVoice)
-        placeOctaveMarks(symbols: symbols, text: text)
+        placeOctaveMarks(symbols: symbols)
         placeHighlight(bar.current)
         placeLabel(bar.current, size: text.labelSize)
     }
@@ -602,7 +737,7 @@ struct BarLayout {
     // MARK: Chords
 
     private static func planChords(symbols: [BarSymbol], drawn: [Int], staffOf: (Int) -> Int, columnOf: (Double) -> Int,
-                                   multiVoice: [Bool]) -> [PlannedChord] {
+                                   multiVoice: [Bool]) -> (chords: [PlannedChord], beams: [PlannedBeam]) {
         struct Key: Hashable { let staff, voice, chord, column: Int }
         var order: [Key] = []
         var members: [Key: [Int]] = [:]
@@ -612,11 +747,62 @@ struct BarLayout {
             if members[key] == nil { order.append(key) }
             members[key, default: []].append(index)
         }
-        return order.map { key in
-            let notes = members[key]!.sorted { (symbols[$0].position!, $0) < (symbols[$1].position!, $1) }
+        for key in order {
+            members[key]!.sort { (symbols[$0].position!, $0) < (symbols[$1].position!, $1) }
+        }
+
+        // Beamed groups: runs of chords on one staff and voice from a level-1 `begin` to its `end`.
+        func parts(_ key: Key) -> [BeamPart] {
+            members[key]!.lazy.map { symbols[$0].beams }.first { !$0.isEmpty } ?? []
+        }
+        var groups: [[Key]] = []
+        struct Lane: Hashable { let staff, voice: Int }
+        let lanes = Dictionary(grouping: order) { Lane(staff: $0.staff, voice: $0.voice) }
+        for lane in lanes.keys.sorted(by: { ($0.staff, $0.voice) < ($1.staff, $1.voice) }) {
+            var open: [Key] = []
+            func close() {
+                if open.count > 1 { groups.append(open) }
+                open = []
+            }
+            for key in lanes[lane]!.sorted(by: { $0.column < $1.column }) {
+                let value = symbols[members[key]![0]].value
+                guard value.flags > 0, let first = parts(key).first else {
+                    close()
+                    continue
+                }
+                switch first {
+                case .begin:
+                    close()
+                    open = [key]
+                case .continue:
+                    open.append(key)
+                case .end:
+                    open.append(key)
+                    close()
+                case .forwardHook, .backwardHook:
+                    close()
+                }
+            }
+            close()
+        }
+
+        // One stem direction for each group: the score's, when its notes agree; else by voice on a
+        // staff with two; else away from the group's note furthest from the middle line.
+        var groupUp: [Key: Bool] = [:]
+        for group in groups {
+            let notes = group.flatMap { members[$0]! }
+            let declared = Set(notes.compactMap { symbols[$0].stemUp })
+            let up = declared.count == 1 ? declared.first!
+                : stemDirection(positions: notes.map { symbols[$0].position! }, voice: group[0].voice,
+                                multiVoice: multiVoice[group[0].staff])
+            for key in group { groupUp[key] = up }
+        }
+
+        var chords = order.map { key in
+            let notes = members[key]!
             let positions = notes.map { symbols[$0].position! }
             let value = symbols[notes[0]].value
-            let stemUp = notes.lazy.compactMap { symbols[$0].stemUp }.first
+            let stemUp = groupUp[key] ?? notes.lazy.compactMap { symbols[$0].stemUp }.first
                 ?? stemDirection(positions: positions, voice: key.voice, multiVoice: multiVoice[key.staff])
             var heads = notes.map { index in
                 PlannedHead(symbol: index, position: symbols[index].position!, accidental: symbols[index].accidental)
@@ -629,6 +815,287 @@ struct BarLayout {
             }
             return PlannedChord(staff: key.staff, voice: key.voice, column: key.column, value: value, stemUp: stemUp,
                                 reachesMiddle: !multiVoice[key.staff], heads: heads)
+        }
+        let indexOf = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
+        let beams = groups.enumerated().map { number, group in
+            let indices = group.map { indexOf[$0]! }
+            for index in indices { chords[index].beam = number }
+            return PlannedBeam(staff: group[0].staff, voice: group[0].voice, stemUp: groupUp[group[0]]!, chords: indices,
+                               parts: group.map(parts))
+        }
+        return (chords, beams)
+    }
+
+    // MARK: Beams
+
+    /// A stem of a beamed group, as the beam is fitted to it: its x (spaces, from any origin), the
+    /// head nearest the beam (a staff position) and how many beams it carries.
+    struct BeamStem {
+        let x: CGFloat
+        let nearest: Int
+        let levels: Int
+    }
+
+    /// Ink under a beam that the beam keeps clear of: where it is (x in spaces), its edge nearest the
+    /// beam and its edge furthest from it (staff positions), and how many beams are stacked over it.
+    struct BeamObstacle {
+        let x: ClosedRange<CGFloat>
+        let reach: CGFloat
+        let inner: CGFloat
+        let levels: Int
+    }
+
+    /// The primary beam's outer edge (the stems' tips) as a straight line: staff positions at the
+    /// first and last stems.
+    struct BeamLine {
+        let firstX: CGFloat
+        let lastX: CGFloat
+        let first: CGFloat
+        let last: CGFloat
+
+        func position(at x: CGFloat) -> CGFloat {
+            guard lastX > firstX else { return first }
+            return first + (last - first) * (x - firstX) / (lastX - firstX)
+        }
+    }
+
+    /// How deep (in spaces) a stack of `levels` beams is, from the outer edge to the inner one.
+    static func beamStackDepth(_ levels: Int) -> CGFloat {
+        Metrics.beamThickness + Metrics.beamPitch * CGFloat(max(levels, 1) - 1)
+    }
+
+    /// The shortest a stem carrying `levels` beams may be, from its head's centre to the outer
+    /// edge: `Metrics.shortestBeamedStem`, longer where three or four beams need room above the head.
+    static func shortestBeamedStem(levels: Int) -> CGFloat {
+        max(Metrics.shortestBeamedStem, beamStackDepth(levels) + 1.75)
+    }
+
+    /// The least a stem carrying `levels` beams is shortened to where the staff's strip runs out of
+    /// room (between a grand staff's staves): as short as a flagged eighth's, the beams still clear
+    /// the head by three quarters of a space.
+    static func squeezedBeamedStem(levels: Int) -> CGFloat {
+        max(NoteShapes.shortestStem(flags: 1), beamStackDepth(levels) + 1.25)
+    }
+
+    /// Where a group's primary beam goes, as engravers set it:
+    /// - its rise follows the first and last notes, a quarter space a step, at most a space over the
+    ///   group and less over a narrow one (a fifth of its width);
+    /// - it's flat when the first and last notes are the same, or when an inner note is further out
+    ///   (towards the beam) than both;
+    /// - the shortest stem is `shortestBeamedStem(levels:)`; on a staff with one voice every stem
+    ///   reaches the middle line; `obstacles` stay a quarter space inside the innermost beam;
+    /// - it stays within `limits` (the staff's strip), shortening the stems if it must, but not below
+    ///   `squeezedBeamedStem(levels:)` (then the bar gets more room, as for any ink that needs it);
+    /// - its ends are nudged (by a quarter space at most towards the notes, otherwise outwards) so
+    ///   that no beam near the staff leaves a thin white wedge against a line: each one sits on a
+    ///   line, straddles it or hangs from it.
+    static func fitBeam(stems: [BeamStem], up: Bool, reachesMiddle: Bool, limits: ClosedRange<CGFloat>,
+                        obstacles: [BeamObstacle] = []) -> BeamLine {
+        guard let first = stems.first, let last = stems.last else { return BeamLine(firstX: 0, lastX: 0, first: 4, last: 4) }
+        // Worked out in "outward" units: staff positions, growing away from the notes towards the beam.
+        let sign: CGFloat = up ? 1 : -1
+        let x0 = first.x
+        let span = max(last.x - x0, 0.001)
+        let nearest = stems.map { sign * CGFloat($0.nearest) }
+
+        let steps = nearest.last! - nearest.first!
+        let innerFurtherOut = nearest.dropFirst().dropLast().contains { $0 > max(nearest.first!, nearest.last!) }
+        var rise: CGFloat = 0
+        if steps != 0, !innerFurtherOut {
+            let most = min(Metrics.maxBeamRise, max(Metrics.beamRisePerStep, span / 5))
+            rise = (steps > 0 ? 2 : -2) * min(abs(steps) * Metrics.beamRisePerStep, most)
+        }
+        let slope = rise / span
+
+        // The line must clear each of these: at x, its outer edge at least u (outward units).
+        var needs: [(x: CGFloat, u: CGFloat, slack: CGFloat)] = []
+        for (index, stem) in stems.enumerated() {
+            needs.append((stem.x, nearest[index] + 2 * shortestBeamedStem(levels: stem.levels), 2 * Metrics.beamNudge))
+            if reachesMiddle { needs.append((stem.x, sign * 4, 0)) }
+        }
+        for obstacle in obstacles {
+            let u = sign * obstacle.reach + 2 * (beamStackDepth(obstacle.levels) + 0.25)
+            needs.append((obstacle.x.lowerBound, u, 0))
+            needs.append((obstacle.x.upperBound, u, 0))
+        }
+        var start = needs.map { $0.u - slope * ($0.x - x0) }.max()!
+
+        // Squeezed against the edge of the staff's strip: shorter stems, down to `squeezedBeamedStem`.
+        let limit = up ? limits.upperBound : -limits.lowerBound
+        let floors = stems.indices.map { nearest[$0] + 2 * squeezedBeamedStem(levels: stems[$0].levels) }
+        let outermost = max(start, start + rise)
+        if outermost > limit {
+            let floor = stems.indices.map { floors[$0] - slope * (stems[$0].x - x0) }.max()!
+            start = max(start - (outermost - limit), floor)
+        }
+        let ideal = (first: start, last: start + rise)
+        func idealLine(_ x: CGFloat) -> CGFloat { ideal.first + slope * (x - x0) }
+
+        // Every beam level reaching the staff (or within a quarter space of it) sits on a line,
+        // straddles it or hangs from it: its lower edge is never half a position above a line.
+        func clean(_ outer: CGFloat, levels: Int) -> Bool {
+            let position = sign * outer
+            for level in 0..<max(levels, 1) {
+                let inset = 2 * Metrics.beamPitch * CGFloat(level)
+                let lower = up ? position - inset - 2 * Metrics.beamThickness : position + inset
+                guard lower >= -1.5 - 1e-6, lower <= 8.5 + 1e-6 else { continue }
+                let remainder = (lower.truncatingRemainder(dividingBy: 2) + 2).truncatingRemainder(dividingBy: 2)
+                if abs(remainder - 0.5) < 0.01 { return false }
+            }
+            return true
+        }
+        func onGrid(_ value: CGFloat) -> CGFloat { (value * 2).rounded(.down) / 2 }
+        // First keeping the slope within a quarter space of the ideal; failing that (three or four
+        // beams can only hang in the staff, so their ends are a space apart or level), any slope
+        // the same way, flat included.
+        func search(strictSlope: Bool) -> (first: CGFloat, last: CGFloat)? {
+            var best: (first: CGFloat, last: CGFloat)?
+            var bestCost = CGFloat.infinity
+            for i in -1...4 {
+                let q0 = onGrid(ideal.first) + 0.5 * CGFloat(i)
+                guard clean(q0, levels: first.levels) else { continue }
+                for j in -2...5 {
+                    let q1 = onGrid(ideal.last) + 0.5 * CGFloat(j)
+                    let qRise = q1 - q0
+                    guard abs(qRise) <= 2 * Metrics.maxBeamRise + 1e-6 else { continue }
+                    if rise == 0 {
+                        guard abs(qRise) < 1e-6 else { continue }
+                    } else if strictSlope {
+                        guard qRise * rise > 0, abs(qRise - rise) <= 0.5 + 1e-6 else { continue }
+                    } else {
+                        guard qRise * rise >= 0 else { continue }
+                    }
+                    // Within the strip, give or take the air it keeps.
+                    guard clean(q1, levels: last.levels), max(q0, q1) <= max(limit, ideal.first, ideal.last) + 0.5 + 1e-6 else { continue }
+                    let qSlope = qRise / span
+                    func line(_ x: CGFloat) -> CGFloat { q0 + qSlope * (x - x0) }
+                    let clears = needs.allSatisfy { line($0.x) >= min($0.u, idealLine($0.x)) - $0.slack - 1e-6 }
+                        && stems.indices.allSatisfy { line(stems[$0].x) >= floors[$0] - 1e-6 }
+                    guard clears else { continue }
+                    // Nudging towards the notes costs a little more than away from them.
+                    func cost(_ moved: CGFloat) -> CGFloat { moved < 0 ? -1.3 * moved : moved }
+                    let total = cost(q0 - ideal.first) + cost(q1 - ideal.last) + 0.5 * abs(qRise - rise)
+                    if total < bestCost - 1e-6 {
+                        bestCost = total
+                        best = (q0, q1)
+                    }
+                }
+            }
+            return best
+        }
+        let fitted = search(strictSlope: true) ?? search(strictSlope: false) ?? ideal
+        return BeamLine(firstX: x0, lastX: last.x, first: sign * fitted.first, last: sign * fitted.last)
+    }
+
+    /// Fits every group's beam to its stems, `columnX` giving each column's x in spaces, and sets
+    /// the tips of its chords' stems on it. The beam clears the group's own signs, then whatever
+    /// else on the staff lies under it: another voice's notes and signs, rests.
+    private static func fitBeams(_ beams: [PlannedBeam], _ chords: inout [PlannedChord], rests: inout [PlannedRest],
+                                 columnX: (Int) -> CGFloat) {
+        for beam in beams {
+            let members = beam.chords
+            let stems = members.enumerated().map { index, chord in
+                BeamStem(x: columnX(chords[chord].column) + chords[chord].shift + chords[chord].stemDX,
+                         nearest: chords[chord].nearest, levels: beam.parts[index].count)
+            }
+            let span = stems.first!.x...stems.last!.x
+            var limits = chords[members[0]].tipLimits
+            for chord in members.dropFirst() {
+                let other = chords[chord].tipLimits
+                let low = max(limits.lowerBound, other.lowerBound), high = min(limits.upperBound, other.upperBound)
+                if low <= high { limits = low...high }
+            }
+            func levels(at x: CGFloat) -> Int {
+                let after = stems.firstIndex { $0.x >= x } ?? stems.count - 1
+                return max(stems[max(0, after - 1)].levels, stems[after].levels)
+            }
+            func obstacle(_ x: ClosedRange<CGFloat>, _ y: ClosedRange<CGFloat>) -> BeamObstacle? {
+                let low = max(x.lowerBound, span.lowerBound), high = min(x.upperBound, span.upperBound)
+                guard low <= high else { return nil }
+                return BeamObstacle(x: low...high, reach: beam.stemUp ? y.upperBound : y.lowerBound,
+                                    inner: beam.stemUp ? y.lowerBound : y.upperBound, levels: levels(at: (low + high) / 2))
+            }
+            func signs(of chord: PlannedChord) -> [BeamObstacle] {
+                chord.heads.compactMap { head in
+                    guard let accidental = head.accidental, head.accidentalColumn != nil else { return nil }
+                    let right = columnX(chord.column) + head.accidentalRight
+                    return obstacle((right - StaffMetrics.accidentalWidth(accidental))...right,
+                                    accidentalSpan(accidental, at: head.position))
+                }
+            }
+            let own = members.flatMap { signs(of: chords[$0]) }
+            var others: [BeamObstacle] = []
+            for (index, chord) in chords.enumerated() where chord.staff == beam.staff && !members.contains(index) {
+                for head in chord.heads {
+                    let x = columnX(chord.column) + chord.shift + head.dx
+                    let reach = chord.halfWidth + (head.position <= -2 || head.position >= 10 ? Metrics.ledgerOverhang : 0)
+                    let y = CGFloat(head.position)
+                    if let found = obstacle((x - reach)...(x + reach), (y - 1)...(y + 1)) { others.append(found) }
+                }
+                others += signs(of: chord)
+            }
+            // A rest of the group's own voice within it is moved out of the beam's way (below);
+            // any other rest the beam clears.
+            let columns = chords[members.first!].column...chords[members.last!].column
+            var inside: [Int] = []
+            for index in rests.indices where rests[index].staff == beam.staff {
+                guard let column = rests[index].column else { continue }
+                if rests[index].voice == beam.voice, columns.contains(column), !rests[index].isPlacedByScore {
+                    rests[index].position = rests[index].unbeamedPosition
+                    inside.append(index)
+                    continue
+                }
+                let x = columnX(column)
+                if let found = obstacle((x + rests[index].left)...(x + rests[index].right), rests[index].span) { others.append(found) }
+            }
+            let reachesMiddle = chords[members[0]].reachesMiddle
+            var line = fitBeam(stems: stems, up: beam.stemUp, reachesMiddle: reachesMiddle, limits: limits, obstacles: own)
+            let sign: CGFloat = beam.stemUp ? 1 : -1
+            var under = others.filter { obstacle in
+                let outer = min(line.position(at: obstacle.x.lowerBound) * sign, line.position(at: obstacle.x.upperBound) * sign)
+                return obstacle.inner * sign < outer
+            }
+            if !under.isEmpty {
+                line = fitBeam(stems: stems, up: beam.stemUp, reachesMiddle: reachesMiddle, limits: limits, obstacles: own + under)
+            }
+
+            // Rests under the beam move towards the notes, a space at a time, until they clear its
+            // innermost beam by a quarter space; one that can't (it would meet a note at its time, or
+            // go more than three spaces) stays, and the beam clears it instead.
+            var refit = false
+            for index in inside {
+                let x = columnX(rests[index].column!)
+                let xs = (x + rests[index].left)...(x + rests[index].right)
+                func clear(_ rest: PlannedRest) -> Bool {
+                    [xs.lowerBound, xs.upperBound].allSatisfy { at in
+                        let innermost = line.position(at: at) * sign - 2 * beamStackDepth(levels(at: at))
+                        return (beam.stemUp ? rest.span.upperBound : -rest.span.lowerBound) <= innermost - 0.5
+                    }
+                }
+                func meetsANote(_ rest: PlannedRest) -> Bool {
+                    chords.contains { chord in
+                        chord.staff == beam.staff && chord.column == rests[index].column && chord.heads.contains {
+                            CGFloat($0.position) + 1.5 > rest.span.lowerBound && CGFloat($0.position) - 1.5 < rest.span.upperBound
+                        }
+                    }
+                }
+                var moved = rests[index]
+                var steps = 0
+                while !clear(moved), steps < 3 {
+                    moved.position -= beam.stemUp ? 2 : -2
+                    steps += 1
+                }
+                if clear(moved), !meetsANote(moved) {
+                    rests[index] = moved
+                } else if let found = obstacle(xs, rests[index].span) {
+                    under.append(found)
+                    refit = true
+                }
+            }
+            if refit {
+                line = fitBeam(stems: stems, up: beam.stemUp, reachesMiddle: reachesMiddle, limits: limits, obstacles: own + under)
+            }
+            for (index, chord) in members.enumerated() { chords[chord].beamTip = line.position(at: stems[index].x) }
         }
     }
 
@@ -749,9 +1216,9 @@ struct BarLayout {
             chord.heads[index].dotPosition = dot
         }
         var x = chord.headsRight + Metrics.dotGap + NoteShapes.dotRadius
-        if chord.stemUp, let flagRight = chord.flagRight {
+        if chord.stemUp, let flagRight = chord.flagRight, let box = chord.flagBox {
             // After the flag when its tail comes down by the dots.
-            let flagBottom = chord.stemTip - 2 * NoteShapes.flags(chord.value.flags).cgPath.boundingBoxOfPath.maxY
+            let flagBottom = chord.stemTip - 2 * box.maxY
             let topDot = CGFloat(chord.heads.compactMap(\.dotPosition).max() ?? chord.highest)
             if flagBottom < topDot + 1.2 { x = max(x, flagRight + 0.25 + NoteShapes.dotRadius) }
         }
@@ -780,20 +1247,94 @@ struct BarLayout {
                         accidentalColumn: head.accidentalColumn, dots: dots)
         }
         var stem: CGRect?
-        var flagAnchor: CGPoint?
+        var flagOrigin: CGPoint?
         if chord.value.hasStem {
+            // From the far head's stem anchor to the flag's anchor, or into the beam.
             let stemX = columnX + (chord.shift + chord.stemDX) * s
-            let from = staff.y(chord.stemUp ? chord.lowest : chord.highest)
-            let tip = staff.y(chord.stemTip)
-            stem = CGRect(x: stemX - NoteShapes.stemWidth * s / 2, y: min(from, tip), width: NoteShapes.stemWidth * s,
-                          height: abs(tip - from))
-            if chord.value.flags > 0 { flagAnchor = CGPoint(x: stemX + NoteShapes.stemWidth * s / 2, y: tip) }
+            let from = staff.y(chord.stemUp ? chord.lowest : chord.highest) + (chord.stemUp ? -1 : 1) * NoteShapes.stemStart * s
+            let end = staff.y(chord.stemEnd)
+            stem = CGRect(x: stemX - NoteShapes.stemWidth * s / 2, y: min(from, end), width: NoteShapes.stemWidth * s,
+                          height: abs(end - from))
+            if chord.flagCount > 0 { flagOrigin = CGPoint(x: stemX - NoteShapes.stemWidth * s / 2, y: staff.y(chord.stemTip)) }
         }
         let ledgers = chord.ledgerPositions().map {
             Ledger(y: staff.y($0.position), left: columnX + $0.left * s, right: columnX + $0.right * s)
         }
         return Chord(staff: chord.staff, voice: chord.voice, column: chord.column, value: chord.value, stemUp: chord.stemUp,
-                     stem: stem, flagAnchor: flagAnchor, heads: heads, ledgers: ledgers)
+                     stem: stem, flagOrigin: flagOrigin, beam: chord.beam, heads: heads, ledgers: ledgers)
+    }
+
+    /// The groups' beams in points, at the tips `fitBeams` gave their stems: the primary beam from
+    /// the first stem to the last, each further level where its notes' beam parts run (begin to end),
+    /// and hooks a note head long, pointing the way their parts say.
+    private mutating func placeBeams(_ planned: [PlannedBeam], planned chordPlans: [PlannedChord]) {
+        let s = space
+        let thickness = Metrics.beamThickness * s
+        for plan in planned {
+            let staff = staves[plan.staff].geometry
+            let stems = plan.chords.map { chords[$0].stem ?? .zero }
+            let xs = stems.map(\.midX)
+            let outer = (first: staff.y(chordPlans[plan.chords.first!].stemTip), last: staff.y(chordPlans[plan.chords.last!].stemTip))
+            func outerY(_ x: CGFloat) -> CGFloat {
+                guard xs.last! > xs.first! else { return outer.first }
+                return outer.first + (outer.last - outer.first) * (x - xs.first!) / (xs.last! - xs.first!)
+            }
+            func segment(_ level: Int, from left: CGFloat, to right: CGFloat, hook: Bool = false) -> BeamSegment {
+                let inset = Metrics.beamPitch * CGFloat(level) * s
+                func top(_ x: CGFloat) -> CGFloat { plan.stemUp ? outerY(x) + inset : outerY(x) - inset - thickness }
+                return BeamSegment(level: level, isHook: hook, topLeft: CGPoint(x: left, y: top(left)),
+                                   topRight: CGPoint(x: right, y: top(right)), thickness: thickness)
+            }
+            func hook(_ level: Int, at index: Int, forward: Bool) -> BeamSegment {
+                var length = Metrics.hookLength * s
+                let neighbour = forward ? index + 1 : index - 1
+                if xs.indices.contains(neighbour) { length = min(length, abs(xs[neighbour] - xs[index]) * 0.6) }
+                return forward ? segment(level, from: stems[index].minX, to: xs[index] + length, hook: true)
+                    : segment(level, from: xs[index] - length, to: stems[index].maxX, hook: true)
+            }
+
+            var segments = [segment(0, from: stems.first!.minX, to: stems.last!.maxX)]
+            let depth = plan.parts.map(\.count).max() ?? 1
+            for level in 1..<max(depth, 1) {
+                var start: Int?
+                var lastWithLevel: Int?
+                func close() {
+                    if let start, let end = lastWithLevel, end > start {
+                        segments.append(segment(level, from: stems[start].minX, to: stems[end].maxX))
+                    }
+                    start = nil
+                }
+                for (index, parts) in plan.parts.enumerated() {
+                    guard level < parts.count else {
+                        close()
+                        continue
+                    }
+                    switch parts[level] {
+                    case .begin:
+                        close()
+                        start = index
+                    case .continue:
+                        if start == nil { start = index }
+                    case .end:
+                        if let open = start, open < index {
+                            lastWithLevel = index
+                            close()
+                        } else {
+                            segments.append(hook(level, at: index, forward: index == 0))
+                            start = nil
+                        }
+                    case .forwardHook:
+                        segments.append(hook(level, at: index, forward: true))
+                    case .backwardHook:
+                        segments.append(hook(level, at: index, forward: false))
+                    }
+                    lastWithLevel = index
+                }
+                close()
+            }
+            beams.append(Beam(staff: plan.staff, voice: plan.voice, stemUp: plan.stemUp, chords: plan.chords,
+                              symbols: plan.chords.flatMap { chords[$0].heads.map(\.symbol) }, segments: segments))
+        }
     }
 
     // MARK: Rests
@@ -948,13 +1489,18 @@ struct BarLayout {
                 max(CGFloat(max(0, lower.upperBound - 8)) / 2 + 1.25, stems))
     }
 
-    /// The staff positions a chord's ink reaches: heads, stem, signs, ties, and room for an octave mark.
+    /// The staff positions a chord's ink reaches: heads, stem, flags or beam, signs, ties, and room
+    /// for an octave mark.
     private static func extent(of chord: PlannedChord, symbols: [BarSymbol], multiVoice: Bool) -> ClosedRange<CGFloat> {
         var low = CGFloat(chord.lowest) - 1
         var high = CGFloat(chord.highest) + 1
         if chord.value.hasStem {
-            low = min(low, chord.stemTip)
-            high = max(high, chord.stemTip)
+            low = min(low, chord.stemTip, chord.stemEnd)
+            high = max(high, chord.stemTip, chord.stemEnd)
+            if let box = chord.flagBox {
+                low = min(low, chord.stemTip - 2 * box.maxY)
+                high = max(high, chord.stemTip - 2 * box.minY)
+            }
         }
         for (index, head) in chord.heads.enumerated() {
             if let accidental = head.accidental {
@@ -970,8 +1516,8 @@ struct BarLayout {
             }
         }
         let shifts = chord.heads.map { symbols[$0.symbol].octaveShift }
-        if shifts.contains(where: { $0 > 0 }) { high += 2.6 }
-        if shifts.contains(where: { $0 < 0 }) { low -= 2.6 }
+        if shifts.contains(where: { $0 > 0 }) { high += Metrics.octaveMarkRoom }
+        if shifts.contains(where: { $0 < 0 }) { low -= Metrics.octaveMarkRoom }
         return low...high
     }
 
@@ -1065,6 +1611,10 @@ struct BarLayout {
             let clefTop = staff.geometry.bottomLineY - top * s
             let start = CGRect(x: staff.clefLeft, y: clefTop, width: staff.keySignatureEnd - staff.clefLeft, height: (top - bottom) * s)
             inkBoxes.append(InkBox(staff: index, rect: start, symbol: nil))
+            if let timeSignature {
+                inkBoxes.append(InkBox(staff: index, rect: Self.timeSignaturePath(timeSignature, left: timeSignatureLeft, staff.geometry)
+                    .cgPath.boundingBoxOfPath, symbol: nil))
+            }
             if let hints {
                 let positions = staff.display.positions
                 let top = staff.geometry.y(positions.upperBound) - 0.4 * s
@@ -1088,14 +1638,18 @@ struct BarLayout {
             }
             let symbol = chord.heads.count == 1 ? chord.heads[0].symbol : nil
             if let stem = chord.stem { inkBoxes.append(InkBox(staff: chord.staff, rect: stem, symbol: symbol)) }
-            if let anchor = chord.flagAnchor {
-                inkBoxes.append(InkBox(staff: chord.staff, rect: Self.flagPath(chord.value.flags, at: anchor, up: chord.stemUp, space: s)
+            if let origin = chord.flagOrigin {
+                inkBoxes.append(InkBox(staff: chord.staff, rect: Self.flagPath(chord.flags, at: origin, up: chord.stemUp, space: s)
                     .cgPath.boundingBoxOfPath, symbol: symbol))
             }
             for ledger in chord.ledgers {
-                inkBoxes.append(InkBox(staff: chord.staff, rect: CGRect(x: ledger.left, y: ledger.y - 0.08 * s,
-                                                                       width: ledger.right - ledger.left, height: 0.16 * s), symbol: nil))
+                let thickness = SMuFL.legerLineThickness * s
+                inkBoxes.append(InkBox(staff: chord.staff, rect: CGRect(x: ledger.left, y: ledger.y - thickness / 2,
+                                                                       width: ledger.right - ledger.left, height: thickness), symbol: nil))
             }
+        }
+        for beam in beams {
+            for segment in beam.segments { inkBoxes.append(InkBox(staff: beam.staff, rect: segment.frame, symbol: nil)) }
         }
         for rest in rests {
             inkBoxes.append(InkBox(staff: rest.staff, rect: rest.frame, symbol: rest.symbol))
@@ -1111,24 +1665,26 @@ struct BarLayout {
         }
     }
 
-    /// Flags at the stem's tip, mirrored for a stem going down.
-    static func flagPath(_ count: Int, at anchor: CGPoint, up: Bool, space: CGFloat) -> Path {
-        NoteShapes.flags(count).applying(CGAffineTransform(scaleX: space, y: up ? space : -space)
-            .concatenating(CGAffineTransform(translationX: anchor.x, y: anchor.y)))
+    /// Bravura's flags for a stem going up or down, their origin at `origin`.
+    static func flagPath(_ count: Int, at origin: CGPoint, up: Bool, space: CGFloat) -> Path {
+        NoteShapes.flags(count, up: up).applying(CGAffineTransform(scaleX: space, y: space)
+            .concatenating(CGAffineTransform(translationX: origin.x, y: origin.y)))
     }
 
     static func clefChangePath(_ change: ClefChange, _ staff: StaffGeometry) -> Path {
-        StaffDrawing.clefPath(change.clef, left: change.left, staff, scale: ClefChange.scale)
+        StaffDrawing.clefPath(change.clef, left: change.left, staff, change: true)
+    }
+
+    static func timeSignaturePath(_ time: TimeSignature, left: CGFloat, _ staff: StaffGeometry) -> Path {
+        StaffDrawing.timeSignaturePath(time, left: left, staff)
     }
 
     // MARK: Octave marks
 
     /// Over (or under) each run of notes in a row on a staff with the same octave shift: the number
     /// at the start, a dashed line to the end and a hook, clear of everything in between.
-    private mutating func placeOctaveMarks(symbols: [BarSymbol], text: BarTextMetrics) {
+    private mutating func placeOctaveMarks(symbols: [BarSymbol]) {
         let s = space
-        let fontSize = 0.85 * s
-        let halfDigit = fontSize * 0.37
         for staffIndex in staves.indices {
             var notes: [(symbol: Int, offset: Double, shift: Int, left: CGFloat, right: CGFloat)] = []
             for chord in chords where chord.staff == staffIndex {
@@ -1174,8 +1730,9 @@ struct BarLayout {
                 let shift = notes[run[0]].shift
                 let above = shift > 0
                 let textLeft = run.map { notes[$0].left }.min()!
-                let textWidth = text.octaveTextWidth(shift) * s
-                let lineStart = textLeft + textWidth + 0.2 * s
+                let markSize = StaffMetrics.octaveMarkSize(shift)
+                let halfDigit = markSize.height / 2 * s
+                let lineStart = textLeft + markSize.width * s + 0.25 * s
                 let hookX = max(run.map { notes[$0].right }.max()! + 0.3 * s, lineStart + 0.8 * s)
                 let span = (textLeft - 0.2 * s)...(hookX + 0.2 * s)
                 let nearby = inkBoxes.filter { $0.staff == staffIndex && $0.rect.maxX >= span.lowerBound && $0.rect.minX <= span.upperBound }
@@ -1189,12 +1746,11 @@ struct BarLayout {
                     lineY = min(bottom + clearance, staff.band.upperBound - halfDigit - 0.15 * s)
                 }
                 let mark = OctaveMark(staff: staffIndex, shift: shift, symbols: run.map { notes[$0].symbol }, textLeft: textLeft,
-                                      lineStart: lineStart, hookX: hookX, lineY: lineY, fontSize: fontSize)
+                                      lineStart: lineStart, hookX: hookX, lineY: lineY, halfDigit: halfDigit)
                 octaveMarks.append(mark)
-                let hook = (above ? 1 : -1) * 0.45 * s
-                let box = CGRect(x: textLeft, y: min(lineY - halfDigit * 1.6, lineY + hook), width: hookX - textLeft,
-                                 height: halfDigit * 2.6 + abs(hook))
-                inkBoxes.append(InkBox(staff: staffIndex, rect: box, symbol: nil))
+                let glyph = StaffDrawing.octaveMarkPath(shift, left: textLeft, middle: lineY, space: s).cgPath.boundingBoxOfPath
+                let line = StaffDrawing.octaveLinePath(from: lineStart, to: hookX, at: lineY, above: above, space: s)
+                inkBoxes.append(InkBox(staff: staffIndex, rect: glyph.union(line.cgPath.boundingBoxOfPath), symbol: nil))
             }
         }
     }
@@ -1260,8 +1816,8 @@ struct BarLayout {
                 if let dot = other.dots.last { right = max(right, dot.x + NoteShapes.dotRadius * s) }
             }
             let y = head.center.y - pill.height / 2
-            if let anchor = chord.flagAnchor {
-                let flag = Self.flagPath(chord.value.flags, at: anchor, up: chord.stemUp, space: s).cgPath.boundingBoxOfPath
+            if let origin = chord.flagOrigin {
+                let flag = Self.flagPath(chord.flags, at: origin, up: chord.stemUp, space: s).cgPath.boundingBoxOfPath
                 if flag.maxY > y, flag.minY < y + pill.height { right = max(right, flag.maxX) }
             }
             for ledger in chord.ledgers where ledger.y > y && ledger.y < y + pill.height { right = max(right, ledger.right - 0.25 * s) }

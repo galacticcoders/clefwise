@@ -7,13 +7,26 @@ enum BarBuilder {
     static func note(_ letter: NoteLetter, _ octave: Int, _ accidental: Accidental = .natural, at offset: Double,
                      _ kind: NoteValue.Kind = .quarter, dots: Int = 0, staff: Int = 1, voice: Int = 1,
                      clef: Clef = .treble, sign: Accidental? = nil, shift: Int = 0, stemUp: Bool? = nil,
-                     chord: Int? = nil, tie: Bool = false, tiedFrom: Bool = false) -> BarSymbol {
+                     chord: Int? = nil, tie: Bool = false, tiedFrom: Bool = false, beams: [BeamPart] = []) -> BarSymbol {
         let value = NoteValue(kind, dots: dots)
-        return BarSymbol(pitch: Pitch(letter, octave + shift, accidental), clef: clef, staff: staff, voice: voice,
-                         offset: offset, duration: value.quarters, value: value, octaveShift: shift, accidental: sign,
-                         stemUp: stemUp, chord: chord ?? ownChord(offset, staff, voice, 1 + Pitch(letter, octave).diatonicIndex),
-                         tiedToNext: tie, tiedFromPrevious: tiedFrom,
-                         restPosition: nil, isWholeBarRest: false)
+        var symbol = BarSymbol(pitch: Pitch(letter, octave + shift, accidental), clef: clef, staff: staff, voice: voice,
+                               offset: offset, duration: value.quarters, value: value, octaveShift: shift, accidental: sign,
+                               stemUp: stemUp, chord: chord ?? ownChord(offset, staff, voice, 1 + Pitch(letter, octave).diatonicIndex),
+                               tiedToNext: tie, tiedFromPrevious: tiedFrom,
+                               restPosition: nil, isWholeBarRest: false)
+        symbol.beams = beams
+        return symbol
+    }
+
+    /// Notes of one value in a row, beamed together on every level their value has.
+    static func beamed(_ pitches: [(NoteLetter, Int)], from start: Double, _ kind: NoteValue.Kind, staff: Int = 1,
+                       voice: Int = 1, clef: Clef = .treble, shift: Int = 0, stemUp: Bool? = nil) -> [BarSymbol] {
+        let step = NoteValue(kind).quarters
+        return pitches.enumerated().map { index, pitch in
+            let part: BeamPart = index == 0 ? .begin : index == pitches.count - 1 ? .end : .continue
+            return note(pitch.0, pitch.1, at: start + Double(index) * step, kind, staff: staff, voice: voice, clef: clef,
+                        shift: shift, stemUp: stemUp, beams: Array(repeating: part, count: NoteValue(kind).flags))
+        }
     }
 
     static func rest(at offset: Double, _ kind: NoteValue.Kind, staff: Int = 1, voice: Int = 1, clef: Clef = .treble,
@@ -33,7 +46,7 @@ enum BarBuilder {
 
     /// One staff (treble) or a grand staff (treble and bass), sized for this bar's notes.
     static func bar(_ symbols: [BarSymbol], grand: Bool = false, fifths: Int = 0, length: Double = 4,
-                    current: Int? = nil, last: Bool = false) -> BarDisplay {
+                    current: Int? = nil, last: Bool = false, time: TimeSignature? = nil) -> BarDisplay {
         let sorted = symbols.sorted { ($0.offset, $0.staff, $0.voice) < ($1.offset, $1.staff, $1.voice) }
         let clefs: [Clef] = grand ? [.treble, .bass] : [.treble]
         let staves = clefs.enumerated().map { index, clef in
@@ -41,9 +54,11 @@ enum BarBuilder {
             return BarDisplay.Staff(number: index + 1, clef: clef, keySignature: KeySignature(fifths: fifths),
                                     positions: min(0, positions.min() ?? 0)...max(8, positions.max() ?? 8))
         }
-        let measure = ScoreMeasure(number: 1, start: 0, length: length,
+        var measure = ScoreMeasure(number: 1, start: 0, length: length,
                                    staves: staves.map { .init(clef: $0.clef, keySignature: $0.keySignature) },
                                    symbols: sorted)
+        measure.time = time
+        measure.printsTime = time != nil
         return BarDisplay(staves: staves, measure: measure, current: current, answered: [], isLastBar: last)
     }
 
@@ -344,6 +359,17 @@ private func headX(_ layout: BarLayout, symbol: Int) -> CGFloat? {
             B.bar(dense, grand: true, current: 3),
             B.bar([B.note(.c, 2, at: 0, .sixtyFourth, staff: 2, voice: 2, clef: .bass), B.note(.c, 4, at: 0, .whole, staff: 2, clef: .bass),
                    B.note(.c, 6, at: 0, .sixtyFourth, shift: -1, stemUp: false)], grand: true, current: 1),
+            // Beams reaching for the edges: steep leaps below and above the staff, 32nds under an 8va line, a grand
+            // staff's beams in the gap, and a time signature.
+            B.bar(B.beamed([(.c, 4), (.c, 6)], from: 0, .eighth) + B.beamed([(.a, 3), (.b, 3), (.c, 4), (.d, 4)], from: 1, .sixteenth)
+                  + B.beamed([(.a, 5), (.b, 5), (.c, 6), (.d, 6), (.e, 6), (.f, 6), (.g, 6), (.a, 6)], from: 2, .thirtySecond, shift: 1)
+                  + [B.note(.f, 6, at: 3, .quarter)],
+                  fifths: -7, current: 2, time: TimeSignature(beats: 12, beatType: 8)),
+            B.bar(B.beamed([(.f, 4), (.c, 4), (.f, 4), (.a, 3)], from: 0, .sixteenth)
+                  + B.beamed([(.d, 3), (.f, 3), (.b, 3), (.e, 4)], from: 0, .sixteenth, staff: 2, clef: .bass)
+                  + B.beamed([(.g, 5), (.g, 5)], from: 1, .eighth)
+                  + B.beamed([(.e, 2), (.b, 3), (.d, 4)], from: 1, .eighth, staff: 2, clef: .bass),
+                  grand: true, current: 4, time: TimeSignature(beats: 2, beatType: 2, symbol: .cut)),
         ]
     }()
 
