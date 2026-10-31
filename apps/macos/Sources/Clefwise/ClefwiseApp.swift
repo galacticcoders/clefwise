@@ -150,6 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidResignActive(_ notification: Notification) {
         UsageLog.shared.record(.appActivity(AppActivity(active: false)))
+        game.appDidResignActive()
     }
 
     /// ⌘Q and closing the game's window (which quits the app) both end here.

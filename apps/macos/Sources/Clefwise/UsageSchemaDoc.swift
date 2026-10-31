@@ -182,13 +182,13 @@ extension UsageExport {
 
         ### `roundPaused`: the round's clock stopped
 
-        The Pause button or Space, during a round. While it's paused the time stands still, the
-        note is hidden and answers don't count.
+        The Pause button or Space during a round, or switching to another app mid-round. While
+        it's paused the time stands still, the note is hidden and answers don't count.
 
         | Field | Meaning |
         |---|---|
         | `round`, `question` | The round, and the question on screen if one was. |
-        | `via` | `button` (Pause) or `key` (Space). |
+        | `via` | `button` (Pause), `key` (Space) or `appSwitch` (Clefwise stopped being the active app; it stays paused until you resume). |
         | `activeMs` | Round time so far, earlier pauses left out. |
 
         ### `roundResumed`: the round carried on

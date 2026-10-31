@@ -284,8 +284,8 @@ enum StartSource: String, Codable, Equatable {
 }
 
 enum PauseSource: String, Codable, Equatable {
-    /// The Pause/Resume button; Space.
-    case button, key
+    /// The Pause/Resume button; Space; switching to another app mid-round (pauses only).
+    case button, key, appSwitch
 }
 
 enum AnswerSource: String, Codable, Equatable {

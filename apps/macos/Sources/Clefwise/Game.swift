@@ -226,6 +226,8 @@ final class Game {
     private(set) var isShowingMiss = false
     /// True while a round is paused: its clock is stopped and answers don't count.
     private(set) var isPaused = false
+    /// What paused the round, while it's paused.
+    private(set) var pausedVia: PauseSource?
     private(set) var flash: Flash?
     /// What's been typed so far towards a note name, in keyboard mode.
     private(set) var typedText = ""
@@ -714,6 +716,7 @@ final class Game {
     func pause(via source: PauseSource = .button, at now: ContinuousClock.Instant = .now) {
         guard phase == .playing, !isPaused else { return }
         isPaused = true
+        pausedVia = source
         pausedAt = now
         recordPause(via: source)
     }
@@ -728,6 +731,7 @@ final class Game {
         questionPaused += pause
         self.pausedAt = nil
         isPaused = false
+        pausedVia = nil
         recordResume(via: source, after: pause)
         if advancesOnResume {
             advancesOnResume = false
@@ -736,8 +740,15 @@ final class Game {
         }
     }
 
+    /// Called by the app when it stops being the active app: a round going pauses itself, and
+    /// waits for Resume or Space when you come back.
+    func appDidResignActive() {
+        pause(via: .appSwitch)
+    }
+
     private func clearPause() {
         isPaused = false
+        pausedVia = nil
         pausedAt = nil
         roundPaused = .zero
         questionPaused = .zero
