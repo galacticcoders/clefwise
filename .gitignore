@@ -2,4 +2,5 @@
 build/
 .swiftpm/
 .DS_Store
-.claude/worktrees/
+# Claude's private notes: a symlink to the sibling repo learn-to-read-music-claude.
+/.claude
