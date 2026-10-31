@@ -7,11 +7,14 @@ struct BarTextMetrics {
     var hintWidth: CGFloat?
     /// The answer pill's text (at 0.8 spaces); nil without a label.
     var labelSize: CGSize?
+    /// The name in each wrong mark's pill (at 0.8 spaces), by symbol. A missing one is estimated.
+    var markSizes: [Int: CGSize] = [:]
 }
 
 /// Where everything in one bar goes: staves, clefs, key and time signatures, columns of notes by
 /// time, heads, stems, flags and beams, accidentals, dots, rests, ties, octave marks, the highlight
-/// and the answer pill. Pure geometry (`BarStaffView` draws it), so it can be tested without rendering.
+/// behind the notes asked, the answer pill and the wrong marks' pills, and how each note is inked.
+/// Pure geometry (`BarStaffView` draws it), so it can be tested without rendering.
 ///
 /// Horizontally the bar runs from after the widest clef and key signature (and the time signature,
 /// where the bar prints one) to the right edge (less the hint column). Every distinct offset on the drawn staves gets one column, so notes struck
@@ -137,6 +140,8 @@ struct BarLayout {
     struct Rest {
         let symbol: Int
         let staff: Int
+        /// nil for a whole-bar rest, centred in the bar.
+        let column: Int?
         let kind: NoteValue.Kind
         /// Where `NoteShapes.rest(kind)`'s origin goes.
         let origin: CGPoint
@@ -184,11 +189,39 @@ struct BarLayout {
         let left: CGFloat
     }
 
-    /// Ink that octave marks and the pill keep clear of, and that tests check stays on the canvas.
+    /// Ink that octave marks and the pills keep clear of, and that tests check stays on the canvas.
     struct InkBox {
+        enum Kind {
+            /// The clef and key signature at the start of a staff, the time signature, the hints.
+            case start
+            case head, sign, dot, stem, flag, ledger, beam, rest, tie, clefChange, octaveMark
+        }
+
         let staff: Int
         let rect: CGRect
         let symbol: Int?
+        var kind: Kind = .start
+        /// The column of the chord or rest it belongs to.
+        var column: Int?
+    }
+
+    /// How a note's head and sign (and a single note's stem and flags) are inked.
+    enum Role: Equatable {
+        case normal
+        /// Answered: drawn faintly.
+        case muted
+        /// Being asked, alone or with others: in the view's `currentColor`.
+        case asked
+        /// Judged, while the result shows: `Theme.correct` or `Theme.wrong`.
+        case right, wrong
+    }
+
+    /// The name of a note marked wrong, in a pill beside it.
+    struct MarkPill {
+        let symbol: Int
+        let rect: CGRect
+        /// The name's size in points: 0.8 spaces, or less where the pills shrank to fit.
+        let fontSize: CGFloat
     }
 
     private(set) var size: CGSize = .zero
@@ -213,10 +246,17 @@ struct BarLayout {
     /// Where the music ends: before the hint column, or the closing bar line.
     private(set) var notesEnd: CGFloat = 0
     private(set) var hints: Hints?
-    /// A soft band behind the note being asked.
-    private(set) var highlight: CGRect?
-    /// The answer pill, by the note being asked.
+    /// Soft bands behind the notes being asked: one per column they're in (notes struck together
+    /// share one), over their staff, or both staves when they're on both.
+    private(set) var highlights: [CGRect] = []
+    /// The answer pill, by the note being asked; nil while marks show.
     private(set) var label: CGRect?
+    /// The names of the notes marked wrong.
+    private(set) var markPills: [MarkPill] = []
+    /// The notes being asked: `current`, those asked with it, and any marked.
+    private(set) var asked: Set<Int> = []
+    private(set) var answered: Set<Int> = []
+    private(set) var marks: [Int: BarDisplay.NoteMark] = [:]
     private(set) var inkBoxes: [InkBox] = []
     private(set) var isGrandStaff = false
     private(set) var isFinal = false
@@ -475,6 +515,9 @@ struct BarLayout {
         self.size = size
         isGrandStaff = bar.staves.count > 1
         isFinal = bar.isLastBar
+        asked = bar.together.union(bar.marks.keys).union(bar.current.map { [$0] } ?? [])
+        answered = bar.answered
+        marks = bar.marks
         guard !bar.staves.isEmpty, size.width > 0, size.height > 0 else { return }
 
         let symbols = bar.measure.symbols
@@ -730,8 +773,12 @@ struct BarLayout {
         collectInk()
         placeTies(symbols: symbols, drawn: drawn, multiVoice: multiVoice)
         placeOctaveMarks(symbols: symbols)
-        placeHighlight(bar.current)
-        placeLabel(bar.current, size: text.labelSize)
+        placeHighlights()
+        if marks.isEmpty {
+            placeLabel(bar.current, size: text.labelSize)
+        } else {
+            placeMarkPills(sizes: text.markSizes)
+        }
     }
 
     // MARK: Chords
@@ -1368,7 +1415,8 @@ struct BarLayout {
         if rest.kind == .whole || rest.kind == .half, !(0...8).contains(rest.position) {
             ledger = Ledger(y: origin.y, left: frame.minX - 0.35 * s, right: frame.maxX + 0.35 * s)
         }
-        return Rest(symbol: rest.symbol, staff: rest.staff, kind: rest.kind, origin: origin, frame: frame, dots: dots, ledger: ledger)
+        return Rest(symbol: rest.symbol, staff: rest.staff, column: rest.column, kind: rest.kind, origin: origin, frame: frame,
+                    dots: dots, ledger: ledger)
     }
 
     // MARK: Spacing
@@ -1598,7 +1646,7 @@ struct BarLayout {
         }
         for tie in ties {
             inkBoxes.append(InkBox(staff: tie.staff, rect: NoteShapes.tie(from: tie.start, to: tie.end, up: tie.up, space: s)
-                .cgPath.boundingBoxOfPath, symbol: tie.symbol))
+                .cgPath.boundingBoxOfPath, symbol: tie.symbol, kind: .tie))
         }
     }
 
@@ -1628,40 +1676,45 @@ struct BarLayout {
                 let box = NoteShapes.head(head.kind).cgPath.boundingBoxOfPath
                 let rect = CGRect(x: head.center.x + box.minX * s, y: head.center.y + box.minY * s, width: box.width * s,
                                   height: box.height * s)
-                inkBoxes.append(InkBox(staff: chord.staff, rect: rect, symbol: head.symbol))
-                if let frame = head.accidentalFrame { inkBoxes.append(InkBox(staff: chord.staff, rect: frame, symbol: head.symbol)) }
+                inkBoxes.append(InkBox(staff: chord.staff, rect: rect, symbol: head.symbol, kind: .head, column: chord.column))
+                if let frame = head.accidentalFrame {
+                    inkBoxes.append(InkBox(staff: chord.staff, rect: frame, symbol: head.symbol, kind: .sign, column: chord.column))
+                }
                 for dot in head.dots {
                     let r = NoteShapes.dotRadius * s
                     inkBoxes.append(InkBox(staff: chord.staff, rect: CGRect(x: dot.x - r, y: dot.y - r, width: 2 * r, height: 2 * r),
-                                           symbol: head.symbol))
+                                           symbol: head.symbol, kind: .dot, column: chord.column))
                 }
             }
             let symbol = chord.heads.count == 1 ? chord.heads[0].symbol : nil
-            if let stem = chord.stem { inkBoxes.append(InkBox(staff: chord.staff, rect: stem, symbol: symbol)) }
+            if let stem = chord.stem {
+                inkBoxes.append(InkBox(staff: chord.staff, rect: stem, symbol: symbol, kind: .stem, column: chord.column))
+            }
             if let origin = chord.flagOrigin {
                 inkBoxes.append(InkBox(staff: chord.staff, rect: Self.flagPath(chord.flags, at: origin, up: chord.stemUp, space: s)
-                    .cgPath.boundingBoxOfPath, symbol: symbol))
+                    .cgPath.boundingBoxOfPath, symbol: symbol, kind: .flag, column: chord.column))
             }
             for ledger in chord.ledgers {
                 let thickness = SMuFL.legerLineThickness * s
                 inkBoxes.append(InkBox(staff: chord.staff, rect: CGRect(x: ledger.left, y: ledger.y - thickness / 2,
-                                                                       width: ledger.right - ledger.left, height: thickness), symbol: nil))
+                                                                       width: ledger.right - ledger.left, height: thickness), symbol: nil,
+                                       kind: .ledger, column: chord.column))
             }
         }
         for beam in beams {
-            for segment in beam.segments { inkBoxes.append(InkBox(staff: beam.staff, rect: segment.frame, symbol: nil)) }
+            for segment in beam.segments { inkBoxes.append(InkBox(staff: beam.staff, rect: segment.frame, symbol: nil, kind: .beam)) }
         }
         for rest in rests {
-            inkBoxes.append(InkBox(staff: rest.staff, rect: rest.frame, symbol: rest.symbol))
+            inkBoxes.append(InkBox(staff: rest.staff, rect: rest.frame, symbol: rest.symbol, kind: .rest, column: rest.column))
             for dot in rest.dots {
                 let r = NoteShapes.dotRadius * s
                 inkBoxes.append(InkBox(staff: rest.staff, rect: CGRect(x: dot.x - r, y: dot.y - r, width: 2 * r, height: 2 * r),
-                                       symbol: rest.symbol))
+                                       symbol: rest.symbol, kind: .dot, column: rest.column))
             }
         }
         for change in clefChanges {
             inkBoxes.append(InkBox(staff: change.staff, rect: Self.clefChangePath(change, staves[change.staff].geometry)
-                .cgPath.boundingBoxOfPath, symbol: nil))
+                .cgPath.boundingBoxOfPath, symbol: nil, kind: .clefChange, column: change.column))
         }
     }
 
@@ -1750,7 +1803,8 @@ struct BarLayout {
                 octaveMarks.append(mark)
                 let glyph = StaffDrawing.octaveMarkPath(shift, left: textLeft, middle: lineY, space: s).cgPath.boundingBoxOfPath
                 let line = StaffDrawing.octaveLinePath(from: lineStart, to: hookX, at: lineY, above: above, space: s)
-                inkBoxes.append(InkBox(staff: staffIndex, rect: glyph.union(line.cgPath.boundingBoxOfPath), symbol: nil))
+                inkBoxes.append(InkBox(staff: staffIndex, rect: glyph.union(line.cgPath.boundingBoxOfPath), symbol: nil,
+                                       kind: .octaveMark))
             }
         }
     }
@@ -1765,18 +1819,62 @@ struct BarLayout {
         return nil
     }
 
-    /// A soft rounded band behind the note being asked (and its sign), the height of its staff.
-    private mutating func placeHighlight(_ current: Int?) {
-        guard let found = currentHead(current) else { return }
-        let (chord, head) = found
+    /// A soft rounded band behind the notes being asked (and their signs) in each column they're
+    /// in: from the top of the highest staff they're on to the bottom of the lowest, and further for
+    /// notes beyond it. It leaves a little room either side, less where other notes come close.
+    private mutating func placeHighlights() {
         let s = space
-        let staff = staves[chord.staff].geometry
-        let halfWidth = NoteShapes.headInkWidth(head.kind) / 2 * s
-        let left = min(head.center.x - halfWidth, head.accidentalFrame?.minX ?? .infinity) - 0.4 * s
-        let right = head.center.x + halfWidth + 0.4 * s
-        let top = min(staff.y(8) - 0.8 * s, head.center.y - 1.1 * s)
-        let bottom = max(staff.y(0) + 0.8 * s, head.center.y + 1.1 * s)
-        highlight = CGRect(x: left, y: top, width: right - left, height: bottom - top)
+        var byColumn: [Int: [(chord: Chord, head: Head)]] = [:]
+        for chord in chords {
+            for head in chord.heads where asked.contains(head.symbol) { byColumn[chord.column, default: []].append((chord, head)) }
+        }
+        for column in byColumn.keys.sorted() {
+            var left = CGFloat.infinity, right = -CGFloat.infinity, top = CGFloat.infinity, bottom = -CGFloat.infinity
+            for (chord, head) in byColumn[column]! {
+                let staff = staves[chord.staff].geometry
+                let halfWidth = NoteShapes.headInkWidth(head.kind) / 2 * s
+                left = min(left, head.center.x - halfWidth, head.accidentalFrame?.minX ?? .infinity)
+                right = max(right, head.center.x + halfWidth)
+                top = min(top, staff.y(8) - 0.8 * s, head.center.y - 1.1 * s)
+                bottom = max(bottom, staff.y(0) + 0.8 * s, head.center.y + 1.1 * s)
+            }
+            // Other notes' ink at these heights (heads, signs, dots, stems, flags, rests, clefs), either side.
+            let others = inkBoxes.filter { box in
+                ![.beam, .ledger, .tie, .octaveMark].contains(box.kind) && !(box.symbol.map(asked.contains) ?? false)
+                    && box.rect.maxY > top && box.rect.minY < bottom
+            }
+            let before = others.filter { $0.rect.maxX <= left + 0.01 * s }.map(\.rect.maxX).max() ?? -.infinity
+            let after = others.filter { $0.rect.minX >= right - 0.01 * s }.map(\.rect.minX).min() ?? .infinity
+            left -= min(0.4 * s, max(0.15 * s, (left - before) / 2))
+            right += min(0.4 * s, max(0.15 * s, (after - right) / 2))
+            top = max(top, 0)
+            bottom = min(bottom, size.height)
+            highlights.append(CGRect(x: left, y: top, width: right - left, height: bottom - top))
+        }
+    }
+
+    // MARK: Roles
+
+    func role(of symbol: Int) -> Role {
+        switch marks[symbol] {
+        case .right: return .right
+        case .wrong: return .wrong
+        case nil: return asked.contains(symbol) ? .asked : answered.contains(symbol) ? .muted : .normal
+        }
+    }
+
+    /// A chord's stem and flags: a single note's role; on a chord, muted once every note in it is, and
+    /// otherwise ink (a note asked or marked colours only its head and sign). A beamed note's stem
+    /// goes with its beams.
+    func role(of chord: Chord) -> Role {
+        if let beam = chord.beam { return role(of: beams[beam]) }
+        if chord.heads.count == 1 { return role(of: chord.heads[0].symbol) }
+        return chord.heads.allSatisfy { role(of: $0.symbol) == .muted } ? .muted : .normal
+    }
+
+    /// Ink, muted once every note it joins is.
+    func role(of beam: Beam) -> Role {
+        beam.symbols.allSatisfy { role(of: $0) == .muted } ? .muted : .normal
     }
 
     /// The pill goes outside the staff by the note (above on the upper staff, below on the lower),
@@ -1846,5 +1944,234 @@ struct BarLayout {
             }
         }
         label = [outside(above: outward), beside, outside(above: !outward)].map(onCanvas).min { covered($0) < covered($1) }
+    }
+
+    // MARK: Marks
+
+    /// The sizes the mark pills try, largest first: their names shrink a little rather than collide.
+    static let markScales: [CGFloat] = [1, 0.88, 0.76, 0.66]
+
+    /// A name's size in spaces at 0.8 spaces, roughly, for when the view hasn't measured it.
+    static func estimatedTextSize(_ name: String) -> CGSize {
+        CGSize(width: 0.4 * CGFloat(name.count) + 0.1, height: name.contains(where: { "♯♭".contains($0) }) ? 1.1 : 0.95)
+    }
+
+    /// Where a staff's mark pills go, best first.
+    enum MarkPlace: CaseIterable {
+        /// Right of the notes' column, each level with its note as far as the others allow.
+        case right
+        /// Above the upper staff, below the lower one (or a single staff), in the notes' order.
+        case outside
+        /// The other side of the staff.
+        case inside
+        /// Left of the notes' column, as on the right.
+        case left
+    }
+
+    /// Each wrong note's name in a pill. A staff's pills go where they're first clear of all ink but
+    /// ties, in the order of `MarkPlace`: stacked right of their column, each as level with its note as
+    /// the others allow; above the upper staff (below the lower one) in the notes' order; the staff's
+    /// other side; left of the column. Above or below only counts when no other note asked on the staff
+    /// comes between the pills and their notes. They take the largest of `markScales` at which every
+    /// staff's pills find a place; failing that, the same allowing those unclear places; failing that,
+    /// the smallest size wherever covers least. The pills never overlap each other and stay on the
+    /// canvas, in their staff's strip.
+    private mutating func placeMarkPills(sizes: [Int: CGSize]) {
+        let s = space
+        var wrong = staves.map { _ in [(chord: Chord, head: Head, text: CGSize)]() }
+        for chord in chords {
+            for head in chord.heads {
+                guard case .wrong(let name) = marks[head.symbol] else { continue }
+                wrong[chord.staff].append((chord, head, sizes[head.symbol] ?? Self.estimatedTextSize(name)))
+            }
+        }
+        for index in wrong.indices { wrong[index].sort { $0.head.center.y < $1.head.center.y } }
+        let marked = wrong.indices.filter { !wrong[$0].isEmpty }
+        guard !marked.isEmpty else { return }
+        let canvas = CGRect(origin: .zero, size: size).insetBy(dx: 0.1 * s, dy: 0.1 * s)
+        let gap = 0.2 * s
+
+        func strip(_ staff: Int) -> ClosedRange<CGFloat> {
+            let band = staves[staff].band
+            return max(band.lowerBound + 0.1 * s, canvas.minY)...min(band.upperBound - 0.1 * s, canvas.maxY)
+        }
+        func clampX(_ x: CGFloat, _ width: CGFloat) -> CGFloat { min(max(x, canvas.minX), canvas.maxX - width) }
+
+        /// Ways to lay out the staff's pills, best first, each in its notes' order (top to bottom);
+        /// none where they don't fit.
+        func pills(_ place: MarkPlace, staff: Int, scale: CGFloat, within limits: ClosedRange<CGFloat>? = nil) -> [[CGRect]] {
+            let notes = wrong[staff]
+            let sizes = notes.map { CGSize(width: ($0.text.width + 0.9) * scale * s, height: ($0.text.height + 0.4) * scale * s) }
+            let limits = limits ?? strip(staff)
+            switch place {
+            case .right, .left:
+                guard let centres = Self.stack(targets: notes.map(\.head.center.y), heights: sizes.map(\.height), gap: gap,
+                                               within: limits) else { return [] }
+                let right = place == .right
+                // From the notes: less for smaller pills.
+                let air = 0.45 * scale * scale * s
+                func beside(_ centres: [CGFloat]) -> [CGRect] {
+                    notes.indices.map { index in
+                        let note = notes[index]
+                        let top = centres[index] - sizes[index].height / 2
+                        let span = (top - 0.1 * s)...(top + sizes[index].height + 0.1 * s)
+                        // Clear of everything in the note's column at the pill's height: heads, dots, stems, flags,
+                        // signs, rests, and a little less of ledger lines.
+                        let column = inkBoxes.filter { $0.staff == staff && $0.column == note.chord.column && $0.kind != .tie
+                            && $0.rect.maxY > span.lowerBound && $0.rect.minY < span.upperBound }
+                        let halfWidth = NoteShapes.headInkWidth(note.head.kind) / 2 * s
+                        func room(_ box: InkBox) -> CGFloat { box.kind == .ledger ? min(air, 0.25 * s) : air }
+                        let x = right
+                            ? max(column.map { $0.rect.maxX + room($0) }.max() ?? -.infinity, note.head.center.x + halfWidth + air)
+                            : min(column.map { $0.rect.minX - room($0) }.min() ?? .infinity, note.head.center.x - halfWidth - air)
+                                - sizes[index].width
+                        return CGRect(origin: CGPoint(x: x, y: top), size: sizes[index])
+                    }
+                }
+                // Level with the notes; failing that, a little higher or lower to make way for a neighbour's note.
+                var candidates: [[CGRect]] = []
+                for shift: CGFloat in [0, -0.25, 0.25, -0.5, 0.5] {
+                    let moved = centres.map { $0 + shift * s }
+                    guard moved[0] - sizes[0].height / 2 >= limits.lowerBound,
+                          moved[moved.count - 1] + sizes[sizes.count - 1].height / 2 <= limits.upperBound else { continue }
+                    let ragged = beside(moved)
+                    // In line with each other, if that keeps them clear.
+                    let aligned = right
+                        ? ragged.map { CGRect(x: ragged.map(\.minX).max()!, y: $0.minY, width: $0.width, height: $0.height) }
+                        : ragged.map { CGRect(x: ragged.map(\.maxX).min()! - $0.width, y: $0.minY, width: $0.width, height: $0.height) }
+                    candidates += aligned == ragged ? [ragged] : [aligned, ragged]
+                }
+                return candidates
+            case .outside, .inside:
+                let above = (staff == 0) == (place == .outside)
+                let centre = notes.map(\.head.center.x).reduce(0, +) / CGFloat(notes.count)
+                let widest = sizes.map(\.width).max()!
+                let left = clampX(centre - widest / 2, widest)
+                let nearby = inkBoxes.filter { $0.staff == staff && $0.rect.maxX > left - 0.15 * s && $0.rect.minX < left + widest + 0.15 * s }
+                    .map(\.rect)
+                let geometry = staves[staff].geometry
+                var result: [CGRect] = []
+                if above {
+                    // The lowest note's pill nearest the staff, the highest's on top.
+                    var bottom = min(nearby.map(\.minY).min() ?? .infinity, geometry.y(8)) - 0.35 * s
+                    for size in sizes.reversed() {
+                        let rect = CGRect(x: clampX(centre - size.width / 2, size.width), y: bottom - size.height, width: size.width,
+                                          height: size.height)
+                        result.insert(rect, at: 0)
+                        bottom = rect.minY - gap
+                    }
+                } else {
+                    var top = max(nearby.map(\.maxY).max() ?? -.infinity, geometry.y(0)) + 0.35 * s
+                    for size in sizes {
+                        let rect = CGRect(x: clampX(centre - size.width / 2, size.width), y: top, width: size.width, height: size.height)
+                        result.append(rect)
+                        top = rect.maxY + gap
+                    }
+                }
+                guard result.first!.minY >= limits.lowerBound, result.last!.maxY <= limits.upperBound else { return [] }
+                return [result]
+            }
+        }
+        func isClear(_ rects: [CGRect], _ place: MarkPlace) -> Bool {
+            rects.allSatisfy { rect in
+                canvas.contains(rect) && (place != .right || rect.maxX <= notesEnd)
+                    && !inkBoxes.contains { $0.kind != .tie && $0.rect.intersects(rect.insetBy(dx: -0.12 * s, dy: -0.06 * s)) }
+            }
+        }
+        func commit(_ chosen: [Int: [CGRect]], scale: CGFloat) {
+            for staff in marked {
+                for (note, rect) in zip(wrong[staff], chosen[staff]!) {
+                    markPills.append(MarkPill(symbol: note.head.symbol, rect: rect, fontSize: 0.8 * scale * s))
+                }
+            }
+        }
+
+        /// Pills above or below the staff are clear about which notes they name only when no other note
+        /// asked on the staff comes between them and those notes.
+        func isUnambiguous(_ place: MarkPlace, staff: Int) -> Bool {
+            guard place == .outside || place == .inside else { return true }
+            let above = (staff == 0) == (place == .outside)
+            let ys = wrong[staff].map(\.head.center.y)
+            let others = chords.filter { $0.staff == staff }.flatMap(\.heads)
+                .filter { head in asked.contains(head.symbol) && !wrong[staff].contains { $0.head.symbol == head.symbol } }
+            return others.allSatisfy { above ? $0.center.y > ys.max()! : $0.center.y < ys.min()! }
+        }
+
+        // The largest size at which each staff's pills find a clear place that says which notes they
+        // name, in the order of `MarkPlace`; failing that, any clear place. Every staff's take one size.
+        let levels = Self.markScales.map { (scale: $0, places: MarkPlace.allCases, strict: true) }
+            + Self.markScales.map { (scale: $0, places: MarkPlace.allCases, strict: false) }
+        for level in levels {
+            var chosen: [Int: [CGRect]] = [:]
+            for staff in marked {
+                for place in level.places where !level.strict || isUnambiguous(place, staff: staff) {
+                    if let rects = pills(place, staff: staff, scale: level.scale).first(where: { isClear($0, place) }) {
+                        chosen[staff] = rects
+                        break
+                    }
+                }
+            }
+            if chosen.count == marked.count {
+                commit(chosen, scale: level.scale)
+                return
+            }
+        }
+        // Squeezed: the smallest pills wherever they cover the least ink, and never a note being named.
+        func covered(_ rects: [CGRect]) -> CGFloat {
+            rects.reduce(0) { total, rect in
+                inkBoxes.reduce(total) { total, box in
+                    let overlap = box.rect.intersection(rect.insetBy(dx: -0.12 * s, dy: -0.06 * s))
+                    guard box.kind != .tie, !overlap.isNull else { return total }
+                    let note = [.head, .sign, .dot, .rest].contains(box.kind)
+                    let weight: CGFloat = note && box.symbol.map(asked.contains) == true ? 1e9 : note ? 50 : 1
+                    return total + max(overlap.width * overlap.height, 0.01 * s * s) * weight
+                }
+            }
+        }
+        let scale = Self.markScales.last!
+        var chosen: [Int: [CGRect]] = [:]
+        for staff in marked {
+            // Somewhere unclear about which note a pill names counts as covering a little ink.
+            let options = MarkPlace.allCases.flatMap { place in
+                pills(place, staff: staff, scale: scale).map { rects in
+                    (rects: rects.map { CGRect(x: clampX($0.minX, $0.width), y: $0.minY, width: $0.width, height: $0.height) },
+                     penalty: isUnambiguous(place, staff: staff) ? 0 : 4 * s * s)
+                }
+            }
+            chosen[staff] = options.min { covered($0.rects) + $0.penalty < covered($1.rects) + $1.penalty }?.rects
+                ?? pills(.right, staff: staff, scale: scale, within: canvas.minY...canvas.maxY).first
+                ?? wrong[staff].map { _ in .zero }
+        }
+        commit(chosen, scale: scale)
+    }
+
+    /// Centres for boxes `heights` tall, given top to bottom, each as near its target as the others
+    /// allow (least squares) with `gap` between neighbours and all within `limits`; nil when they
+    /// don't fit. Boxes that would overlap are merged into a block centred on their targets.
+    static func stack(targets: [CGFloat], heights: [CGFloat], gap: CGFloat, within limits: ClosedRange<CGFloat>) -> [CGFloat]? {
+        let count = targets.count
+        guard count > 0 else { return [] }
+        // Where each box starts below the first one's top.
+        var starts = [CGFloat](repeating: 0, count: count + 1)
+        for index in 0..<count { starts[index + 1] = starts[index] + heights[index] + gap }
+        func height(_ block: ClosedRange<Int>) -> CGFloat { starts[block.upperBound + 1] - starts[block.lowerBound] - gap }
+        guard height(0...(count - 1)) <= limits.upperBound - limits.lowerBound + 1e-6 else { return nil }
+        func centre(_ index: Int, in block: ClosedRange<Int>) -> CGFloat { starts[index] - starts[block.lowerBound] + heights[index] / 2 }
+        func top(_ block: ClosedRange<Int>) -> CGFloat {
+            let mean = block.reduce(0) { $0 + targets[$1] - centre($1, in: block) } / CGFloat(block.count)
+            return min(max(mean, limits.lowerBound), limits.upperBound - height(block))
+        }
+        var blocks: [(range: ClosedRange<Int>, top: CGFloat)] = []
+        for index in 0..<count {
+            blocks.append((index...index, top(index...index)))
+            while blocks.count > 1 {
+                let previous = blocks[blocks.count - 2], last = blocks[blocks.count - 1]
+                guard previous.top + height(previous.range) + gap > last.top + 1e-6 else { break }
+                let merged = previous.range.lowerBound...last.range.upperBound
+                blocks.removeLast(2)
+                blocks.append((merged, top(merged)))
+            }
+        }
+        return blocks.flatMap { block in block.range.map { block.top + centre($0, in: block.range) } }
     }
 }

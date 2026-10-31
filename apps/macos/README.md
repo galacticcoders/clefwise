@@ -64,8 +64,16 @@ Keyboard: Space/Return start · Space pause/resume during a round · Esc stop ·
 Open a MusicXML file (`.musicxml`, `.xml` or compressed `.mxl`; in MuseScore use File → Export)
 with **File → Open Piece…** (⌘O), the **Practise a piece…** button, or by dropping it on the
 window. Then pick the part, the **hand** (right = upper staff, left = lower, or both), **in order**
-or **shuffled**, the **bar to start at**, and whether to ask **one note per chord** (top note in
-the right hand, bottom note in the left). Clef, key signature and range come from the piece, so
+or **shuffled**, the **bar to start at**, and how to ask **chords**:
+- **Note by note**, bottom to top; this is the default.
+- **Top / bottom note**: only the top note in the right hand and the bottom note in the left.
+- **All together**: every note struck at that moment is one answer, so with both hands that's
+  both staves.
+  - **Answering:** type the names back to back in any order, one name per note ("sisol", or
+    "dodo" for two Cs). On the note buttons, pick the names; they appear as chips, and you click a
+    chip to remove it. On the piano, click the keys; clicking a key again unselects it.
+  - **Judging:** each note is marked right (green) or wrong (red, with its name) on its own. A
+    fully right chord plays all its notes at once. Clef, key signature and range come from the piece, so
 those toolbar settings are greyed out; Mode, note names and the answer method still apply.
 
 - **The whole bar is on the staff**, as on the printed page:

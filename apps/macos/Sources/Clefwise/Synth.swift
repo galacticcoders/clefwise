@@ -6,10 +6,29 @@ final class Synth {
     private let player = AVAudioPlayerNode()
     private let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
     private var buffers: [Int: AVAudioPCMBuffer] = [:]
+    private var chordBuffers: [[Int]: AVAudioPCMBuffer] = [:]
     private var isConnected = false
 
     func play(_ pitch: Pitch) {
         schedule(buffer(for: pitch.midiNumber) { tone(frequency: pitch.frequency) })
+    }
+
+    /// Several notes struck together. One note plays as `play(_:)` does.
+    func play(_ pitches: [Pitch]) {
+        guard pitches.count > 1 else {
+            if let pitch = pitches.first { play(pitch) }
+            return
+        }
+        let key = pitches.map(\.midiNumber).sorted()
+        if chordBuffers[key] == nil {
+            let frequencies = pitches.map(\.frequency)
+            // Softer per note as the chord grows, so it sounds about as loud as one note.
+            let gain = 1 / Double(frequencies.count).squareRoot()
+            chordBuffers[key] = render(duration: 1.3) { t in
+                frequencies.reduce(0) { $0 + Self.toneSample(frequency: $1, at: t) } * gain
+            }
+        }
+        schedule(chordBuffers[key]!)
     }
 
     func playMiss() {
@@ -37,13 +56,16 @@ final class Synth {
     }
 
     private func tone(frequency: Double) -> AVAudioPCMBuffer {
-        // Harmonic number and relative loudness; higher harmonics die away faster, like a struck string.
+        render(duration: 1.3) { t in Self.toneSample(frequency: frequency, at: t) }
+    }
+
+    /// One note's sound at time `t`. Harmonic number and relative loudness; higher harmonics die
+    /// away faster, like a struck string.
+    private static func toneSample(frequency: Double, at t: Double) -> Double {
         let harmonics: [(Double, Double)] = [(1, 1.0), (2, 0.45), (3, 0.22), (4, 0.1), (5, 0.05)]
-        return render(duration: 1.3) { t in
-            harmonics.reduce(0) { sum, harmonic in
-                sum + harmonic.1 * sin(2 * .pi * frequency * harmonic.0 * t) * exp(-t * (2.2 + harmonic.0 * 1.3))
-            } * 0.28
-        }
+        return harmonics.reduce(0) { sum, harmonic in
+            sum + harmonic.1 * sin(2 * .pi * frequency * harmonic.0 * t) * exp(-t * (2.2 + harmonic.0 * 1.3))
+        } * 0.28
     }
 
     private func thud() -> AVAudioPCMBuffer {

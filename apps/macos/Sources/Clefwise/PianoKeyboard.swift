@@ -5,22 +5,64 @@ struct PianoPad: View {
     let game: Game
 
     var body: some View {
-        PianoKeyboard(
-            keys: game.pianoKeys,
-            naming: game.settings.naming,
-            showsNames: game.settings.showKeyNames,
-            answersBlackKeys: game.accidentalsPossible,
-            highlight: highlight(for:),
-            onPress: { game.answer($0) }
-        )
-        .disabled(!game.isTakingAnswers)
-        // Fade as one layer, otherwise white key edges show through the dimmed black keys.
-        .compositingGroup()
-        .opacity(game.isTakingAnswers ? 1 : 0.5)
+        VStack(spacing: Self.captionSpacing) {
+            // Only when naming notes together, so other rounds look as they always did. The keys
+            // give up the caption's room, so the window keeps its layout.
+            if game.namesTogether {
+                Text(caption)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(height: Self.captionHeight)
+            }
+            PianoKeyboard(
+                keys: game.pianoKeys,
+                naming: game.settings.naming,
+                showsNames: game.settings.showKeyNames,
+                answersBlackKeys: game.accidentalsPossible,
+                highlight: highlight(for:),
+                onPress: { game.answer($0) },
+                height: game.namesTogether ? PianoKeyboard.height - Self.captionHeight - Self.captionSpacing : PianoKeyboard.height
+            )
+            .disabled(!game.isTakingAnswers)
+            // Fade as one layer, otherwise white key edges show through the dimmed black keys.
+            .compositingGroup()
+            .opacity(game.isTakingAnswers ? 1 : 0.5)
+        }
+    }
+
+    private static let captionHeight: CGFloat = 18
+    private static let captionSpacing: CGFloat = 8
+
+    /// What to do while notes are named together, and once judged how it went.
+    private var caption: String {
+        guard let group = game.group else {
+            return game.phase == .playing ? "Click the note's key" : "Notes struck together are played as one answer: click every key"
+        }
+        let count = group.questions.count
+        if let result = group.result {
+            return result.isAllRight ? "All \(count) right" : "\(result.rightCount) of \(count) right"
+        }
+        let keys = game.groupEntriesNeeded ?? count
+        return keys == 2 ? "Click both keys, in either order (a chosen key again takes it back)"
+            : "Click all \(keys) keys, in any order (a chosen key again takes it back)"
     }
 
     /// Keys are matched by sound: the piano calls a black key C♯ even when the question spells it D♭.
+    /// While notes are named together, the keys chosen so far are picked out; once judged they're
+    /// coloured right or wrong, and the keys of the notes missed are revealed.
     private func highlight(for pitch: Pitch) -> KeyHighlight {
+        if let shown = shownGroup {
+            if let entry = shown.entries.firstIndex(where: { $0.pitch?.midiNumber == pitch.midiNumber }) {
+                guard let result = shown.result else { return .armed }
+                return result.entryIsRight[entry] ? .correct : .wrong
+            }
+            if let result = shown.result, game.isShowingMiss,
+               zip(shown.questions, result.isRight).contains(where: { !$1 && $0.pitch.midiNumber == pitch.midiNumber }) {
+                return .reveal
+            }
+            return .none
+        }
         if let flash = game.flash, flash.pitch?.midiNumber == pitch.midiNumber {
             return flash.isCorrect ? .correct : .wrong
         }
@@ -28,6 +70,13 @@ struct PianoPad: View {
             return .reveal
         }
         return .none
+    }
+
+    /// The notes named together whose keys are coloured: the group being answered once a key is
+    /// chosen or it's judged, otherwise for a moment the one just named all right (its flash).
+    private var shownGroup: Game.NoteGroup? {
+        if let group = game.group, !group.entries.isEmpty || group.result != nil { return group }
+        return game.groupFlash
     }
 }
 
@@ -43,6 +92,9 @@ struct PianoKeyboard: View {
     /// Called with natural pitches for white keys and sharps (C♯, never D♭) for black keys.
     let highlight: (Pitch) -> KeyHighlight
     let onPress: (Pitch) -> Void
+    var height = PianoKeyboard.height
+
+    static let height: CGFloat = 150
 
     var body: some View {
         GeometryReader { geometry in
@@ -81,7 +133,7 @@ struct PianoKeyboard: View {
             .frame(width: keyWidth * CGFloat(keys.count), height: height)
             .frame(maxWidth: .infinity)
         }
-        .frame(height: 150)
+        .frame(height: height)
     }
 
     /// Black keys: the white-key boundary (counted from the left) each sits on, and its pitch as a sharp.

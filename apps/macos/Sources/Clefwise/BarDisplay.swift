@@ -27,4 +27,19 @@ struct BarDisplay: Equatable {
     let answered: Set<Int>
     /// The part's last bar, which ends with a final bar line.
     let isLastBar: Bool
+    /// Other notes in `measure.symbols` asked together with `current`: the rest of a chord, or
+    /// everything struck at that moment on both staves, when a piece's chords are named together.
+    /// Highlighted like `current`. Empty when one note is asked at a time.
+    var together: Set<Int> = []
+    /// While the result of notes asked together is shown (after they're judged, during the pause
+    /// that follows a mistake), each one's mark, by index in `measure.symbols`. Marks override the
+    /// highlight colour.
+    var marks: [Int: NoteMark] = [:]
+
+    enum NoteMark: Equatable {
+        /// Named right: drawn in `Theme.correct`.
+        case right
+        /// Named wrong (or not at all): drawn in `Theme.wrong`, with its right name in a pill.
+        case wrong(name: String)
+    }
 }
