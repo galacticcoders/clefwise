@@ -9,8 +9,7 @@ let package = Package(
         .testTarget(
             name: "ClefwiseTests",
             dependencies: ["Clefwise"],
-            path: "Tests/ClefwiseTests",
-            resources: [.copy("Fixtures")]
+            path: "Tests/ClefwiseTests"
         )
     ]
 )
