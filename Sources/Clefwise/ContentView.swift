@@ -361,22 +361,39 @@ private struct StaffCard: View {
     let game: Game
 
     var body: some View {
+        let bar = game.barDisplay
         ZStack {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(Theme.paper)
                 .shadow(color: .black.opacity(0.08), radius: 18, y: 6)
 
-            StaffView(
-                clef: game.displayedClef,
-                keySignature: game.currentKeySignature,
-                note: game.question,
-                positionsToFit: game.staffPositionsToFit,
-                noteColor: game.isShowingMiss ? Theme.wrong : Theme.ink,
-                noteLabel: game.isShowingMiss ? game.question.map(answerLabel) : nil,
-                // A piece's notes can go past the range setting, so hints cover as far as they go.
-                hintPositions: game.settings.showHints ? game.staffPositionsToFit ?? game.settings.range.positions : nil,
-                naming: game.settings.naming
-            )
+            Group {
+                if let bar {
+                    VStack(spacing: BarStripView.spacing) {
+                        BarStaffView(
+                            bar: bar,
+                            currentColor: game.isShowingMiss ? Theme.wrong : Theme.accent,
+                            currentLabel: game.isShowingMiss ? game.question.map(answerLabel) : nil,
+                            showsHints: game.settings.showHints,
+                            naming: game.settings.naming
+                        )
+                        // Room is kept for it between rounds too, so the staff doesn't jump when one starts.
+                        BarStripView(strip: game.barStrip)
+                    }
+                } else {
+                    StaffView(
+                        clef: game.displayedClef,
+                        keySignature: game.currentKeySignature,
+                        note: game.question,
+                        positionsToFit: game.staffPositionsToFit,
+                        noteColor: game.isShowingMiss ? Theme.wrong : Theme.ink,
+                        noteLabel: game.isShowingMiss ? game.question.map(answerLabel) : nil,
+                        // A piece's notes can go past the range setting, so hints cover as far as they go.
+                        hintPositions: game.settings.showHints ? game.staffPositionsToFit ?? game.settings.range.positions : nil,
+                        naming: game.settings.naming
+                    )
+                }
+            }
             .padding(.horizontal, 24)
             .padding(.vertical, 12)
             .opacity(game.phase == .playing ? 1 : 0.35)
@@ -408,6 +425,85 @@ private struct StaffCard: View {
             return "\(label) · wrong octave"
         }
         return label
+    }
+}
+
+/// Where a piece round in the bar view is: one segment per bar from the round's first bar to its
+/// last, done bars filled, the current one raised, the rest light. Shuffled rounds jump about, so
+/// they mark only the current bar. With too many bars for gaps between them (a long piece), the
+/// segments run together into one track, and the current bar keeps a marker wide enough to see.
+private struct BarStripView: View {
+    /// Between the staff and the strip.
+    static let spacing: CGFloat = 8
+    /// Nothing is drawn without one, but the room stays.
+    let strip: Game.BarStrip?
+
+    private static let height: CGFloat = 12
+    private static let trackHeight: CGFloat = 6
+    private static let gap: CGFloat = 3
+    /// Short pieces don't stretch across the card: the strip reads as bars, not a progress bar.
+    private static let widestSegment: CGFloat = 36
+    /// Narrower than this, segments run together.
+    private static let narrowestSegment: CGFloat = 5
+
+    var body: some View {
+        Canvas { context, size in
+            guard let strip else { return }
+            draw(strip, in: &context, size: size)
+        }
+        .frame(height: Self.height)
+        .padding(.horizontal, 24)
+        .help(strip.map(description) ?? "")
+        .accessibilityElement()
+        .accessibilityLabel(strip.map(description) ?? "")
+        .accessibilityHidden(strip == nil)
+    }
+
+    /// "Bar 9 of 32", and the round's bars when it doesn't go through the whole piece.
+    private func description(_ strip: Game.BarStrip) -> String {
+        var text = "Bar \(strip.current) of \(strip.pieceBars)"
+        if strip.bars != 1...strip.pieceBars {
+            text += strip.bars.count == 1 ? " · this round: bar \(strip.bars.lowerBound)"
+                : " · this round: bars \(strip.bars.lowerBound)–\(strip.bars.upperBound)"
+        }
+        return text
+    }
+
+    private func draw(_ strip: Game.BarStrip, in context: inout GraphicsContext, size: CGSize) {
+        let count = CGFloat(strip.bars.count)
+        let current = CGFloat(strip.current - strip.bars.lowerBound)
+        let trackY = (size.height - Self.trackHeight) / 2
+        let done = Theme.accent, upcoming = Theme.accent.opacity(0.16)
+        let fitted = (size.width - Self.gap * (count - 1)) / count
+
+        func segment(_ x: CGFloat, _ width: CGFloat, raised: Bool = false) -> Path {
+            let rect = raised ? CGRect(x: x, y: 0, width: width, height: size.height)
+                : CGRect(x: x, y: trackY, width: width, height: Self.trackHeight)
+            return Path(roundedRect: rect, cornerRadius: min(2, width / 2))
+        }
+
+        if fitted >= Self.narrowestSegment {
+            let width = min(fitted, Self.widestSegment)
+            let left = (size.width - (width * count + Self.gap * (count - 1))) / 2
+            for offset in 0..<strip.bars.count {
+                let x = left + CGFloat(offset) * (width + Self.gap)
+                let isCurrent = CGFloat(offset) == current
+                let isDone = strip.showsDone && CGFloat(offset) < current
+                context.fill(segment(x, width, raised: isCurrent), with: .color(isCurrent || isDone ? done : upcoming))
+            }
+        } else {
+            // One track: done up to the current bar, light after it, and a marker for the bar itself.
+            let width = size.width / count
+            context.fill(segment(0, size.width), with: .color(upcoming))
+            if strip.showsDone, current > 0 {
+                context.fill(segment(0, width * current), with: .color(done))
+            }
+            let marker = max(width, 4)
+            let x = min(max(width * (current + 0.5) - marker / 2, 0), size.width - marker)
+            // A paper-coloured edge sets the marker off from the done bars beside it.
+            context.fill(segment(x - 1.5, marker + 3, raised: true), with: .color(Theme.paper))
+            context.fill(segment(x, marker, raised: true), with: .color(done))
+        }
     }
 }
 

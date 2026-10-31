@@ -139,6 +139,8 @@ enum UsageExport {
         Column("octaveShift") { $0.question?.octaveShift },
         Column("pieceBar") { $0.question?.pieceNote?.measure },
         Column("pieceStaff") { $0.question?.pieceNote?.staff },
+        Column("barView") { $0.question?.barView },
+        Column("barStaves") { $0.question?.barStaves?.map(String.init).joined(separator: " ") },
         Column("naming") { $0.question?.naming ?? setting("naming", in: $0.round?.settings) },
         Column("input") { $0.question?.input ?? setting("answerInput", in: $0.round?.settings) },
         Column("source") { $0.answer.source.rawValue },

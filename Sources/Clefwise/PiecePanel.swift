@@ -116,8 +116,31 @@ struct PiecePanel: View {
                 }
                 .gridCellColumns(3)
             }
+            // Only for parts the bar view can draw (any the importer reads).
+            if !part.measures.isEmpty {
+                GridRow {
+                    Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                    HStack(spacing: 8) {
+                        Toggle("Show the whole bar", isOn: $game.settings.piece.showsWholeBar)
+                            .toggleStyle(.checkbox)
+                        Text(wholeBarHint(for: part))
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .help("Read each note in its bar, as on the sheet: signs earlier in the bar carry on. "
+                          + "Off, notes come one at a time, with any sign they need printed on them.")
+                    .gridCellColumns(3)
+                }
+            }
         }
         .multilineTextAlignment(.leading)
+    }
+
+    /// What the bar view shows: both staves when both hands are read.
+    private func wholeBarHint(for part: ScorePart) -> String {
+        part.staffCount == 2 && game.settings.piece.hand == .both
+            ? "Both staves, the note to name highlighted"
+            : "Every note in the bar, the one to name highlighted"
     }
 
     private func settingLabel(_ text: String) -> some View {
