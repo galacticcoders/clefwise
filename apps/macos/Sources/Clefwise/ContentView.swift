@@ -953,7 +953,7 @@ private struct GroupEntryStrip: View {
             return game.phase == .playing ? "Name the note" : "Notes struck together are named as one answer"
         }
         let count = shown.questions.count
-        guard let result = shown.result else { return "Name all \(count) notes, in any order" }
+        guard let result = shown.result else { return count == 2 ? "Name both notes, in either order" : "Name all \(count) notes, in any order" }
         return result.isAllRight ? "All \(count) right" : "\(result.rightCount) of \(count) right"
     }
 

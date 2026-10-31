@@ -147,7 +147,9 @@ struct TypingPad: View {
         guard let group = game.group else {
             return game.phase == .playing ? "Type the note's name" : "Notes struck together are typed one after another"
         }
-        return "Type all \(group.questions.count) names one after another, in any order"
+        let count = group.questions.count
+        return count == 2 ? "Type both names one after the other, in either order"
+            : "Type all \(count) names one after another, in any order"
     }
 
     private var textColor: Color {

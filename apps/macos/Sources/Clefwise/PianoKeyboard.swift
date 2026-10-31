@@ -44,7 +44,8 @@ struct PianoPad: View {
             return result.isAllRight ? "All \(count) right" : "\(result.rightCount) of \(count) right"
         }
         let keys = game.groupEntriesNeeded ?? count
-        return "Click all \(keys) keys, in any order (a chosen key again takes it back)"
+        return keys == 2 ? "Click both keys, in either order (a chosen key again takes it back)"
+            : "Click all \(keys) keys, in any order (a chosen key again takes it back)"
     }
 
     /// Keys are matched by sound: the piano calls a black key C♯ even when the question spells it D♭.
