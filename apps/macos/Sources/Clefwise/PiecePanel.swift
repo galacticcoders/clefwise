@@ -105,11 +105,18 @@ struct PiecePanel: View {
                 .fixedSize()
                 .help("Skip ahead to practise a section of the piece")
             }
-            GridRow {
-                Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
-                HStack(spacing: 8) {
-                    Toggle("One note per chord", isOn: $game.settings.piece.oneNotePerChord)
-                        .toggleStyle(.checkbox)
+            // The label lines up with the choices, the hint goes under them.
+            GridRow(alignment: .firstTextBaseline) {
+                settingLabel("Chords")
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("Chords", selection: $game.settings.piece.chords) {
+                        ForEach(Game.PieceSettings.Chords.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    .help("How notes struck together are asked: one at a time, only the top or bottom one, "
+                          + "or all of them as one answer")
                     Text(chordHint(for: part))
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -121,14 +128,18 @@ struct PiecePanel: View {
                 GridRow {
                     Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
                     HStack(spacing: 8) {
-                        Toggle("Show the whole bar", isOn: $game.settings.piece.showsWholeBar)
+                        // Naming chords together needs the whole bar: shown on, and greyed out.
+                        Toggle("Show the whole bar", isOn: wholeBar)
                             .toggleStyle(.checkbox)
+                            .disabled(namesTogether)
                         Text(wholeBarHint(for: part))
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
-                    .help("Read each note in its bar, as on the sheet: signs earlier in the bar carry on. "
-                          + "Off, notes come one at a time, with any sign they need printed on them.")
+                    .help(namesTogether
+                          ? "Notes named together are read in their bar, so the whole bar is always shown."
+                          : "Read each note in its bar, as on the sheet: signs earlier in the bar carry on. "
+                            + "Off, notes come one at a time, with any sign they need printed on them.")
                     .gridCellColumns(3)
                 }
             }
@@ -136,9 +147,18 @@ struct PiecePanel: View {
         .multilineTextAlignment(.leading)
     }
 
+    private var namesTogether: Bool { game.settings.piece.chords == .together }
+
+    /// On, and fixed, while chords are named together; the setting itself is kept for later.
+    private var wholeBar: Binding<Bool> {
+        Binding(get: { namesTogether || game.settings.piece.showsWholeBar },
+                set: { game.settings.piece.showsWholeBar = $0 })
+    }
+
     /// What the bar view shows: both staves when both hands are read.
     private func wholeBarHint(for part: ScorePart) -> String {
-        part.staffCount == 2 && game.settings.piece.hand == .both
+        if namesTogether { return "Always, to name notes together" }
+        return part.staffCount == 2 && game.settings.piece.hand == .both
             ? "Both staves, the note to name highlighted"
             : "Every note in the bar, the one to name highlighted"
     }
@@ -178,13 +198,22 @@ struct PiecePanel: View {
         count == 1 ? "1 note can't be shown and was left out" : "\(count) notes can't be shown and were left out"
     }
 
-    /// Which note of a chord is kept: the top one for the upper staff, the bottom one for the lower.
+    /// One line on how the chosen setting asks chords. With top or bottom notes, which note is
+    /// kept: the top one for the upper staff, the bottom one for the lower.
     private func chordHint(for part: ScorePart) -> String {
-        guard part.staffCount == 2 else { return "Only the top note of each chord" }
-        switch game.settings.piece.hand {
-        case .right: return "Only the top note of each chord"
-        case .left: return "Only the bottom note of each chord"
-        case .both: return "Top note in the right hand, bottom note in the left"
+        let hand = part.staffCount == 2 ? game.settings.piece.hand : .right
+        switch game.settings.piece.chords {
+        case .eachNote:
+            return hand == .both ? "Every note on its own, the left hand's first" : "Every note on its own, bottom to top"
+        case .topOrBottom:
+            switch hand {
+            case .right: return "Only the top note of each chord"
+            case .left: return "Only the bottom note of each chord"
+            case .both: return "Top note in the right hand, bottom note in the left"
+            }
+        case .together:
+            return hand == .both ? "Name every note struck at once, both hands, as one answer"
+                : "Name every note of a chord as one answer, in any order"
         }
     }
 }

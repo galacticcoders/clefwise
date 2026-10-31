@@ -425,7 +425,7 @@ private extension GameTestBench {
         #expect(started.keyFifths == 1)
         #expect(started.piece == PieceContext(title: "Usage tune", path: tuneURL.path, part: "Flute", partIndex: 0,
                                               hand: "right", order: "inOrder", startBar: 1, oneNotePerChord: false,
-                                              noteCount: 3, measureCount: 4))
+                                              noteCount: 3, measureCount: 4, chords: "eachNote"))
         game.answer(Pitch(.c, 1)) // misses G4
         try await waitUntil { !game.isShowingMiss }
         answerRight()

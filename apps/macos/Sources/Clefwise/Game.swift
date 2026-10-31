@@ -148,6 +148,25 @@ final class Game {
             var label: String { self == .inOrder ? "In order" : "Shuffled" }
         }
 
+        /// How the notes of a chord, and notes struck together, are asked.
+        enum Chords: String, CaseIterable, Identifiable, Codable {
+            /// Each note on its own, in reading order: lower staff first, then low to high.
+            case eachNote
+            /// Only the top note of right-hand chords and the bottom note of left-hand ones.
+            case topOrBottom
+            /// Every note struck at one moment, on the staves read, named as one answer in the bar view.
+            case together
+
+            var id: Self { self }
+            var label: String {
+                switch self {
+                case .eachNote: "Note by note"
+                case .topOrBottom: "Top / bottom note"
+                case .together: "All together"
+                }
+            }
+        }
+
         /// Index into the score's parts.
         var part = 0
         /// Right hand = upper staff, left hand = lower; ignored for single-staff parts.
@@ -155,22 +174,49 @@ final class Game {
         var order = Order.inOrder
         /// Bar to start from (1-based), so a long piece can be practised a section at a time.
         var startBar = 1
-        /// Only the top note of right-hand chords and the bottom note of left-hand ones.
-        var oneNotePerChord = false
+        var chords = Chords.eachNote
         /// Draw the whole bar the note is in, as the score has it, rather than the note on its own.
+        /// Naming chords together always draws it, whatever this says (see `usesWholeBar`).
         var showsWholeBar = true
+
+        /// The old "One note per chord" checkbox, now `chords == .topOrBottom`. Switching it off
+        /// goes back to note by note only from `topOrBottom`.
+        var oneNotePerChord: Bool {
+            get { chords == .topOrBottom }
+            set {
+                if newValue {
+                    chords = .topOrBottom
+                } else if chords == .topOrBottom {
+                    chords = .eachNote
+                }
+            }
+        }
+
+        /// Rounds use the whole-bar view: when it's switched on, and always when chords are named
+        /// together, which needs it.
+        var usesWholeBar: Bool { showsWholeBar || chords == .together }
 
         init() {}
 
-        /// Missing keys fall back to defaults, like `Settings`.
+        /// Missing keys fall back to defaults, like `Settings`. Settings saved before `chords`
+        /// existed have `oneNotePerChord` instead: on means `topOrBottom`.
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             part = try container.decodeIfPresent(Int.self, forKey: .part) ?? part
             hand = try container.decodeIfPresent(Hand.self, forKey: .hand) ?? hand
             order = try container.decodeIfPresent(Order.self, forKey: .order) ?? order
             startBar = try container.decodeIfPresent(Int.self, forKey: .startBar) ?? startBar
-            oneNotePerChord = try container.decodeIfPresent(Bool.self, forKey: .oneNotePerChord) ?? oneNotePerChord
+            // A choice this version doesn't know (from a later one) falls back rather than losing every setting.
+            if let chords = (try? container.decodeIfPresent(Chords.self, forKey: .chords)) ?? nil {
+                self.chords = chords
+            } else if try decoder.container(keyedBy: LegacyKeys.self).decodeIfPresent(Bool.self, forKey: .oneNotePerChord) == true {
+                chords = .topOrBottom
+            }
             showsWholeBar = try container.decodeIfPresent(Bool.self, forKey: .showsWholeBar) ?? showsWholeBar
+        }
+
+        private enum LegacyKeys: String, CodingKey {
+            case oneNotePerChord
         }
     }
 
@@ -195,6 +241,66 @@ final class Game {
         /// Notes answered so far this round, and how many the round has.
         let done: Int
         let total: Int
+    }
+
+    /// Notes asked together as one question, in "All together" piece rounds when two or more
+    /// notes start at the same moment, and the answer being put together for them.
+    ///
+    /// The answer is one entry per note, in any order: a note name (note buttons, typing), which
+    /// counts in any octave, or a piano key, which must be exact. Once there are
+    /// `entriesNeeded(on:)` entries they're judged: matched to the notes so that the most notes
+    /// are right, each note right or wrong on its own.
+    struct NoteGroup: Equatable {
+        /// Shared by the notes' `questionShown` and `answerGiven` events.
+        let id = UUID()
+        /// One per note, in reading order: lower staff first, then low to high. The first is
+        /// `Game.question` and the bar view's `current`.
+        let questions: [Question]
+        /// Entered so far, in order.
+        fileprivate(set) var entries: [GroupEntry] = []
+        /// How the entries were judged; nil until they are.
+        fileprivate(set) var result: GroupResult?
+
+        init(questions: [Question]) {
+            self.questions = questions
+        }
+
+        /// How many entries make an answer: one name per note, so two Cs an octave apart are named
+        /// twice; on the piano one key per note, but notes that sound the same key share it.
+        func entriesNeeded(on input: AnswerInput) -> Int {
+            input == .piano ? Set(questions.map(\.pitch.midiNumber)).count : questions.count
+        }
+    }
+
+    /// One entry towards the notes asked together.
+    struct GroupEntry: Equatable, Identifiable {
+        let id = UUID()
+        let letter: NoteLetter
+        let accidental: Accidental
+        /// The key, for piano entries; nil for names, which count in any octave. The piano calls
+        /// black keys sharps: C♯, never D♭.
+        let pitch: Pitch?
+    }
+
+    /// How the entries for notes asked together were judged.
+    struct GroupResult: Equatable {
+        /// By question: whether that note was named right.
+        let isRight: [Bool]
+        /// By question: the index in `entries` of the entry it's judged with: the one matched to
+        /// it, or for a note named wrong one of the entries left over, paired in order (notes that
+        /// sound the same key share a piano key).
+        let entryIndices: [Int]
+        /// By entry: whether it named one of the notes.
+        let entryIsRight: [Bool]
+
+        var rightCount: Int { isRight.filter { $0 }.count }
+        var isAllRight: Bool { !isRight.contains(false) }
+    }
+
+    /// A note name without an octave, as typed.
+    struct NoteName: Hashable {
+        let letter: NoteLetter
+        let accidental: Accidental
     }
 
     static let sprintLength: TimeInterval = 60
@@ -229,7 +335,16 @@ final class Game {
     /// What paused the round, while it's paused.
     private(set) var pausedVia: PauseSource?
     private(set) var flash: Flash?
-    /// What's been typed so far towards a note name, in keyboard mode.
+    /// While notes struck together are asked as one question (an "All together" piece round),
+    /// those notes, the entries so far and, once judged, the result: it stays up through the
+    /// pause after a mistake, alongside `isShowingMiss`. Nil while one note is asked at a time,
+    /// a lone note in an "All together" round included: that's asked as usual.
+    private(set) var group: NoteGroup?
+    /// The notes just named together, all of them right, with their result: shown on the answer
+    /// pads for a moment like `flash`, while the next question is already up.
+    private(set) var groupFlash: NoteGroup?
+    /// What's been typed so far towards a note name, in keyboard mode. While a `group` is asked,
+    /// names back to back as typed ("sisol", "ebg"; # kept as ♯, b as typed); `typedNames` reads them.
     private(set) var typedText = ""
     /// Bumped when a keystroke can't lead to any note name, so the input box can shake.
     private(set) var rejectedKeystrokes = 0
@@ -269,31 +384,75 @@ final class Game {
         /// The bar view's layout for `notes`; nil when the round shows one note at a time (the
         /// setting is off, or the part has no bar layout).
         let barLayout: BarLayout?
-        /// Shuffled rounds draw a note (as stats count them: clef and pitch), then one of its places
-        /// in `notes`, so a note the piece repeats often isn't asked any more often for it.
-        let places: [(statKey: String, indices: [Int])]
-        /// Index in `notes` of the note being asked.
-        var index = 0
+        /// The round names the notes struck at one moment together ("All together").
+        let namesTogether: Bool
+        /// The questions, in reading order, as runs of `notes`: one note each, except that when
+        /// notes are named together each run is the notes that start at the same moment (only
+        /// where the bar view can draw their bar; elsewhere they're asked one at a time).
+        let groups: [Range<Int>]
+        /// By group: what shuffled rounds tell questions apart by, its notes as stats count them
+        /// (clef and pitch), so a chord counts as itself whichever voice has which note.
+        let groupKeys: [String]
+        /// Shuffled rounds draw a question (by its key: a note, or the notes of a chord), then one of
+        /// its places, so one the piece repeats often isn't asked any more often for it.
+        let places: [(key: String, statKeys: [String], groups: [Int])]
+        /// Index in `groups` of the question being asked.
+        var groupIndex = 0
 
-        init(title: String, part: ScorePart, notes: [ScoreNote], order: PieceSettings.Order, barLayout: BarLayout?) {
+        init(title: String, part: ScorePart, notes: [ScoreNote], order: PieceSettings.Order, barLayout: BarLayout?,
+             namesTogether: Bool = false) {
             self.title = title
             self.part = part
             self.notes = notes
             bars = part.measureCount
             self.order = order
             self.barLayout = barLayout
+            self.namesTogether = namesTogether
+            let groups = namesTogether ? Self.groups(of: notes, in: part, layout: barLayout) : notes.indices.map { $0..<($0 + 1) }
+            self.groups = groups
+            let statKeys = groups.map { notes[$0].map { Game.statKey($0.clef, $0.pitch) } }
+            let keys = statKeys.map { $0.sorted().joined(separator: " ") }
+            groupKeys = keys
             guard order == .shuffled else {
                 places = []
                 return
             }
-            places = Dictionary(grouping: notes.indices) { Game.statKey(notes[$0].clef, notes[$0].pitch) }
-                .map { ($0.key, $0.value) }
+            places = Dictionary(grouping: groups.indices) { keys[$0] }
+                .map { ($0.key, statKeys[$0.value[0]], $0.value) }
         }
 
-        /// The note being asked.
-        var note: ScoreNote { notes[index] }
+        /// Runs of `notes` (in reading order) that start at the same moment in one bar, each to be
+        /// asked as one question. Runs whose bar the bar view can't draw are split into single notes.
+        private static func groups(of notes: [ScoreNote], in part: ScorePart, layout: BarLayout?) -> [Range<Int>] {
+            var groups: [Range<Int>] = []
+            var start = 0
+            while start < notes.count {
+                var end = start + 1
+                while end < notes.count, notes[end].measure == notes[start].measure,
+                      abs(notes[end].onset - notes[start].onset) < 1e-6 {
+                    end += 1
+                }
+                let drawn = layout.flatMap { Game.barDisplay(for: notes[start], in: part, layout: $0, isAsked: true, answered: []) } != nil
+                    && notes[start..<end].allSatisfy { part.symbol(for: $0) != nil }
+                if drawn {
+                    groups.append(start..<end)
+                } else {
+                    groups += (start..<end).map { $0..<($0 + 1) }
+                }
+                start = end
+            }
+            return groups
+        }
 
-        /// The bar the note being asked is in, as the bar view draws it; nil when it's shown on its own.
+        /// Index in `notes` of the note being asked: the first of its group.
+        var index: Int { groups[groupIndex].lowerBound }
+        /// The note being asked: the first of the notes asked together.
+        var note: ScoreNote { notes[index] }
+        /// The notes asked together now, in reading order; one note when they're asked one at a time.
+        var groupNotes: ArraySlice<ScoreNote> { notes[groups[groupIndex]] }
+
+        /// The bar the note being asked is in, as the bar view draws it, with the other notes asked
+        /// with it as `together`; nil when it's shown on its own.
         var barDisplay: BarDisplay? {
             guard let barLayout else { return nil }
             let note = note
@@ -305,7 +464,9 @@ final class Game {
                     if let symbol = earlier.symbolIndex { answered.insert(symbol) }
                 }
             }
-            return Game.barDisplay(for: note, in: part, layout: barLayout, isAsked: true, answered: answered)
+            var display = Game.barDisplay(for: note, in: part, layout: barLayout, isAsked: true, answered: answered)
+            display?.together = Set(groupNotes.dropFirst().compactMap { $0.measure == note.measure ? $0.symbolIndex : nil })
+            return display
         }
     }
 
@@ -400,11 +561,34 @@ final class Game {
         return settings.addsAccidentals || settings.key != .fixed(.cMajor)
     }
 
-    /// In keyboard mode: the typed text is a whole name but could still get a ♯/♭, so it waits for Return.
+    /// In keyboard mode: the typed text is a whole name but could still get a ♯/♭, so it waits for
+    /// Return. While notes are asked together: it reads as all their names, but something longer
+    /// still could.
     var typingNeedsReturn: Bool {
+        if let typedNames { return typedNames.needsReturn }
         let answers = typeableAnswers
         return answers.contains { $0.text == typedText }
             && answers.contains { $0.text != typedText && $0.text.hasPrefix(typedText) }
+    }
+
+    /// How `typedText` reads while notes are asked together (`group`), for the typing box; nil
+    /// while one note is asked at a time.
+    var typedNames: TypedNames? {
+        guard let group else { return nil }
+        return TypedNames(typedText, count: group.questions.count, answers: typeableAnswers)
+    }
+
+    /// The round asks the notes struck at one moment as one answer ("All together"), or between
+    /// rounds the next one will: the answer pads keep room for the entries.
+    var namesTogether: Bool {
+        if let pieceRound { return pieceRound.namesTogether }
+        return phase != .playing && isPractisingPiece && settings.piece.chords == .together
+    }
+
+    /// How many entries make an answer to the notes asked together with the answer input in use;
+    /// nil while one note is asked at a time.
+    var groupEntriesNeeded: Int? {
+        group?.entriesNeeded(on: settings.answerInput)
     }
 
     var isPractisingPiece: Bool { piece != nil }
@@ -426,14 +610,40 @@ final class Game {
     }
 
     /// What the staff card draws in the whole-bar view: during a piece round the bar of the note
-    /// being asked, between rounds the bar the next one starts in. Nil shows one note at a time:
-    /// for random notes, with the setting off (as it was when the round started), when the part
-    /// has no bar layout, or when a staff to draw has a clef that can't be drawn there.
+    /// being asked (with the notes asked together with it, and after they're judged wrong their
+    /// marks), between rounds the bar the next one starts in. Nil shows one note at a time: for
+    /// random notes, with the setting off (as it was when the round started) unless chords are
+    /// named together, when the part has no bar layout, or when a staff to draw has a clef that
+    /// can't be drawn there.
     var barDisplay: BarDisplay? {
-        if let pieceRound { return pieceRound.barDisplay }
-        guard piece != nil, settings.piece.showsWholeBar, let part = piecePart, let selectedBarLayout,
+        if let pieceRound {
+            guard var display = pieceRound.barDisplay else { return nil }
+            // Every note of a judged group is marked, right ones too.
+            if let group, let result = group.result {
+                for (offset, note) in pieceRound.groupNotes.enumerated() where offset < group.questions.count {
+                    guard note.measure == display.measure.number, let symbol = note.symbolIndex else { continue }
+                    display.marks[symbol] = result.isRight[offset] ? .right
+                        : .wrong(name: missLabel(for: group.questions[offset].pitch,
+                                                 answeredWith: group.entries[result.entryIndices[offset]].pitch))
+                }
+            }
+            return display
+        }
+        guard piece != nil, settings.piece.usesWholeBar, let part = piecePart, let selectedBarLayout,
               let first = selectedNotes.first else { return nil }
         return Self.barDisplay(for: first, in: part, layout: selectedBarLayout, isAsked: false, answered: [])
+    }
+
+    /// What a missed note is labelled with on the staff: its name in the naming system in use
+    /// ("Fa♯", "Middle Do" for C4), and when it was answered with a piano `key` of the right name
+    /// in another octave, "· wrong octave". The same for one note and for notes asked together.
+    func missLabel(for pitch: Pitch, answeredWith key: Pitch?) -> String {
+        let name = settings.naming.name(of: pitch)
+        let label = pitch == Pitch(.c, 4) ? "Middle \(name)" : name
+        if let key, key.pitchClass == pitch.pitchClass, key.midiNumber != pitch.midiNumber {
+            return "\(label) · wrong octave"
+        }
+        return label
     }
 
     /// Where a piece round in the bar view is, bar by bar; nil outside one.
@@ -477,12 +687,14 @@ final class Game {
         return BarLayout(bars: first...last, isGrandStaff: staves.contains(1) && staves.contains(2), positions: positions)
     }
 
-    /// The question for a piece note: in the bar view it prints the sign the bar prints (a sign
-    /// earlier in the bar carries on), on its own the note's `printedAccidental`.
+    /// The question for a piece note asked in `bar` (the note being asked, or one asked with it):
+    /// in the bar view it prints the sign the bar prints (a sign earlier in the bar carries on), on
+    /// its own the note's `printedAccidental`.
     private static func question(for note: ScoreNote, in bar: BarDisplay?) -> Question {
-        guard let bar, let current = bar.current else { return note.question }
+        guard let bar, bar.current != nil, note.measure == bar.measure.number, let symbol = note.symbolIndex,
+              bar.measure.symbols.indices.contains(symbol) else { return note.question }
         return Question(clef: note.clef, pitch: note.pitch, keySignature: note.keySignature,
-                        printedAccidental: bar.measure.symbols[current].accidental, octaveShift: note.octaveShift)
+                        printedAccidental: bar.measure.symbols[symbol].accidental, octaveShift: note.octaveShift)
     }
 
     /// Staff positions the staff has to fit for the round's notes (both clefs), so it doesn't
@@ -593,8 +805,8 @@ final class Game {
     }
 
     /// The notes a round on `part` asks, in reading order: from the start bar on, on the hand's
-    /// staff, and with one note per chord only its top note on the upper staff (the melody)
-    /// and its bottom one on the lower (the bass).
+    /// staff, and with top or bottom notes of chords only its top note on the upper staff (the
+    /// melody) and its bottom one on the lower (the bass). Named together, it's every note.
     private static func notes(of part: ScorePart, with options: PieceSettings) -> [ScoreNote] {
         var notes = part.notes.filter { $0.measure >= options.startBar }
         if part.staffCount > 1 {
@@ -604,7 +816,7 @@ final class Game {
             case .both: break
             }
         }
-        guard options.oneNotePerChord else { return notes }
+        guard options.chords == .topOrBottom else { return notes }
         var kept: [Int: Int] = [:] // chord id: index in `notes`
         for (index, note) in notes.enumerated() {
             guard let keptIndex = kept[note.chord] else {
@@ -660,7 +872,8 @@ final class Game {
             }
             pieceError = nil
             pieceRound = PieceRound(title: piece.title, part: part, notes: selectedNotes, order: settings.piece.order,
-                                    barLayout: settings.piece.showsWholeBar ? selectedBarLayout : nil)
+                                    barLayout: settings.piece.usesWholeBar ? selectedBarLayout : nil,
+                                    namesTogether: settings.piece.chords == .together)
         } else {
             pieceRound = nil
             roundKey = pickRoundKey()
@@ -678,6 +891,8 @@ final class Game {
         responseTimes = []
         summary = nil
         flash = nil
+        group = nil
+        groupFlash = nil
         typedText = ""
         armedAccidental = .natural
         isShowingMiss = false
@@ -760,23 +975,84 @@ final class Game {
         phase = .idle
     }
 
-    /// Note-button click: the letter plus whichever ♯/♭ is armed.
+    /// Note-button click: the letter plus whichever ♯/♭ is armed. While a `group` is asked, it
+    /// adds an entry instead (the last one needed submits them).
     func answer(_ letter: NoteLetter) {
         pressNoteButton(letter, via: .click)
     }
 
-    /// Answers with a note name, as if clicked; any octave counts.
+    /// Answers with a note name, as if clicked; any octave counts. While a `group` is asked, it
+    /// adds an entry.
     func answer(_ letter: NoteLetter, _ accidental: Accidental) {
         answerName(letter, accidental, via: .click)
     }
 
     /// Answers with a piano key, so the octave has to be right too. Compared by sound, so the
-    /// black key counts whether the question spells it C♯ or D♭.
+    /// black key counts whether the question spells it C♯ or D♭. While a `group` is asked, the
+    /// key is chosen, or taken back if it was chosen already; the last one needed submits them.
     func answer(_ pitch: Pitch) {
         guard let question = questionTakingAnswers(from: .piano, detail: pitch.name) else { return }
+        if group != nil {
+            toggleGroupKey(pitch)
+            return
+        }
         submit(Flash(letter: pitch.letter, accidental: pitch.accidental, pitch: pitch,
                      isCorrect: question.pitch.midiNumber == pitch.midiNumber),
                to: question, via: .piano)
+    }
+
+    /// Takes back an entry towards the notes asked together (a chip clicked), before they're judged.
+    func removeGroupEntry(at index: Int) {
+        guard let entries = group?.entries, entries.indices.contains(index) else { return }
+        let key = "remove \(label(of: entries[index]))"
+        guard questionTakingAnswers(from: .click, detail: key) != nil else { return }
+        noteClick(key)
+        group?.entries.remove(at: index)
+        settleKeystroke(.deleted)
+    }
+
+    /// Delete with the note buttons or the piano: takes back the last entry towards the notes
+    /// asked together. Paused, or once they're judged, nothing changes.
+    private func removeLastGroupEntry() {
+        guard isTakingAnswers, !isShowingMiss, let entries = group?.entries, !entries.isEmpty else { return }
+        group?.entries.removeLast()
+        settleKeystroke(.deleted)
+    }
+
+    /// A piano key while notes are asked together: chosen, or taken back if it's chosen already.
+    private func toggleGroupKey(_ pitch: Pitch) {
+        guard let entries = group?.entries else { return }
+        if let index = entries.firstIndex(where: { $0.pitch?.midiNumber == pitch.midiNumber }) {
+            noteClick("piano \(pitch.name)")
+            group?.entries.remove(at: index)
+            settleKeystroke(.deleted)
+        } else {
+            addGroupEntry(GroupEntry(letter: pitch.letter, accidental: pitch.accidental, pitch: pitch), via: .piano)
+        }
+    }
+
+    /// Adds an entry towards the notes asked together; the last one needed submits them.
+    private func addGroupEntry(_ entry: GroupEntry, via source: AnswerSource) {
+        guard var group else { return }
+        noteClick("\(source == .piano ? "piano" : "click") \(label(of: entry))")
+        group.entries.append(entry)
+        self.group = group
+        if group.entries.count >= group.entriesNeeded(on: settings.answerInput) {
+            judgeGroup(via: source)
+        } else {
+            settleKeystroke(.typed)
+        }
+    }
+
+    /// A click towards the notes asked together joins the question's keystrokes as `key`, as the
+    /// sign buttons' clicks do; a key pressed for it is noted already.
+    private func noteClick(_ key: String) {
+        if let questionLog, !questionLog.keyPending { noteKeystroke(key) }
+    }
+
+    /// "Sol♯" for a name, "G♯4" for a piano key.
+    private func label(of entry: GroupEntry) -> String {
+        entry.pitch?.name ?? settings.naming.name(of: Pitch(entry.letter, 4, entry.accidental))
     }
 
     /// Arms ♯ or ♭ for the next note button; choosing the armed one again disarms it.
@@ -804,6 +1080,10 @@ final class Game {
         guard let question = questionTakingAnswers(
             from: source, detail: name ?? settings.naming.name(of: letter) + accidental.symbol, hasName: name != nil
         ) else { return false }
+        if group != nil {
+            addGroupEntry(GroupEntry(letter: letter, accidental: accidental, pitch: nil), via: source)
+            return true
+        }
         submit(Flash(letter: letter, accidental: accidental, pitch: nil,
                      isCorrect: settings.naming.accepts(letter, accidental, for: question.pitch)),
                to: question, via: source)
@@ -850,19 +1130,124 @@ final class Game {
             roundMisses[StaffNote(clef: question.clef, pitch: question.pitch), default: 0] += 1
             recordAnswer(response, to: question, via: source)
             if !settings.isMuted { synth.playMiss() }
-            isShowingMiss = true
-            pendingAdvance = Task { [weak self] in
-                try? await Task.sleep(for: Self.missPause)
-                guard let self, !Task.isCancelled, self.phase == .playing else { return }
-                // Paused meanwhile: the miss stays up and the next note waits for the resume.
-                guard !self.isPaused else {
-                    self.advancesOnResume = true
-                    return
-                }
-                self.isShowingMiss = false
-                self.nextQuestion()
+            showMiss()
+        }
+    }
+
+    /// Judges the entries towards the notes asked together, each note right or wrong on its own.
+    /// The score goes up by the notes named right and attempts by the notes asked; the streak
+    /// grows by them all only when all are right. All right, the notes sound as a chord and the
+    /// next question comes; otherwise the result stays up for the pause after a miss.
+    private func judgeGroup(via source: AnswerSource) {
+        guard var group, !group.entries.isEmpty else { return }
+        let result = Self.judge(group.entries, against: group.questions, naming: settings.naming)
+        group.result = result
+        self.group = group
+        attempts += group.questions.count
+        score += result.rightCount
+        for (question, isRight) in zip(group.questions, result.isRight) {
+            noteStats[statKey(for: question), default: NoteStat()].record(isRight)
+            if !isRight { roundMisses[StaffNote(clef: question.clef, pitch: question.pitch), default: 0] += 1 }
+        }
+        save(noteStats, as: Keys.noteStats)
+
+        if result.isAllRight {
+            streak += group.questions.count
+            bestStreak = max(bestStreak, streak)
+            // One time per question, as for a note on its own.
+            responseTimes.append(Self.seconds(from: questionStart))
+            recordGroupAnswer(group, via: source)
+            showGroupFlash(group)
+            if !settings.isMuted { synth.play(group.questions.map(\.pitch)) }
+            nextQuestion()
+        } else {
+            streak = 0
+            recordGroupAnswer(group, via: source)
+            if !settings.isMuted { synth.playMiss() }
+            showMiss()
+        }
+    }
+
+    /// The pause after a miss: the note (or the notes asked together, marked) stays up, then the
+    /// next question comes. Paused meanwhile, it comes when the round resumes.
+    private func showMiss() {
+        isShowingMiss = true
+        pendingAdvance = Task { [weak self] in
+            try? await Task.sleep(for: Self.missPause)
+            guard let self, !Task.isCancelled, self.phase == .playing else { return }
+            // Paused meanwhile: the miss stays up and the next note waits for the resume.
+            guard !self.isPaused else {
+                self.advancesOnResume = true
+                return
+            }
+            self.isShowingMiss = false
+            self.nextQuestion()
+        }
+    }
+
+    private func showGroupFlash(_ judged: NoteGroup) {
+        groupFlash = judged
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.correctFlash)
+            if self?.groupFlash?.id == judged.id { self?.groupFlash = nil }
+        }
+    }
+
+    /// Matches `entries` to the notes asked together (`questions`) so that the most notes are
+    /// right. A name names one note, in any octave (`NamingSystem.accepts`); a piano key names
+    /// every note that sounds it. Notes left without a match are wrong, and each is paired with
+    /// an entry left over, in order.
+    nonisolated static func judge(_ entries: [GroupEntry], against questions: [Question],
+                                  naming: NamingSystem) -> GroupResult {
+        var matched = [Int?](repeating: nil, count: questions.count)
+        for (entry, given) in entries.enumerated() {
+            guard let key = given.pitch else { continue }
+            for question in questions.indices
+            where matched[question] == nil && questions[question].pitch.midiNumber == key.midiNumber {
+                matched[question] = entry
             }
         }
+        // Names, one note each: matched for the most right. A name takes the first note it fits
+        // that's still free; failing that, an earlier name gives up its note if it can take
+        // another instead (augmenting paths).
+        let open = questions.indices.filter { matched[$0] == nil }
+        var byName: [Int: Int] = [:] // question: entry
+        func place(_ entry: Int, _ tried: inout Set<Int>) -> Bool {
+            let name = entries[entry]
+            let fitting = open.filter { naming.accepts(name.letter, name.accidental, for: questions[$0].pitch) }
+            if let free = fitting.first(where: { byName[$0] == nil && !tried.contains($0) }) {
+                byName[free] = entry
+                return true
+            }
+            for question in fitting where !tried.contains(question) {
+                tried.insert(question)
+                if let holder = byName[question], place(holder, &tried) {
+                    byName[question] = entry
+                    return true
+                }
+            }
+            return false
+        }
+        for entry in entries.indices where entries[entry].pitch == nil {
+            var tried = Set<Int>()
+            _ = place(entry, &tried)
+        }
+        for (question, entry) in byName { matched[question] = entry }
+
+        let used = Set(matched.compactMap { $0 })
+        var leftovers = ArraySlice(entries.indices.filter { !used.contains($0) })
+        // Notes named wrong that sound the same key are paired with the same piano key.
+        var sharedKeys: [Int: Int] = [:]
+        let entryIndices = questions.indices.map { question -> Int in
+            if let entry = matched[question] { return entry }
+            let midi = questions[question].pitch.midiNumber
+            if let entry = sharedKeys[midi] { return entry }
+            let entry = leftovers.popFirst() ?? max(entries.count - 1, 0)
+            if entries.indices.contains(entry), entries[entry].pitch != nil { sharedKeys[midi] = entry }
+            return entry
+        }
+        return GroupResult(isRight: matched.map { $0 != nil }, entryIndices: entryIndices,
+                           entryIsRight: entries.indices.map(used.contains))
     }
 
     /// Handles a key press; returns false to let the system handle it instead.
@@ -884,7 +1269,7 @@ final class Game {
                 start(via: .key)
             } else if keyCode == 49 {
                 togglePause(via: .key)
-            } else if settings.answerInput == .keyboard, accidentalsPossible {
+            } else if settings.answerInput == .keyboard, accidentalsPossible || group != nil {
                 confirmTyping()
             }
             return true
@@ -894,6 +1279,9 @@ final class Game {
                 typedText.removeLast()
                 settleKeystroke(.deleted)
             }
+            return true
+        case 51 where group != nil: // Delete with the note buttons or the piano: takes back an entry
+            removeLastGroupEntry()
             return true
         default:
             break
@@ -967,6 +1355,10 @@ final class Game {
             recordIgnored(isPaused ? "paused" : "missPause", from: .typing, detail: String(character))
             return
         }
+        if let group {
+            type(character, towards: group)
+            return
+        }
         let answers = typeableAnswers
         // # and a "b" after a whole name are stored as ♯ and ♭, so the text reads like the name.
         let followsName = answers.contains { $0.text == typedText }
@@ -990,9 +1382,56 @@ final class Game {
         }
     }
 
+    /// Typing while notes are asked together: names back to back, read as that many names. A
+    /// keystroke that can't lead to them is refused (the box shakes); the text submits by itself
+    /// once it reads as all the names and nothing longer could follow, otherwise on Return.
+    private func type(_ character: Character, towards group: NoteGroup) {
+        // # is kept as ♯; a "b" stays as typed, since it's a flat or the note B depending on the reading.
+        let text = typedText + (character == "#" ? Accidental.sharp.symbol : String(character))
+        let names = TypedNames(text, count: group.questions.count, answers: typeableAnswers)
+        guard names.isViable else {
+            rejectedKeystrokes += 1
+            settleKeystroke(.rejected)
+            return
+        }
+        typedText = text
+        if names.submitsAtOnce {
+            submitTyped(names)
+        } else {
+            settleKeystroke(.typed)
+        }
+    }
+
+    /// Answers the notes asked together with the typed names. Read more than one way, the text is
+    /// judged with the reading that names the most notes right (the first such one).
+    private func submitTyped(_ names: TypedNames) {
+        guard var group else { return }
+        let readings = names.readings.map { $0.map { GroupEntry(letter: $0.letter, accidental: $0.accidental, pitch: nil) } }
+        guard let best = readings.max(by: { a, b in
+            Self.judge(a, against: group.questions, naming: settings.naming).rightCount
+                < Self.judge(b, against: group.questions, naming: settings.naming).rightCount
+        }) else { return }
+        typedText = ""
+        group.entries = best
+        self.group = group
+        judgeGroup(via: .typing)
+    }
+
     /// Return in keyboard mode: answers with a whole name that was waiting for a possible ♯/♭.
+    /// While notes are asked together, with the names typed if they read as all of them.
     private func confirmTyping() {
         guard !isShowingMiss, !typedText.isEmpty else { return }
+        if let group {
+            guard questionTakingAnswers(from: .typing, detail: typedText) != nil else { return }
+            let names = TypedNames(typedText, count: group.questions.count, answers: typeableAnswers)
+            if names.readings.isEmpty {
+                rejectedKeystrokes += 1
+                settleKeystroke(.rejected)
+            } else {
+                submitTyped(names)
+            }
+            return
+        }
         if let match = typeableAnswers.first(where: { $0.text == typedText }) {
             typedText = ""
             answerName(match.letter, match.accidental, via: .typing)
@@ -1019,6 +1458,8 @@ final class Game {
         stopClock()
         isShowingMiss = false
         flash = nil
+        group = nil
+        groupFlash = nil
         typedText = ""
         armedAccidental = .natural
         question = nil
@@ -1083,6 +1524,8 @@ final class Game {
         clearPause()
         isShowingMiss = false
         flash = nil
+        group = nil
+        groupFlash = nil
         typedText = ""
         armedAccidental = .natural
         question = nil
@@ -1142,49 +1585,54 @@ final class Game {
         }
     }
 
-    /// Moves on to the next note, or ends an in-order practice round on a piece after its last note.
+    /// Moves on to the next note (or notes asked together), or ends an in-order practice round on
+    /// a piece after its last one.
     private func nextQuestion() {
         guard var pieceRound else {
             let pick = randomQuestion()
-            show(pick.question, pickChance: pick.chance)
+            show([pick.question], pickChance: pick.chance)
             return
         }
         var pickChance: Double?
         switch pieceRound.order {
         case .inOrder:
             // No question yet means the round is just starting.
-            let next = question == nil ? 0 : pieceRound.index + 1
-            if next == pieceRound.notes.count, settings.mode == .practice {
+            let next = question == nil ? 0 : pieceRound.groupIndex + 1
+            if next == pieceRound.groups.count, settings.mode == .practice {
                 finish(timeRanOut: false, finishedPiece: true)
                 return
             }
             // A sprint goes round again from the start bar until time's up.
-            pieceRound.index = next % pieceRound.notes.count
+            pieceRound.groupIndex = next % pieceRound.groups.count
         case .shuffled:
-            let pick = shuffledIndex(in: pieceRound)
-            pieceRound.index = pick.index
+            let pick = shuffledGroup(in: pieceRound)
+            pieceRound.groupIndex = pick.index
             pickChance = pick.chance
         }
         self.pieceRound = pieceRound
-        show(Self.question(for: pieceRound.note, in: pieceRound.barDisplay), pickChance: pickChance)
+        let bar = pieceRound.barDisplay
+        show(pieceRound.groupNotes.map { Self.question(for: $0, in: bar) }, pickChance: pickChance)
     }
 
-    /// `pickChance`: how likely the weighted pick was to choose this note, for the log.
-    private func show(_ question: Question, pickChance: Double?) {
-        self.question = question
+    /// Asks `questions`: one note, or notes asked together as a `group`. `pickChance`: how likely
+    /// the weighted pick was to choose it, for the log.
+    private func show(_ questions: [Question], pickChance: Double?) {
+        question = questions[0]
+        group = questions.count > 1 ? NoteGroup(questions: questions) : nil
         questionStart = .now
         questionPaused = .zero
         recordQuestionShown(pickChance: pickChance)
     }
 
-    /// A shuffled round's next note, weighted like random rounds and never the one just asked
-    /// unless the round has no other; and the chance the note had (any of its places).
-    private func shuffledIndex(in round: PieceRound) -> (index: Int, chance: Double) {
-        let previous = question.map { Self.statKey($0.clef, $0.pitch) }
-        let others = round.places.filter { $0.statKey != previous }
+    /// A shuffled round's next question (a note, or notes asked together), weighted like random
+    /// rounds and never the one just asked unless the round has no other; and the chance it had
+    /// (any of its places). Notes asked together weigh as much as the one that weighs most.
+    private func shuffledGroup(in round: PieceRound) -> (index: Int, chance: Double) {
+        let previous = question == nil ? nil : round.groupKeys[round.groupIndex]
+        let others = round.places.filter { $0.key != previous }
         let candidates = others.isEmpty ? round.places : others
-        let pick = Self.weightedIndex(candidates.map { weight(forStatKey: $0.statKey) })
-        return (candidates[pick.index].indices.randomElement()!, pick.chance)
+        let pick = Self.weightedIndex(candidates.map { $0.statKeys.map(weight(forStatKey:)).max() ?? 1 })
+        return (candidates[pick.index].groups.randomElement()!, pick.chance)
     }
 
     /// A random note from the toolbar settings, and the chance it had of being picked.
@@ -1256,9 +1704,11 @@ final class Game {
         var questionsShown = 0
     }
 
-    /// Kept for the question's `answerGiven`.
+    /// Kept for the question's `answerGiven`. Notes asked together keep one, under the first note.
     private struct QuestionLog {
         let id: UUID
+        /// The notes asked together, if they were.
+        var group: UUID?
         var keystrokes: [Keystroke] = []
         /// The last keystroke is the key `handleKey` is still handling: its result isn't known yet.
         var keyPending = false
@@ -1311,29 +1761,37 @@ final class Game {
         return PieceContext(title: piece.title, path: pieceURL?.path ?? "", part: part.name, partIndex: options.part,
                             hand: options.hand.rawValue, order: options.order.rawValue, startBar: options.startBar,
                             oneNotePerChord: options.oneNotePerChord, noteCount: round.notes.count,
-                            measureCount: part.measureCount)
+                            measureCount: part.measureCount, chords: options.chords.rawValue)
     }
 
+    /// One `questionShown` per note on screen: notes asked together are logged one by one, with
+    /// their group's id and size. `pickChance` is the question's.
     private func recordQuestionShown(pickChance: Double?) {
         guard let question, let roundLog else { return }
-        questionLog = QuestionLog(id: question.id)
-        self.roundLog?.questionsShown += 1
-        let note = pieceRound?.note
+        questionLog = QuestionLog(id: question.id, group: group?.id)
+        let questions = group?.questions ?? [question]
+        let notes = pieceRound.map { Array($0.groupNotes) }
         let bar = pieceRound?.barDisplay
-        recorder.record(.questionShown(QuestionShown(
-            round: roundLog.id, question: question.id, index: roundLog.questionsShown,
-            clef: question.clef.rawValue, pitch: LoggedPitch(question.pitch), written: LoggedPitch(question.writtenPitch),
-            position: question.position, keyFifths: question.keySignature.fifths,
-            // As drawn: in the bar view, the bar's sign.
-            printedAccidental: question.printedAccidental?.rawValue, octaveShift: question.octaveShift,
-            pieceNote: note.map {
-                PieceNoteRef(measure: $0.measure, staff: $0.staff, onset: $0.onset, chord: $0.chord, symbolIndex: $0.symbolIndex)
-            },
-            pickChance: pickChance, naming: settings.naming.rawValue, input: settings.answerInput.rawValue,
-            hintsVisible: settings.showHints,
-            // Key names are only drawn on the piano.
-            keyNamesVisible: settings.answerInput == .piano && settings.showKeyNames,
-            barView: pieceRound.map { _ in bar != nil }, barStaves: bar?.staves.map(\.number))))
+        for (offset, question) in questions.enumerated() {
+            let index = roundLog.questionsShown + offset
+            let note = notes.flatMap { $0.indices.contains(offset) ? $0[offset] : nil }
+            recorder.record(.questionShown(QuestionShown(
+                round: roundLog.id, question: question.id, index: index,
+                clef: question.clef.rawValue, pitch: LoggedPitch(question.pitch), written: LoggedPitch(question.writtenPitch),
+                position: question.position, keyFifths: question.keySignature.fifths,
+                // As drawn: in the bar view, the bar's sign.
+                printedAccidental: question.printedAccidental?.rawValue, octaveShift: question.octaveShift,
+                pieceNote: note.map {
+                    PieceNoteRef(measure: $0.measure, staff: $0.staff, onset: $0.onset, chord: $0.chord, symbolIndex: $0.symbolIndex)
+                },
+                pickChance: pickChance, naming: settings.naming.rawValue, input: settings.answerInput.rawValue,
+                hintsVisible: settings.showHints,
+                // Key names are only drawn on the piano.
+                keyNamesVisible: settings.answerInput == .piano && settings.showKeyNames,
+                barView: pieceRound.map { _ in bar != nil }, barStaves: bar?.staves.map(\.number),
+                group: group?.id, groupSize: group?.questions.count)))
+        }
+        self.roundLog?.questionsShown += questions.count
     }
 
     /// Adds a key to the keystrokes of the question on screen, if one is up and not yet answered;
@@ -1368,6 +1826,30 @@ final class Game {
             pausedMs: pausedMilliseconds(questionPaused))))
     }
 
+    /// One `answerGiven` per note asked together, each right or wrong on its own, with the entry
+    /// judged with it. They share the response time, source, score and streak after the group;
+    /// the keystrokes go with the first note.
+    private func recordGroupAnswer(_ group: NoteGroup, via source: AnswerSource) {
+        settleKeystroke(.submitted) // when a key sent the answer
+        guard let roundLog, let questionLog, let result = group.result else { return }
+        self.questionLog = nil
+        let responseMs = activeMilliseconds(since: questionStart)
+        let pausedMs = pausedMilliseconds(questionPaused)
+        for (offset, question) in group.questions.enumerated() {
+            let entry = group.entries[result.entryIndices[offset]]
+            recorder.record(.answerGiven(AnswerGiven(
+                round: roundLog.id, question: question.id, responseMs: responseMs, source: source,
+                letter: entry.letter.name, accidental: entry.accidental.rawValue,
+                name: settings.naming.name(of: entry.pitch ?? Pitch(entry.letter, 4, entry.accidental)),
+                pitch: entry.pitch.map(LoggedPitch.init), correct: result.isRight[offset],
+                wrongOctave: entry.pitch.map {
+                    $0.pitchClass == question.pitch.pitchClass && $0.midiNumber != question.pitch.midiNumber
+                },
+                keystrokes: offset == 0 ? questionLog.keystrokes : [], scoreAfter: score, streakAfter: streak,
+                pausedMs: pausedMs, group: group.id, groupSize: group.questions.count)))
+        }
+    }
+
     private func recordPause(via source: PauseSource) {
         guard let roundLog else { return }
         recorder.record(.roundPaused(RoundPaused(round: roundLog.id, question: questionLog?.id, via: source,
@@ -1389,7 +1871,7 @@ final class Game {
         guard let roundLog else { return }
         let unanswered = questionLog.map {
             UnansweredQuestion(question: $0.id, shownMs: activeMilliseconds(since: questionStart), keystrokes: $0.keystrokes,
-                               pausedMs: pausedMilliseconds(questionPaused))
+                               pausedMs: pausedMilliseconds(questionPaused), group: $0.group)
         }
         self.roundLog = nil
         questionLog = nil
@@ -1449,5 +1931,85 @@ final class Game {
 
     private func save<T: Encodable>(_ value: T, as key: String) {
         defaults.set(try? JSONEncoder().encode(value), forKey: key)
+    }
+}
+
+// MARK: - Typing notes named together
+
+extension Game {
+    /// How typed text reads as the names of `count` notes asked together: names back to back in
+    /// any order ("sisol", "fa♯do", "dodo"), each a name with an optional ♯ or ♭ after it.
+    ///
+    /// With letter names "b" is both the note B and a flat, so the text is read with the count in
+    /// mind: for three notes "ebg" is E B G, for two it's E♭ G. Typed "#" is stored as ♯; a "b" (or
+    /// ♭) after a name may be its flat.
+    struct TypedNames: Equatable {
+        /// Every way to read the whole text as exactly `count` names, in a fixed order (a "b" read
+        /// as a flat before it's read as B).
+        let readings: [[NoteName]]
+        /// The text can lead to `count` names: some reading has at most that many whole names, or
+        /// fewer and the start of one more. A keystroke that makes it false is refused.
+        let isViable: Bool
+        /// Something longer could still read as `count` names: another name, a longer name, or a
+        /// ♯/♭ after the last one.
+        let canGrow: Bool
+        /// The reading the typing box shows: all the names if the text reads as them (the first
+        /// such reading), otherwise the fewest whole names, then what's left of the text, the start
+        /// of a name ("s" on the way to "sol").
+        let shown: [NoteName]
+        let rest: String
+
+        /// The text reads as all the names and nothing longer could follow: it submits by itself.
+        var submitsAtOnce: Bool { !readings.isEmpty && !canGrow }
+        /// The text reads as all the names, but something longer could follow: Return submits it.
+        var needsReturn: Bool { !readings.isEmpty && canGrow }
+
+        /// `answers`: everything that can be typed as one name, lowercased, signs as ♯ and ♭
+        /// (`Game.typeableAnswers`).
+        init(_ text: String, count: Int, answers: [(text: String, letter: NoteLetter, accidental: Accidental)]) {
+            let typed = Array(text.lowercased())
+            let forms = answers.map { (form: Array($0.text), name: NoteName(letter: $0.letter, accidental: $0.accidental)) }
+            // A ♭ in a name is typed as "b" or "♭".
+            func same(_ form: Character, _ key: Character) -> Bool { form == key || (form == "♭" && key == "b") }
+            func fits(_ form: [Character], at position: Int) -> Bool {
+                position + form.count <= typed.count && form.indices.allSatisfy { same(form[$0], typed[position + $0]) }
+            }
+            // The text from `position` on is the start of a name, short of all of it.
+            func starts(at position: Int) -> Bool {
+                let rest = typed.count - position
+                return forms.contains { candidate in
+                    candidate.form.count > rest && (0..<rest).allSatisfy { same(candidate.form[$0], typed[position + $0]) }
+                }
+            }
+
+            var whole: [[NoteName]] = []
+            var partial: [(names: [NoteName], rest: String)] = []
+            var canGrow = false
+            func read(from position: Int, _ names: [NoteName]) {
+                if position == typed.count { whole.append(names) }
+                if names.count < count, starts(at: position) {
+                    canGrow = true
+                    if position < typed.count { partial.append((names, String(typed[position...]))) }
+                }
+                guard names.count < count else { return }
+                for (form, name) in forms where fits(form, at: position) {
+                    read(from: position + form.count, names + [name])
+                }
+            }
+            read(from: 0, [])
+
+            readings = whole.filter { $0.count == count }
+            isViable = !whole.isEmpty || !partial.isEmpty
+            self.canGrow = canGrow
+            if let all = readings.first {
+                (shown, rest) = (all, "")
+            } else if let fewest = whole.min(by: { $0.count < $1.count }) {
+                (shown, rest) = (fewest, "")
+            } else if let fewest = partial.min(by: { $0.names.count < $1.names.count }) {
+                (shown, rest) = fewest
+            } else {
+                (shown, rest) = ([], text)
+            }
+        }
     }
 }

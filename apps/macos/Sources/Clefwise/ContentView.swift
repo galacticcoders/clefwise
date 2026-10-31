@@ -97,6 +97,14 @@ struct ContentView: View {
         case (.piano, _): parts = ["Click the exact key"]
         case (.keyboard, _): parts = ["Type the note's name, ⌫ to fix"]
         }
+        // Naming notes together, entries can be taken back.
+        if game.namesTogether {
+            switch game.settings.answerInput {
+            case .buttons: parts.append("⌫ take one back")
+            case .piano: parts = ["Click the exact keys"]
+            case .keyboard: parts = ["Type the names one after another, ⌫ to fix"]
+            }
+        }
         // Words rather than ♯/♭, which are too small to read at caption size.
         if game.settings.answerInput == .buttons, game.accidentalsPossible {
             parts += game.settings.naming == .sargam ? ["# tivra", "− komal"] : ["# sharp", "− flat"]
@@ -383,6 +391,8 @@ private struct StaffCard: View {
                         BarStaffView(
                             // Paused, the bar's notes are left out until the round carries on.
                             bar: game.isPaused ? bar.withoutNotes : bar,
+                            // Notes asked together are marked one by one once judged (`bar.marks`, which
+                            // carry their names); the view then leaves the label out.
                             currentColor: game.isShowingMiss ? Theme.wrong : Theme.accent,
                             currentLabel: game.isShowingMiss && !game.isPaused ? game.question.map(answerLabel) : nil,
                             showsHints: game.settings.showHints,
@@ -430,15 +440,9 @@ private struct StaffCard: View {
         .frame(minHeight: 340)
     }
 
+    /// On the piano it says so when the name was right but the octave wasn't.
     private func answerLabel(_ question: Question) -> String {
-        let name = game.settings.naming.name(of: question.pitch)
-        let label = question.pitch == Pitch(.c, 4) ? "Middle \(name)" : name
-        // On the piano, say so when the name was right but the octave wasn't.
-        if let chosen = game.flash?.pitch, chosen.pitchClass == question.pitch.pitchClass,
-           chosen.midiNumber != question.pitch.midiNumber {
-            return "\(label) · wrong octave"
-        }
-        return label
+        game.missLabel(for: question.pitch, answeredWith: game.flash?.pitch)
     }
 }
 
@@ -540,8 +544,8 @@ private struct PausedPanel: View {
             Text("Paused")
                 .font(.title2.weight(.semibold))
             Text(game.pausedVia == .appSwitch
-                 ? "Paused while you were in another app. The note is hidden until you carry on."
-                 : "The clock is stopped and the note is hidden until you carry on.")
+                 ? "Paused while you were in another app. The \(notes) hidden until you carry on."
+                 : "The clock is stopped and the \(notes) hidden until you carry on.")
                 .foregroundStyle(.secondary)
             Button {
                 game.recorder.recordUIAction("resumePanelButton")
@@ -559,6 +563,8 @@ private struct PausedPanel: View {
         }
         .panel()
     }
+
+    private var notes: String { game.group == nil ? "note is" : "notes are" }
 }
 
 private struct StartPanel: View {
@@ -758,27 +764,33 @@ private struct AnswerPad: View {
     let game: Game
 
     var body: some View {
-        HStack(spacing: 12) {
-            // Only when a note can be sharp or flat, so C major without accidentals looks as it always did.
-            if game.accidentalsPossible {
-                modifierButton(.flat)
-                    .padding(.trailing, 8)
+        VStack(spacing: 10) {
+            // Only when naming notes together, so other rounds look as they always did.
+            if game.namesTogether {
+                GroupEntryStrip(game: game)
             }
-            ForEach(NoteLetter.allCases) { letter in
-                Button {
-                    game.answer(letter)
-                } label: {
-                    keyLabel(for: letter)
+            HStack(spacing: 12) {
+                // Only when a note can be sharp or flat, so C major without accidentals looks as it always did.
+                if game.accidentalsPossible {
+                    modifierButton(.flat)
+                        .padding(.trailing, 8)
                 }
-                .buttonStyle(AnswerKeyStyle(highlight: highlight(for: letter)))
-                .disabled(!canAnswer(letter))
+                ForEach(NoteLetter.allCases) { letter in
+                    Button {
+                        game.answer(letter)
+                    } label: {
+                        keyLabel(for: letter)
+                    }
+                    .buttonStyle(AnswerKeyStyle(highlight: highlight(for: letter)))
+                    .disabled(!canAnswer(letter))
+                }
+                if game.accidentalsPossible {
+                    modifierButton(.sharp)
+                        .padding(.leading, 8)
+                }
             }
-            if game.accidentalsPossible {
-                modifierButton(.sharp)
-                    .padding(.leading, 8)
-            }
+            .disabled(!game.isTakingAnswers)
         }
-        .disabled(!game.isTakingAnswers)
     }
 
     /// ♭ or ♯: arms the sign for the next letter pressed.
@@ -843,7 +855,7 @@ private struct AnswerPad: View {
 
     private func shownAccidental(for letter: NoteLetter) -> Accidental {
         if let flash = game.flash, flash.letter == letter { return flash.accidental }
-        if let revealed, revealed.letter == letter { return revealed.accidental }
+        if let revealed = revealed.first(where: { $0.letter == letter }) { return revealed.accidental }
         return game.armedAccidental
     }
 
@@ -853,10 +865,19 @@ private struct AnswerPad: View {
         game.settings.naming.answerName(of: letter, game.armedAccidental) != nil
     }
 
-    /// After a miss: the button and sign that name the note. Sargam goes by swara, so a C♯ is komal Re.
-    private var revealed: (letter: NoteLetter, accidental: Accidental)? {
-        guard game.isShowingMiss, let pitch = game.question?.pitch else { return nil }
-        guard game.settings.naming == .sargam else { return (pitch.letter, pitch.accidental) }
+    /// After a miss: the buttons and signs that name the note, or the notes asked together that
+    /// were missed.
+    private var revealed: [(letter: NoteLetter, accidental: Accidental)] {
+        guard game.isShowingMiss else { return [] }
+        if let group = game.group, let result = group.result {
+            return zip(group.questions, result.isRight).filter { !$0.1 }.map { Self.buttonName(for: $0.0.pitch, in: game.settings.naming) }
+        }
+        return game.question.map { [Self.buttonName(for: $0.pitch, in: game.settings.naming)] } ?? []
+    }
+
+    /// The button and sign that name `pitch`. Sargam goes by swara, so a C♯ is komal Re.
+    static func buttonName(for pitch: Pitch, in naming: NamingSystem) -> (letter: NoteLetter, accidental: Accidental) {
+        guard naming == .sargam else { return (pitch.letter, pitch.accidental) }
         let pitchClass = pitch.pitchClass
         if let natural = NoteLetter.allCases.first(where: { $0.semitone == pitchClass }) { return (natural, .natural) }
         if pitchClass == Pitch(.f, 4, .sharp).pitchClass { return (.f, .sharp) }
@@ -867,7 +888,7 @@ private struct AnswerPad: View {
         if let flash = game.flash, flash.letter == letter {
             return flash.isCorrect ? .correct : .wrong
         }
-        if revealed?.letter == letter {
+        if revealed.contains(where: { $0.letter == letter }) {
             return .reveal
         }
         return .none
@@ -876,8 +897,104 @@ private struct AnswerPad: View {
     private func highlight(for accidental: Accidental) -> KeyHighlight {
         if game.armedAccidental == accidental { return .armed }
         // After a miss, shows the sign the answer needed (the letter alone may have been right).
-        if revealed?.accidental == accidental { return .reveal }
+        if revealed.contains(where: { $0.accidental == accidental }) { return .reveal }
         return .none
+    }
+}
+
+/// Above the note buttons while notes are named together: the names entered so far as chips
+/// (click one, or press ⌫ for the last, to take it back) and empty slots for the rest, coloured
+/// right or wrong once judged. It keeps its room through the round, a lone note included, so the
+/// buttons don't jump.
+private struct GroupEntryStrip: View {
+    let game: Game
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(caption)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.trailing, 4)
+            if let shown {
+                ForEach(Array(shown.entries.enumerated()), id: \.element.id) { index, entry in
+                    Button {
+                        game.removeGroupEntry(at: index)
+                    } label: {
+                        chipLabel(for: entry, removable: shown.result == nil)
+                    }
+                    .buttonStyle(ChipStyle(highlight: highlight(of: index, in: shown)))
+                    .disabled(shown.result != nil || !game.isTakingAnswers || game.isShowingMiss)
+                    .help("Click to take it back (⌫ takes back the last one)")
+                }
+                if shown.result == nil {
+                    ForEach(0..<max(0, (game.groupEntriesNeeded ?? shown.questions.count) - shown.entries.count), id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Theme.keyBorder, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                            .frame(width: 62, height: 40)
+                    }
+                }
+            }
+        }
+        .frame(height: 40)
+        // Faded with the buttons while answers don't count (paused, between rounds).
+        .opacity(game.isTakingAnswers ? 1 : 0.5)
+    }
+
+    /// The group being answered; once it has no entries yet, the one just named all right for a
+    /// moment (its flash).
+    private var shown: Game.NoteGroup? {
+        if let group = game.group, !group.entries.isEmpty || group.result != nil { return group }
+        return game.groupFlash ?? game.group
+    }
+
+    private var caption: String {
+        guard let shown else {
+            return game.phase == .playing ? "Name the note" : "Notes struck together are named as one answer"
+        }
+        let count = shown.questions.count
+        guard let result = shown.result else { return "Name all \(count) notes, in any order" }
+        return result.isAllRight ? "All \(count) right" : "\(result.rightCount) of \(count) right"
+    }
+
+    private func highlight(of entry: Int, in group: Game.NoteGroup) -> KeyHighlight {
+        guard let result = group.result else { return .none }
+        return result.entryIsRight[entry] ? .correct : .wrong
+    }
+
+    private func chipLabel(for entry: Game.GroupEntry, removable: Bool) -> some View {
+        let naming = game.settings.naming
+        // "komal Re" in sargam, as the buttons call it; otherwise the name and its sign.
+        let swara = naming == .sargam ? naming.answerName(of: entry.letter, entry.accidental) : nil
+        return HStack(spacing: 5) {
+            SpelledName(name: swara ?? naming.name(of: entry.letter), accidental: swara == nil ? entry.accidental : .natural,
+                        size: swara == nil ? 20 : 15)
+            if removable {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .opacity(0.45)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(minWidth: 62, minHeight: 40)
+    }
+}
+
+/// A chip on the entry strip, coloured like the answer keys.
+private struct ChipStyle: ButtonStyle {
+    let highlight: KeyHighlight
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(highlight.foreground)
+            .background(highlight.fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(highlight.border, lineWidth: 1.5)
+            }
+            .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
     }
 }
 

@@ -115,7 +115,8 @@ extension UsageExport {
         | `piece.hand` | `right` (upper staff), `left` (lower staff) or `both`. |
         | `piece.order` | `inOrder` or `shuffled`. |
         | `piece.startBar` | Bar the round starts from. |
-        | `piece.oneNotePerChord` | Only the top note of right-hand chords and the bottom note of left-hand ones. |
+        | `piece.oneNotePerChord` | Only the top note of right-hand chords and the bottom note of left-hand ones (`piece.chords` is `topOrBottom`). |
+        | `piece.chords` | How chords are asked: `eachNote` (note by note, lower staff first, low to high), `topOrBottom` (only the top note of right-hand chords and the bottom note of left-hand ones), `together` (all the notes struck at one moment, on the staves read, named as one answer; see Notes asked together). Absent in rounds logged before the setting existed: `oneNotePerChord` says which of the first two it was. |
         | `piece.noteCount` | Notes this round asks. |
         | `piece.measureCount` | Bars in the part. |
 
@@ -125,7 +126,7 @@ extension UsageExport {
         |---|---|
         | `round` | The round's id. |
         | `question` | This question's id, shared by its answer. |
-        | `index` | 0-based count of questions shown so far this round. |
+        | `index` | 0-based count of questions shown so far this round; notes asked together count one each. |
         | `clef` | `treble` or `bass`. |
         | `pitch` | The note as played (see Pitch below). |
         | `written` | The note as written; differs from `pitch` under an 8va or 8vb line. |
@@ -136,7 +137,8 @@ extension UsageExport {
         | `pieceNote` | Where the note is in the piece (pieces only): `measure` (bar), `staff`, `onset` (quarter notes from the start), `chord` (notes struck together on one staff share a chord id), `symbolIndex` (where it's drawn in its bar: its 0-based index among the notes and rests drawn in the bar on all staves, ordered by time, then staff, voice and pitch, rests first; absent when the piece has no bar layout). |
         | `barView` | Pieces only: `true` when the note was asked in the whole-bar view (its whole bar drawn, the note highlighted), `false` when it was shown on its own. Absent for random notes. |
         | `barStaves` | In the whole-bar view, the staves drawn, top to bottom: `[1, 2]` for both staves of a grand staff, `[1]` or `[2]` for one. Absent otherwise. |
-        | `pickChance` | The chance this note had of being picked (random and shuffled rounds), 0–1, for studying the adaptive picking. |
+        | `group`, `groupSize` | For notes asked together (see Notes asked together): the id their questions share, and how many notes there are. Absent for a note asked on its own. |
+        | `pickChance` | The chance this note had of being picked (random and shuffled rounds), 0–1, for studying the adaptive picking. For notes asked together, the chance the group had. |
         | `naming` | Note names in use: `letters` (C D E), `solfege` (Do Re Mi, fixed: Do = C), `sargam` (Sa Re Ga, Sa = C). |
         | `input` | How answers are given: `buttons`, `piano`, `keyboard` (typing names). |
         | `hintsVisible` | Whether the staff hints were showing. |
@@ -164,9 +166,24 @@ extension UsageExport {
         | `pitch` | The exact key, for piano answers (see Pitch). |
         | `correct` | Whether it was right. |
         | `wrongOctave` | Piano only: the right note in the wrong octave. |
-        | `keystrokes` | Every key pressed while the question was up, in order, each with `key`, `ms` (since the question appeared) and `result`: `typed` (kept as part of a name), `rejected` (refused; the box shook), `deleted` (Backspace), `submitted` (Return, or a completed name submitting), `armed` (♯/♭ armed or disarmed on the note buttons; clicks on those buttons appear as keys `click ♯` / `click ♭`), `other` (pressed but not part of answering). |
-        | `scoreAfter`, `streakAfter` | Score and current streak after this answer. |
+        | `keystrokes` | Every key pressed while the question was up, in order, each with `key`, `ms` (since the question appeared) and `result`: `typed` (kept as part of a name, or an entry towards notes asked together), `rejected` (refused; the box shook), `deleted` (Backspace, or an entry taken back), `submitted` (Return, or a completed name submitting), `armed` (♯/♭ armed or disarmed on the note buttons; clicks on those buttons appear as keys `click ♯` / `click ♭`), `other` (pressed but not part of answering). Towards notes asked together, clicks appear as keys too: `click Sol♯` (a note button), `piano G♯4` (a piano key chosen, or clicked again to take it back) and `remove Sol♯` (an entry clicked to take it back). |
+        | `scoreAfter`, `streakAfter` | Score and current streak after this answer; for notes asked together, after the whole group. |
         | `pausedMs` | How long the round was paused while the question was up (absent when it wasn't). |
+        | `group`, `groupSize` | For notes asked together: as in their `questionShown`. Absent for a note answered on its own. |
+
+        **Notes asked together.** With `piece.chords` `together`, every note struck at one moment
+        (in the staves read; tied-over notes aren't asked) is one question, answered with one name
+        per note in any order, or on the piano one key per note (notes sounding the same key share
+        it). A moment with a single note is asked and logged as usual. The notes are logged one by
+        one: one `questionShown` per note when they appear, in reading order (lower staff first,
+        then low to high), then one `answerGiven` per note when they're judged, each with its own
+        `correct`. The answers are matched to the notes so that the most notes are right; a note
+        named right gets the answer that named it (`letter`, `accidental`, `name`, `pitch`), a
+        note named wrong one of the answers left over, paired in order. They share `responseMs`,
+        `source` (how the last answer was given), `scoreAfter` and `streakAfter`; the keystrokes
+        are all on the first note, the others have none. Each note counts as one attempt and the
+        score goes up by the notes named right; the streak grows by them all only when all are
+        right, and is reset otherwise.
 
         ### `inputIgnored`: an answer or keystroke that didn't count
 
@@ -216,7 +233,7 @@ extension UsageExport {
         | `bestScore` | The best sprint score for these settings (sprints on random notes only). |
         | `isNewBest` | This round set a new best score. |
         | `notesToReview` | The notes missed most, as listed in the round summary. |
-        | `unansweredQuestion` | The question still on screen when the round ended, if any: `question` id, `shownMs` (how long it was up, pauses left out), `pausedMs` (how long the round was paused meanwhile, if it was) and its `keystrokes` (as in `answerGiven`). |
+        | `unansweredQuestion` | The question still on screen when the round ended, if any: `question` id, `shownMs` (how long it was up, pauses left out), `pausedMs` (how long the round was paused meanwhile, if it was), its `keystrokes` (as in `answerGiven`) and for notes asked together their `group` (then `question` is the first of them). |
 
         ### `pieceOpened`: a MusicXML file was opened
 
@@ -274,7 +291,7 @@ extension UsageExport {
         | `isMuted` | Sound off. |
         | `key` | `{"fixed":{"_0":{"fifths":N}}}` for a fixed key signature, `{"random":{}}` for a new random one each round. |
         | `addsAccidentals` | Now and then print a ♯, ♭ or ♮ in front of a note, on top of the key signature. |
-        | `piece` | `part` (index from 0), `hand`, `order`, `startBar`, `oneNotePerChord`, as in `roundStarted.piece`; and `showsWholeBar`, the "Show the whole bar" checkbox (true unless switched off). |
+        | `piece` | `part` (index from 0), `hand`, `order`, `startBar`, `chords`, as in `roundStarted.piece` (settings saved before `chords` existed have `oneNotePerChord` instead); and `showsWholeBar`, the "Show the whole bar" checkbox (true unless switched off; with `chords` `together` the whole bar is shown whatever it says). |
         | `piecePath` | The last piece opened, reopened at launch. |
 
         ### `note-stats.json` and `best-scores.json`
@@ -310,6 +327,7 @@ extension UsageExport {
         | `pieceBar`, `pieceStaff` | Where the note is in the piece; empty for random notes. |
         | `barView` | Pieces only: `true` when asked in the whole-bar view, `false` when shown on its own; empty for random notes. |
         | `barStaves` | In the whole-bar view, the staves drawn, space-separated: `1 2` for a grand staff, `1` or `2` for one. |
+        | `group`, `groupSize` | For notes asked together: the id their rows share, and how many notes there are (one row each); empty for a note answered on its own. |
         | `naming`, `input` | The naming system and answer input in use. |
         | `source` | How the answer was given: `click`, `shortcut`, `typing`, `piano`. |
         | `answerLetter`, `answerAccidental`, `answerName` | What was answered. |
@@ -342,6 +360,7 @@ extension UsageExport {
         | `keySetting` | The key setting: a fixed key in fifths, or `random`. |
         | `keyFifths` | The key the round was in (a random key resolved). |
         | `pieceTitle`, `piecePart`, `pieceHand`, `pieceOrder`, `pieceStartBar`, `pieceOneNotePerChord`, `pieceNotes` | Piece rounds only: as in `roundStarted.piece` (`pieceNotes` is `noteCount`). |
+        | `pieceChords` | Piece rounds only: `piece.chords`, or for rounds logged before it existed `topOrBottom` or `eachNote` from `oneNotePerChord`. |
         | `endReason`, `durationMs`, `pausedMs`, `score`, `attempts`, `bestStreak`, `averageResponseMs`, `bestScore`, `isNewBest` | From `roundEnded`. |
         | `accuracy` | `score / attempts`, 0–1. |
         | `notesToReview` | Space-separated. |

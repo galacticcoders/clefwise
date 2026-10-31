@@ -89,10 +89,15 @@ struct PieceContext: Codable, Equatable {
     var hand: String
     var order: String
     var startBar: Int
+    /// Only the top note of right-hand chords and the bottom note of left-hand ones: `chords` is
+    /// `topOrBottom`.
     var oneNotePerChord: Bool
     /// Notes this round asks, and bars in the part.
     var noteCount: Int
     var measureCount: Int
+    /// How chords are asked: `eachNote`, `topOrBottom` or `together` (`Game.PieceSettings.Chords`);
+    /// nil in rounds logged before the setting existed.
+    var chords: String? = nil
 }
 
 struct QuestionShown: Codable, Equatable {
@@ -121,6 +126,10 @@ struct QuestionShown: Codable, Equatable {
     var barView: Bool? = nil
     /// The staves the bar view drew, top to bottom: [1, 2] for a grand staff; nil outside it.
     var barStaves: [Int]? = nil
+    /// Notes asked together as one question ("All together") share a group id, and each says how
+    /// many they were; nil for a note asked on its own.
+    var group: UUID? = nil
+    var groupSize: Int? = nil
 }
 
 struct LoggedPitch: Codable, Equatable {
@@ -174,11 +183,20 @@ struct AnswerGiven: Codable, Equatable {
     /// How long the round was paused while this question was up; nil when it wasn't. `responseMs`
     /// leaves pauses out.
     var pausedMs: Int? = nil
+    /// Notes asked together are answered one `answerGiven` per note, all at once, as in their
+    /// `questionShown`: the same group id and size, response time, source, score and streak (after
+    /// the whole group). Each has its own `correct`, and the entry judged with it: the one matched
+    /// to it, or for a note named wrong one left over. Keystrokes go with the first note. Nil for a
+    /// note answered on its own.
+    var group: UUID? = nil
+    var groupSize: Int? = nil
 }
 
 struct Keystroke: Codable, Equatable {
     /// The character typed, a key name ("Return", "Delete"…), or "click ♯" / "click ♭" for the
-    /// note buttons' sign buttons.
+    /// note buttons' sign buttons. While notes are asked together, also clicks towards them:
+    /// "click Sol♯" (a note button), "piano G♯4" (a key chosen or taken back), "remove Sol♯" (an
+    /// entry taken back).
     var key: String
     /// Since the question appeared.
     var ms: Int
@@ -238,6 +256,8 @@ struct UnansweredQuestion: Codable, Equatable {
     var keystrokes: [Keystroke]
     /// How long the round was paused while it was up; nil when it wasn't.
     var pausedMs: Int? = nil
+    /// Notes asked together: their group, `question` being the first of them; nil otherwise.
+    var group: UUID? = nil
 }
 
 struct PieceOpened: Codable, Equatable {
