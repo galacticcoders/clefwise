@@ -260,6 +260,15 @@ private struct PartReader {
     /// Chord id for each staff of the chord being read; a chord on two staves is two chords.
     private var chordIDs: [Int: Int] = [:]
     private var nextChordID = 0
+    /// The `<beam>` levels written on the notes of the chord being read, per staff: every note of a
+    /// chord shares them, though some notation apps write them on the chord's first note only.
+    private var chordBeams: [Int: [Int: BeamPart]] = [:]
+    /// The `<beam>` levels each chord has in the score (level 1 is the eighth beam), by chord id.
+    private var writtenBeams: [Int: [Int: BeamPart]] = [:]
+    /// Whether the part has a `<beam>` anywhere. Without one, notes are beamed by the beat.
+    private var hasBeams = false
+    /// The `<time>` each measure gives, by measure number, and whether it's printed there.
+    private var timeChanges: [Int: (time: TimeSignature, printed: Bool)] = [:]
     /// nil for a clef we can't show.
     private var clefs = Timeline<Clef?>()
     private var keys = Timeline<KeySignature>()
@@ -323,7 +332,41 @@ private struct PartReader {
         for clef in attributes.children(named: "clef") {
             clefs.set(Self.clef(clef), at: now, staff: clef.intAttribute("number") ?? 1)
         }
+        // A time signature for one staff only is rare; take staff 1's, or failing that the first.
+        let times = attributes.children(named: "time")
+        if let time = times.first(where: { ($0.intAttribute("number") ?? 1) == 1 }) ?? times.first,
+           let signature = Self.timeSignature(time) {
+            timeChanges[measureCount] = (signature, time.attributes["print-object"] != "no")
+        }
     }
+
+    /// From a `<time>`: composite beats (3+2) and several fractions (3/8 + 2/4) are added up. nil
+    /// for `<senza-misura>` and for anything unreadable, which leave the time signature as it was.
+    private static func timeSignature(_ time: Element) -> TimeSignature? {
+        guard !time.has("senza-misura") else { return nil }
+        let beats = time.children(named: "beats").map { beats -> Int? in
+            let parts = beats.value.split(separator: "+").map { Int($0.trimmingCharacters(in: .whitespaces)) ?? 0 }
+            return parts.isEmpty || parts.contains { $0 <= 0 } ? nil : parts.reduce(0, +)
+        }
+        let beatTypes = time.children(named: "beat-type").map { Int($0.value) }
+        guard !beats.isEmpty, beats.count == beatTypes.count else { return nil }
+        var total = 0, unit = 1
+        for (count, beatType) in zip(beats, beatTypes) {
+            guard let count, let beatType, beatType > 0 else { return nil }
+            // Counted in the shortest beat so far: 3/8 + 2/4 is 7/8.
+            let common = unit / gcd(unit, beatType) * beatType
+            total = total * (common / unit) + count * (common / beatType)
+            unit = common
+        }
+        let symbol: TimeSignature.Symbol = switch (time.attributes["symbol"], total, unit) {
+        case ("common", 4, 4): .common
+        case ("cut", 2, 2): .cut
+        default: .numbers
+        }
+        return TimeSignature(beats: total, beatType: unit, symbol: symbol)
+    }
+
+    private static func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
 
     /// Treble is G on line 2 and bass F on line 4; anything else (alto, tenor, a treble with an
     /// 8 below, percussion, tablature) is a clef we can't show.
@@ -362,8 +405,10 @@ private struct PartReader {
             start = position
             chordStart = position
             chordIDs = [:]
+            chordBeams = [:]
             if !note.has("grace") { advance(by: note.double("duration") ?? 0) }
         }
+        if note.has("beam") { hasBeams = true }
 
         // Neither drawn nor read: ornaments, cues for another instrument, and hidden notes.
         guard !note.has("grace"), !note.has("cue"), note.attributes["print-object"] != "no" else { return }
@@ -371,6 +416,11 @@ private struct PartReader {
         let rest = note.child("rest")
         // The held-over end of a tie is drawn, but it isn't played again, so it isn't read.
         let tiedFromPrevious = rest == nil && Self.continuesTie(note)
+        // Rests aren't beamed. A chord's beams count even when written on a note that isn't drawn.
+        if rest == nil {
+            chordBeams[staff, default: [:]].merge(Self.beamLevels(note)) { first, _ in first }
+            if let id = chordIDs[staff] { writtenBeams[id] = chordBeams[staff] }
+        }
 
         let pitch: Pitch?
         let chord: Int
@@ -397,6 +447,7 @@ private struct PartReader {
                 nextChordID += 1
                 chord = nextChordID
                 chordIDs[staff] = chord
+                writtenBeams[chord] = chordBeams[staff]
             }
         }
 
@@ -431,6 +482,17 @@ private struct PartReader {
               let actual = modification.double("actual-notes"), let normal = modification.double("normal-notes"),
               actual > 0, normal > 0 else { return duration }
         return duration * actual / normal
+    }
+
+    /// A note's `<beam>` elements by level (`number`, 1 when it gives none).
+    private static func beamLevels(_ note: Element) -> [Int: BeamPart] {
+        var levels: [Int: BeamPart] = [:]
+        for beam in note.children(named: "beam") {
+            let level = beam.intAttribute("number") ?? 1
+            guard let part = BeamPart(musicXML: beam.text), level > 0, levels[level] == nil else { continue }
+            levels[level] = part
+        }
+        return levels
     }
 
     private static func continuesTie(_ note: Element) -> Bool {
@@ -498,8 +560,11 @@ private struct PartReader {
         var symbolIndices = [Int?](repeating: nil, count: symbols.count)
         var measures: [ScoreMeasure] = []
         measures.reserveCapacity(bars.count)
+        var time: TimeSignature?
         for (bar, members) in symbolsInBar.enumerated() {
             let (start, length) = bars[bar]
+            let timeChange = timeChanges[bar + 1]
+            if let timeChange { time = timeChange.time }
             let signs = barSigns(members, placements: placements)
             let ordered = members.sorted { drawsBefore($0, $1, placements: placements) }
             for (position, index) in ordered.enumerated() { symbolIndices[index] = position }
@@ -507,7 +572,7 @@ private struct PartReader {
                 ScoreMeasure.StaffStart(clef: clefInForce(at: start, staff: staff),
                                         keySignature: keyInForce(at: start, staff: staff))
             }
-            let drawn = ordered.map { index -> BarSymbol in
+            var drawn = ordered.map { index -> BarSymbol in
                 let symbol = symbols[index], placement = placements[index]!
                 let fillsBar = symbol.isMeasureRest || (symbol.pitch == nil && !symbol.hasType && length > 0
                     && abs(symbol.offset) < 1e-9 && symbol.duration >= length - 1e-9)
@@ -519,7 +584,14 @@ private struct PartReader {
                                  restPosition: symbol.restDisplay.map(placement.clef.position(of:)),
                                  isWholeBarRest: fillsBar)
             }
-            measures.append(ScoreMeasure(number: bar + 1, start: start, length: length, staves: staves, symbols: drawn))
+            let beams = hasBeams
+                ? beamsAsWritten(members, placements: placements)
+                : Beaming.byBeat(drawn, time: time, barLength: length, isFirstBar: bar == 0)
+            for index in drawn.indices where !drawn[index].isRest {
+                drawn[index].beams = beams[drawn[index].chord] ?? []
+            }
+            measures.append(ScoreMeasure(number: bar + 1, start: start, length: length, staves: staves, symbols: drawn,
+                                         time: time, printsTime: timeChange?.printed ?? false))
         }
         for (note, index) in noteSymbols.enumerated() { notes[note].symbolIndex = symbolIndices[index] }
 
@@ -544,6 +616,25 @@ private struct PartReader {
             named[voice] = number
             return number
         }
+    }
+
+    /// The beams the score writes for a bar's notes, by chord id, keeping only groups that can be
+    /// drawn. A group follows its voice in the order the score writes it, so one that strays onto
+    /// the other staff (cross-staff beaming) is seen whole and dropped.
+    private func beamsAsWritten(_ members: [Int], placements: [Placement?]) -> [Int: [BeamPart]] {
+        var voices: [Int: [Beaming.Note]] = [:]
+        var seen = Set<Int>()
+        for index in members {
+            let symbol = symbols[index]
+            guard symbol.pitch != nil, let voice = placements[index]?.voice, seen.insert(symbol.chord).inserted else { continue }
+            voices[voice, default: []].append(Beaming.Note(chord: symbol.chord, staff: symbol.staff, offset: symbol.offset,
+                                                           duration: symbol.duration, value: symbol.value, isRest: false))
+        }
+        var beams: [Int: [BeamPart]] = [:]
+        for notes in voices.values {
+            beams.merge(Beaming.written(notes) { writtenBeams[$0] ?? [:] }) { first, _ in first }
+        }
+        return beams
     }
 
     /// Draw order within a bar: by offset, then staff, then voice, rests first, then low to high.
@@ -599,6 +690,209 @@ private struct PartReader {
     private static func sign(for pitch: Pitch, printed: Accidental?, in key: KeySignature) -> Accidental? {
         if let printed, printed == pitch.accidental { return printed }
         return pitch.accidental == key.accidental(for: pitch.letter) ? nil : pitch.accidental
+    }
+}
+
+/// How a bar's notes are beamed: as the score's `<beam>` elements say, keeping only groups the bar
+/// view can draw, or, in a part that has none, by the beat.
+private enum Beaming {
+    /// A note (a chord counted once) or a rest, as beaming sees it.
+    struct Note {
+        let chord: Int
+        let staff: Int
+        /// Quarter notes from the start of the bar.
+        let offset: Double
+        let duration: Double
+        let value: NoteValue
+        let isRest: Bool
+    }
+
+    private static let tolerance = 1e-6
+
+    // MARK: Beams from the score
+
+    /// The beams each note of one voice keeps, by chord id. `notes` are the voice's notes in a bar,
+    /// a chord once, in the order the score writes them; `written` gives a chord's `<beam>` levels.
+    /// Level 1 has to begin, continue and end within the bar. A group that doesn't (it never ends,
+    /// it has no begin, a note in it has no level 1 beam) or that can't be drawn is dropped, and
+    /// its notes get flags.
+    static func written(_ notes: [Note], levels written: (Int) -> [Int: BeamPart]) -> [Int: [BeamPart]] {
+        var beams: [Int: [BeamPart]] = [:]
+        var group: [Note] = []
+        // The group being read started with a continue rather than a begin.
+        var stray = false
+        for note in notes {
+            switch written(note.chord)[1] {
+            case .begin?:
+                // A group still open never ended: it's dropped.
+                group = [note]
+                stray = false
+            case .continue?:
+                if group.isEmpty { stray = true }
+                group.append(note)
+            case .end?:
+                guard !group.isEmpty else { continue }
+                group.append(note)
+                if !stray, let parts = checked(group, levels: written) {
+                    for (note, parts) in zip(group, parts) { beams[note.chord] = parts }
+                }
+                group = []
+                stray = false
+            case .forwardHook?, .backwardHook?, nil:
+                // It breaks the group being read, which is dropped.
+                group = []
+                stray = false
+            }
+        }
+        return beams
+    }
+
+    /// A written group's beams level by level, or nil when the bar view can't draw them: notes on
+    /// both staves (cross-staff beaming), out of time order, or without a flag (a quarter or
+    /// longer); a level missing under a written one; or a higher level that isn't begin…end runs
+    /// and hooks along the beam under it. When the levels don't match the notes' flags (sixteenths
+    /// with one beam), level 1 stays and the others are worked out from the note values.
+    private static func checked(_ group: [Note], levels written: (Int) -> [Int: BeamPart]) -> [[BeamPart]]? {
+        guard group.count >= 2, Set(group.map(\.staff)).count == 1,
+              zip(group, group.dropFirst()).allSatisfy({ $0.offset + tolerance < $1.offset }),
+              group.allSatisfy({ $0.value.flags > 0 }) else { return nil }
+        var parts: [[BeamPart]] = []
+        for note in group {
+            let levels = written(note.chord)
+            let inOrder = (1...max(1, levels.count)).compactMap { levels[$0] }
+            guard inOrder.count == levels.count else { return nil }
+            parts.append(inOrder)
+        }
+        let deepest = parts.map(\.count).max() ?? 1
+        for level in stride(from: 2, through: deepest, by: 1) {
+            var open = false
+            for note in parts {
+                guard note.count >= level else {
+                    if open { return nil }
+                    continue
+                }
+                let part = note[level - 1], under = note[level - 2]
+                switch part {
+                case .begin, .continue:
+                    // A beam to the next note needs the one under it to go there too.
+                    guard open == (part == .continue), under == .begin || under == .continue else { return nil }
+                    open = true
+                case .end:
+                    guard open else { return nil }
+                    open = false
+                case .forwardHook:
+                    guard !open, [.begin, .continue, .forwardHook].contains(under) else { return nil }
+                case .backwardHook:
+                    guard !open, [.continue, .end, .backwardHook].contains(under) else { return nil }
+                }
+            }
+            if open { return nil }
+        }
+        if zip(group, parts).contains(where: { $0.value.flags != $1.count }) { return levels(for: group) }
+        return parts
+    }
+
+    // MARK: Beams by the beat
+
+    /// Beams for one bar of a part that writes none, by chord id. Within each beat, two or more
+    /// notes in a row on one staff and voice that have flags (eighths or shorter) are beamed, with
+    /// no rest, longer note or gap between them. A note that runs into the next beat isn't beamed.
+    /// Beats count from the start of the bar, or back from the end of a pickup (a first bar
+    /// shorter than its time signature). No time signature means 4/4.
+    static func byBeat(_ symbols: [BarSymbol], time: TimeSignature?, barLength: Double, isFirstBar: Bool) -> [Int: [BeamPart]] {
+        let time = time ?? TimeSignature(beats: 4, beatType: 4)
+        let beat = beatLength(of: time)
+        let fullBar = Double(time.beats) * 4 / Double(time.beatType)
+        let origin = isFirstBar && barLength > 0 && barLength + tolerance < fullBar
+            ? barLength - beat * (barLength / beat - tolerance).rounded(.up) : 0
+
+        // Each staff and voice's notes and rests, a chord once, by offset.
+        var lines: [[Int]: [Note]] = [:]
+        var seen = Set<Int>()
+        for symbol in symbols where seen.insert(symbol.chord).inserted {
+            lines[[symbol.staff, symbol.voice], default: []].append(
+                Note(chord: symbol.chord, staff: symbol.staff, offset: symbol.offset, duration: symbol.duration,
+                     value: symbol.value, isRest: symbol.isRest))
+        }
+        var beams: [Int: [BeamPart]] = [:]
+        for line in lines.values {
+            for group in groups(in: line, beat: beat, origin: origin) {
+                for (note, parts) in zip(group, levels(for: group)) { beams[note.chord] = parts }
+            }
+        }
+        return beams
+    }
+
+    /// One beat in quarter notes: a dotted quarter in 6/8, 9/8 and 12/8 (a dotted eighth in 6/16…),
+    /// otherwise the beat-type note (a quarter in 4/4, a half in 2/2, an eighth in 3/8).
+    static func beatLength(of time: TimeSignature) -> Double {
+        let note = 4 / Double(time.beatType)
+        return [6, 9, 12].contains(time.beats) && time.beatType >= 8 ? 3 * note : note
+    }
+
+    /// Runs of two or more notes with flags that follow on from each other within one beat.
+    private static func groups(in line: [Note], beat: Double, origin: Double) -> [[Note]] {
+        var groups: [[Note]] = [], group: [Note] = []
+        var groupBeat = 0.0
+        for note in line {
+            let beatIndex = ((note.offset - origin) / beat + tolerance).rounded(.down)
+            let beamable = !note.isRest && note.value.flags > 0
+                && note.offset + note.duration - origin <= (beatIndex + 1) * beat + tolerance
+            let follows = group.last.map { beatIndex == groupBeat && abs($0.offset + $0.duration - note.offset) < tolerance } ?? true
+            if !beamable || !follows {
+                if group.count >= 2 { groups.append(group) }
+                group = []
+            }
+            if beamable {
+                group.append(note)
+                groupBeat = beatIndex
+            }
+        }
+        if group.count >= 2 { groups.append(group) }
+        return groups
+    }
+
+    /// The beams of a group of two or more notes with flags. Level 1 joins them all. Level k joins
+    /// each run of two or more notes with k flags or more; a note with k flags whose neighbours have
+    /// fewer gets a hook instead.
+    static func levels(for group: [Note]) -> [[BeamPart]] {
+        var parts = group.indices.map { [$0 == 0 ? BeamPart.begin : $0 == group.count - 1 ? .end : .continue] }
+        let deepest = group.map(\.value.flags).max() ?? 1
+        for level in stride(from: 2, through: deepest, by: 1) {
+            var first = 0
+            while first < group.count {
+                guard group[first].value.flags >= level else {
+                    first += 1
+                    continue
+                }
+                var last = first
+                while last + 1 < group.count, group[last + 1].value.flags >= level { last += 1 }
+                if last > first {
+                    parts[first].append(.begin)
+                    for index in first + 1 ..< last { parts[index].append(.continue) }
+                    parts[last].append(.end)
+                } else {
+                    parts[first].append(hook(at: first, in: group, under: parts[first][level - 2], level: level))
+                }
+                first = last + 1
+            }
+        }
+        return parts
+    }
+
+    /// A hook points along the beam under it. Where that goes both ways, it points back to a dotted
+    /// note before it (a dotted eighth and a sixteenth), and otherwise forward.
+    private static func hook(at index: Int, in group: [Note], under: BeamPart, level: Int) -> BeamPart {
+        switch under {
+        case .begin, .forwardHook:
+            return .forwardHook
+        case .end, .backwardHook:
+            return .backwardHook
+        case .continue:
+            // The note before has the flags of the level under this one: an eighth for a sixteenth's hook.
+            let plain = pow(0.5, Double(level - 1))
+            return group[index - 1].value.quarters > plain + tolerance ? .backwardHook : .forwardHook
+        }
     }
 }
 
