@@ -13,10 +13,10 @@ struct PianoPad: View {
             highlight: highlight(for:),
             onPress: { game.answer($0) }
         )
-        .disabled(game.phase != .playing)
+        .disabled(!game.isTakingAnswers)
         // Fade as one layer, otherwise white key edges show through the dimmed black keys.
         .compositingGroup()
-        .opacity(game.phase == .playing ? 1 : 0.5)
+        .opacity(game.isTakingAnswers ? 1 : 0.5)
     }
 
     /// Keys are matched by sound: the piano calls a black key C♯ even when the question spells it D♭.

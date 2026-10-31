@@ -224,6 +224,8 @@ final class Game {
     private(set) var question: Question?
     /// True while a missed note is shown in red with its name before moving on.
     private(set) var isShowingMiss = false
+    /// True while a round is paused: its clock is stopped and answers don't count.
+    private(set) var isPaused = false
     private(set) var flash: Flash?
     /// What's been typed so far towards a note name, in keyboard mode.
     private(set) var typedText = ""
@@ -327,6 +329,13 @@ final class Game {
     @ObservationIgnored private var questionStart = ContinuousClock.now
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var pendingAdvance: Task<Void, Never>?
+    /// When the pause in progress began; nil when the round isn't paused.
+    @ObservationIgnored private var pausedAt: ContinuousClock.Instant?
+    /// Time paused so far this round, and while the question on screen was up.
+    @ObservationIgnored private var roundPaused = Duration.zero
+    @ObservationIgnored private var questionPaused = Duration.zero
+    /// The pause after a miss ran out during a pause: the next note comes when the round resumes.
+    @ObservationIgnored private var advancesOnResume = false
     @ObservationIgnored private let synth = Synth()
     /// Where usage events go (the usage log on disk in the app; memory in tests).
     @ObservationIgnored let recorder: UsageRecorder
@@ -657,6 +666,7 @@ final class Game {
         // Starting over mid-round drops the round in progress (only the log sees it end).
         recordRoundEnd(.abandoned)
         stopClock()
+        clearPause()
         score = 0
         attempts = 0
         streak = 0
@@ -684,6 +694,54 @@ final class Game {
     func stop() {
         guard phase == .playing else { return }
         finish(timeRanOut: false)
+    }
+
+    /// A round going and not paused: answers count.
+    var isTakingAnswers: Bool { phase == .playing && !isPaused }
+
+    /// Space and the Pause button: pauses the round in progress, or carries it on. Tests pass
+    /// `now`, as with `tick(at:)`.
+    func togglePause(via source: PauseSource = .button, at now: ContinuousClock.Instant = .now) {
+        if isPaused {
+            resume(via: source, at: now)
+        } else {
+            pause(via: source, at: now)
+        }
+    }
+
+    /// Stops the round's clock. The time shown, the response time of the note on screen and the
+    /// round's practice time all leave the pause out. Answers don't count until `resume`.
+    func pause(via source: PauseSource = .button, at now: ContinuousClock.Instant = .now) {
+        guard phase == .playing, !isPaused else { return }
+        isPaused = true
+        pausedAt = now
+        recordPause(via: source)
+    }
+
+    func resume(via source: PauseSource = .button, at now: ContinuousClock.Instant = .now) {
+        guard phase == .playing, isPaused, let pausedAt else { return }
+        let pause = max(now - pausedAt, .zero)
+        // Times are measured from these starts, so moving them on by the pause leaves it out.
+        roundStart += pause
+        questionStart += pause
+        roundPaused += pause
+        questionPaused += pause
+        self.pausedAt = nil
+        isPaused = false
+        recordResume(via: source, after: pause)
+        if advancesOnResume {
+            advancesOnResume = false
+            isShowingMiss = false
+            nextQuestion()
+        }
+    }
+
+    private func clearPause() {
+        isPaused = false
+        pausedAt = nil
+        roundPaused = .zero
+        questionPaused = .zero
+        advancesOnResume = false
     }
 
     func dismissSummary() {
@@ -747,6 +805,8 @@ final class Game {
         let reason: String
         if phase != .playing || question == nil {
             reason = "noRound"
+        } else if isPaused {
+            reason = "paused"
         } else if isShowingMiss {
             reason = "missPause"
         } else if !hasName {
@@ -783,6 +843,11 @@ final class Game {
             pendingAdvance = Task { [weak self] in
                 try? await Task.sleep(for: Self.missPause)
                 guard let self, !Task.isCancelled, self.phase == .playing else { return }
+                // Paused meanwhile: the miss stays up and the next note waits for the resume.
+                guard !self.isPaused else {
+                    self.advancesOnResume = true
+                    return
+                }
                 self.isShowingMiss = false
                 self.nextQuestion()
             }
@@ -806,12 +871,15 @@ final class Game {
         case 36, 76, 49: // Return, keypad Enter, Space
             if phase != .playing {
                 start(via: .key)
-            } else if keyCode != 49, settings.answerInput == .keyboard, accidentalsPossible {
+            } else if keyCode == 49 {
+                togglePause(via: .key)
+            } else if settings.answerInput == .keyboard, accidentalsPossible {
                 confirmTyping()
             }
             return true
         case 51 where settings.answerInput == .keyboard: // Delete (backspace)
-            if !typedText.isEmpty {
+            // Paused, the answer box is left as it is.
+            if !isPaused, !typedText.isEmpty {
                 typedText.removeLast()
                 settleKeystroke(.deleted)
             }
@@ -829,11 +897,11 @@ final class Game {
         // # or = arms a sharp and - a flat: "b" has to stay the note B.
         if settings.answerInput == .buttons {
             if accidentalsPossible, let accidental = Self.armingKeys[character] {
-                if phase == .playing {
+                if isTakingAnswers {
                     toggleArmedAccidental(accidental)
                     settleKeystroke(.armed)
                 } else {
-                    recordIgnored("noRound", from: .shortcut, detail: String(character))
+                    recordIgnored(isPaused ? "paused" : "noRound", from: .shortcut, detail: String(character))
                 }
                 return true
             }
@@ -884,8 +952,8 @@ final class Game {
     /// with (a bare "f" might still become "f♯", so that one waits for Return). Keystrokes that
     /// can't lead to any answer are dropped rather than counted as wrong, so typos aren't punished.
     private func type(_ character: Character) {
-        guard !isShowingMiss else {
-            recordIgnored("missPause", from: .typing, detail: String(character))
+        guard !isPaused, !isShowingMiss else {
+            recordIgnored(isPaused ? "paused" : "missPause", from: .typing, detail: String(character))
             return
         }
         let answers = typeableAnswers
@@ -925,7 +993,7 @@ final class Game {
 
     /// The round clock, ten times a second. Tests pass a later `now` to run a sprint out.
     func tick(at now: ContinuousClock.Instant = .now) {
-        guard phase == .playing else { return }
+        guard phase == .playing, !isPaused else { return }
         let seconds = Self.seconds(from: roundStart, to: now)
         // Only publish whole-second changes so the UI doesn't redraw ten times a second.
         if Int(seconds) != Int(elapsed) { elapsed = seconds }
@@ -955,6 +1023,7 @@ final class Game {
             isNewBest = true
         }
         recordRoundEnd(timeRanOut ? .timeUp : finishedPiece ? .pieceComplete : .stopped, isNewBest: isNewBest)
+        clearPause()
         // A practice round stopped before any answer has nothing to sum up.
         guard attempts > 0 || settings.mode == .sprint else {
             phase = .idle
@@ -1000,6 +1069,7 @@ final class Game {
     private func abandonRound(as reason: RoundEndReason = .abandoned) {
         recordRoundEnd(reason)
         stopClock()
+        clearPause()
         isShowingMiss = false
         flash = nil
         typedText = ""
@@ -1034,9 +1104,21 @@ final class Game {
         return Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
     }
 
-    /// Since `start`, to the nearest millisecond: how the log keeps times.
-    private static func milliseconds(since start: ContinuousClock.Instant) -> Int {
-        Int((seconds(from: start) * 1000).rounded())
+    /// Since `start`, to the nearest millisecond (how the log keeps times), up to the start of
+    /// the pause in progress if there is one.
+    private func activeMilliseconds(since start: ContinuousClock.Instant) -> Int {
+        Int((Self.seconds(from: start, to: pausedAt ?? .now) * 1000).rounded())
+    }
+
+    private static func milliseconds(_ duration: Duration) -> Int {
+        let components = duration.components
+        return Int((Double(components.seconds) * 1000 + Double(components.attoseconds) / 1e15).rounded())
+    }
+
+    /// Time paused so far, the pause in progress included; nil when there was none, as the log has it.
+    private func pausedMilliseconds(_ paused: Duration) -> Int? {
+        let total = paused + (pausedAt.map { .now - $0 } ?? .zero)
+        return total > .zero ? Self.milliseconds(total) : nil
     }
 
     // MARK: - Picking notes
@@ -1080,6 +1162,7 @@ final class Game {
     private func show(_ question: Question, pickChance: Double?) {
         self.question = question
         questionStart = .now
+        questionPaused = .zero
         recordQuestionShown(pickChance: pickChance)
     }
 
@@ -1245,7 +1328,7 @@ final class Game {
     /// Adds a key to the keystrokes of the question on screen, if one is up and not yet answered;
     /// what the key does then settles its result.
     private func noteKeystroke(_ key: String) {
-        questionLog?.keystrokes.append(Keystroke(key: key, ms: Self.milliseconds(since: questionStart), result: .other))
+        questionLog?.keystrokes.append(Keystroke(key: key, ms: activeMilliseconds(since: questionStart), result: .other))
         questionLog?.keyPending = true
     }
 
@@ -1262,7 +1345,7 @@ final class Game {
         guard let roundLog, let questionLog else { return }
         self.questionLog = nil
         recorder.record(.answerGiven(AnswerGiven(
-            round: roundLog.id, question: questionLog.id, responseMs: Self.milliseconds(since: questionStart),
+            round: roundLog.id, question: questionLog.id, responseMs: activeMilliseconds(since: questionStart),
             source: source, letter: response.letter.name, accidental: response.accidental.rawValue,
             // Names leave the octave out, so any will do for a named answer.
             name: settings.naming.name(of: response.pitch ?? Pitch(response.letter, 4, response.accidental)),
@@ -1270,7 +1353,20 @@ final class Game {
             wrongOctave: response.pitch.map {
                 $0.pitchClass == question.pitch.pitchClass && $0.midiNumber != question.pitch.midiNumber
             },
-            keystrokes: questionLog.keystrokes, scoreAfter: score, streakAfter: streak)))
+            keystrokes: questionLog.keystrokes, scoreAfter: score, streakAfter: streak,
+            pausedMs: pausedMilliseconds(questionPaused))))
+    }
+
+    private func recordPause(via source: PauseSource) {
+        guard let roundLog else { return }
+        recorder.record(.roundPaused(RoundPaused(round: roundLog.id, question: questionLog?.id, via: source,
+                                                 activeMs: activeMilliseconds(since: roundStart))))
+    }
+
+    private func recordResume(via source: PauseSource, after pause: Duration) {
+        guard let roundLog else { return }
+        recorder.record(.roundResumed(RoundResumed(round: roundLog.id, question: questionLog?.id, via: source,
+                                                   pausedMs: Self.milliseconds(pause))))
     }
 
     private func recordIgnored(_ reason: String, from source: AnswerSource, detail: String) {
@@ -1281,12 +1377,13 @@ final class Game {
     private func recordRoundEnd(_ reason: RoundEndReason, isNewBest: Bool = false) {
         guard let roundLog else { return }
         let unanswered = questionLog.map {
-            UnansweredQuestion(question: $0.id, shownMs: Self.milliseconds(since: questionStart), keystrokes: $0.keystrokes)
+            UnansweredQuestion(question: $0.id, shownMs: activeMilliseconds(since: questionStart), keystrokes: $0.keystrokes,
+                               pausedMs: pausedMilliseconds(questionPaused))
         }
         self.roundLog = nil
         questionLog = nil
         recorder.record(.roundEnded(RoundEnded(
-            round: roundLog.id, reason: reason, durationMs: Self.milliseconds(since: roundStart),
+            round: roundLog.id, reason: reason, durationMs: activeMilliseconds(since: roundStart), pausedMs: pausedMilliseconds(roundPaused),
             score: score, attempts: attempts, bestStreak: bestStreak,
             averageResponseMs: averageResponseTime.map { Int(($0 * 1000).rounded()) },
             bestScore: settings.mode == .sprint ? bestScore : nil, isNewBest: isNewBest,

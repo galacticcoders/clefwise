@@ -22,6 +22,8 @@ enum UsageEvent: Equatable {
     case questionShown(QuestionShown)
     case answerGiven(AnswerGiven)
     case inputIgnored(InputIgnored)
+    case roundPaused(RoundPaused)
+    case roundResumed(RoundResumed)
     case roundEnded(RoundEnded)
     case pieceOpened(PieceOpened)
     case pieceOpenFailed(PieceOpenFailed)
@@ -169,6 +171,9 @@ struct AnswerGiven: Codable, Equatable {
     var keystrokes: [Keystroke]
     var scoreAfter: Int
     var streakAfter: Int
+    /// How long the round was paused while this question was up; nil when it wasn't. `responseMs`
+    /// leaves pauses out.
+    var pausedMs: Int? = nil
 }
 
 struct Keystroke: Codable, Equatable {
@@ -188,10 +193,32 @@ struct InputIgnored: Codable, Equatable {
     var detail: String?
 }
 
+/// The round's clock stopped: the Pause button or Space.
+struct RoundPaused: Codable, Equatable {
+    var round: UUID
+    /// The question on screen, if one was.
+    var question: UUID?
+    var via: PauseSource
+    /// Round time so far, earlier pauses left out.
+    var activeMs: Int
+}
+
+/// The round carried on after a pause.
+struct RoundResumed: Codable, Equatable {
+    var round: UUID
+    var question: UUID?
+    var via: PauseSource
+    /// How long this pause lasted.
+    var pausedMs: Int
+}
+
 struct RoundEnded: Codable, Equatable {
     var round: UUID
     var reason: RoundEndReason
+    /// How long the round ran, pauses left out.
     var durationMs: Int
+    /// Time spent paused; nil when the round never was.
+    var pausedMs: Int? = nil
     var score: Int
     var attempts: Int
     var bestStreak: Int
@@ -206,8 +233,11 @@ struct RoundEnded: Codable, Equatable {
 /// A question left without an answer: how long it was up and the keys pressed meanwhile.
 struct UnansweredQuestion: Codable, Equatable {
     var question: UUID
+    /// How long it was up, pauses left out.
     var shownMs: Int
     var keystrokes: [Keystroke]
+    /// How long the round was paused while it was up; nil when it wasn't.
+    var pausedMs: Int? = nil
 }
 
 struct PieceOpened: Codable, Equatable {
@@ -251,6 +281,11 @@ struct StatsSnapshot: Codable, Equatable {
 
 enum StartSource: String, Codable, Equatable {
     case button, key, playAgain
+}
+
+enum PauseSource: String, Codable, Equatable {
+    /// The Pause/Resume button; Space.
+    case button, key
 }
 
 enum AnswerSource: String, Codable, Equatable {
@@ -365,6 +400,8 @@ extension UsageEvent {
         case .questionShown: "questionShown"
         case .answerGiven: "answerGiven"
         case .inputIgnored: "inputIgnored"
+        case .roundPaused: "roundPaused"
+        case .roundResumed: "roundResumed"
         case .roundEnded: "roundEnded"
         case .pieceOpened: "pieceOpened"
         case .pieceOpenFailed: "pieceOpenFailed"
@@ -385,6 +422,8 @@ extension UsageEvent {
         case .questionShown(let payload): payload
         case .answerGiven(let payload): payload
         case .inputIgnored(let payload): payload
+        case .roundPaused(let payload): payload
+        case .roundResumed(let payload): payload
         case .roundEnded(let payload): payload
         case .pieceOpened(let payload): payload
         case .pieceOpenFailed(let payload): payload
@@ -405,6 +444,8 @@ extension UsageEvent {
         case "questionShown": self = .questionShown(try QuestionShown(from: decoder))
         case "answerGiven": self = .answerGiven(try AnswerGiven(from: decoder))
         case "inputIgnored": self = .inputIgnored(try InputIgnored(from: decoder))
+        case "roundPaused": self = .roundPaused(try RoundPaused(from: decoder))
+        case "roundResumed": self = .roundResumed(try RoundResumed(from: decoder))
         case "roundEnded": self = .roundEnded(try RoundEnded(from: decoder))
         case "pieceOpened": self = .pieceOpened(try PieceOpened(from: decoder))
         case "pieceOpenFailed": self = .pieceOpenFailed(try PieceOpenFailed(from: decoder))
