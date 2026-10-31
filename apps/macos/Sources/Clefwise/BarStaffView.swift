@@ -4,12 +4,13 @@ import SwiftUI
 /// note and rest with its real note value, and the note being asked picked out.
 ///
 /// `BarLayout` decides where everything goes; this view measures the text it needs and inks it.
-/// Notes already answered are drawn muted; the note being asked gets `currentColor` on a soft band.
+/// Notes already answered are drawn muted; the notes being asked get `currentColor` on a soft band.
+/// While marks show, each marked note is drawn right or wrong, the wrong ones with their names.
 struct BarStaffView: View {
     let bar: BarDisplay
-    /// The note being asked: the accent colour, or `Theme.wrong` while a miss is shown.
+    /// The notes being asked: the accent colour, or `Theme.wrong` while a miss is shown.
     var currentColor: Color = Theme.accent
-    /// Shown in a pill by the note being asked, e.g. the answer after a miss.
+    /// Shown in a pill by the note being asked, e.g. the answer after a miss. Not shown while marks are.
     var currentLabel: String?
     /// Names every line and space of each staff over its `positions`, like `StaffView`'s hints.
     var showsHints = false
@@ -44,42 +45,27 @@ struct BarStaffView: View {
             }
             metrics.hintWidth = widest / unit
         }
-        if let currentLabel {
+        if let currentLabel, bar.marks.isEmpty {
             let size = context.resolve(StaffDrawing.pillText(currentLabel, size: 0.8 * unit)).measure(in: bounds)
             metrics.labelSize = CGSize(width: size.width / unit, height: size.height / unit)
+        }
+        for (symbol, mark) in bar.marks {
+            guard case .wrong(let name) = mark else { continue }
+            let size = context.resolve(StaffDrawing.pillText(name, size: 0.8 * unit)).measure(in: bounds)
+            metrics.markSizes[symbol] = CGSize(width: size.width / unit, height: size.height / unit)
         }
         return metrics
     }
 
     // MARK: - Drawing
 
-    private enum Ink {
-        case normal, muted, current
-    }
-
-    private func ink(for symbol: Int) -> Ink {
-        if symbol == bar.current { return .current }
-        return bar.answered.contains(symbol) ? .muted : .normal
-    }
-
-    /// A stem, flags or ledger lines: the note's own colour on a single note; on a chord, muted
-    /// only once every note in it is answered (the note being asked colours just its head and sign).
-    /// A beamed note's stem goes with its group's beams, muted once every note they join is answered.
-    private func ink(for chord: BarLayout.Chord, in layout: BarLayout) -> Ink {
-        if let beam = chord.beam { return ink(for: layout.beams[beam]) }
-        if chord.heads.count == 1 { return ink(for: chord.heads[0].symbol) }
-        return chord.heads.allSatisfy { bar.answered.contains($0.symbol) } ? .muted : .normal
-    }
-
-    private func ink(for beam: BarLayout.Beam) -> Ink {
-        beam.symbols.allSatisfy(bar.answered.contains) ? .muted : .normal
-    }
+    private typealias Ink = BarLayout.Role
 
     private func draw(_ layout: BarLayout, in context: inout GraphicsContext) {
         let s = layout.space
         guard s > 0 else { return }
 
-        if let band = layout.highlight {
+        for band in layout.highlights {
             context.fill(Path(roundedRect: band, cornerRadius: min(band.width / 2, s * 0.9)),
                          with: .color(currentColor.opacity(0.11)))
         }
@@ -93,10 +79,11 @@ struct BarStaffView: View {
         muted.drawLayer { layer in
             drawMusic(layout, only: [.muted], in: &layer)
         }
-        drawMusic(layout, only: [.normal, .current], in: &context)
+        drawMusic(layout, only: [.normal, .asked, .right, .wrong], in: &context)
 
         drawOctaveMarks(layout, in: &context)
         drawLabel(layout, in: &context)
+        drawMarkPills(layout, in: &context)
     }
 
     private func drawStaves(_ layout: BarLayout, in context: inout GraphicsContext) {
@@ -149,7 +136,9 @@ struct BarStaffView: View {
         let s = layout.space
         func color(_ ink: Ink) -> Color {
             switch ink {
-            case .current: currentColor
+            case .asked: currentColor
+            case .right: Theme.correct
+            case .wrong: Theme.wrong
             case .normal, .muted: Theme.ink
             }
         }
@@ -176,20 +165,20 @@ struct BarStaffView: View {
 
         // Beams in ink, muted once every note they join is answered.
         for beam in layout.beams {
-            for segment in beam.segments { fill(segment.path, ink(for: beam)) }
+            for segment in beam.segments { fill(segment.path, layout.role(of: beam)) }
         }
 
         for chord in layout.chords {
             let staff = layout.staves[chord.staff].geometry
-            let chordInk = ink(for: chord, in: layout)
+            let chordInk = layout.role(of: chord)
             // Ledger lines stay in ink, as `StaffView` draws them.
-            for line in chord.ledgers { ledger(line, chordInk == .current ? .normal : chordInk, staff) }
+            for line in chord.ledgers { ledger(line, chordInk == .muted ? .muted : .normal, staff) }
             if let stem = chord.stem { fill(Path(stem), chordInk) }
             if let origin = chord.flagOrigin {
                 fill(BarLayout.flagPath(chord.flags, at: origin, up: chord.stemUp, space: s), chordInk)
             }
             for head in chord.heads {
-                let headInk = ink(for: head.symbol)
+                let headInk = layout.role(of: head.symbol)
                 fill(placed(NoteShapes.head(head.kind), at: head.center), headInk)
                 if let accidental = head.accidental, let frame = head.accidentalFrame {
                     fill(StaffDrawing.accidentalPath(accidental, at: head.position, staff).offsetBy(dx: frame.minX, dy: 0), headInk)
@@ -200,7 +189,7 @@ struct BarStaffView: View {
         }
 
         for tie in layout.ties {
-            let tieInk: Ink = ink(for: tie.symbol) == .muted ? .muted : .normal
+            let tieInk: Ink = layout.role(of: tie.symbol) == .muted ? .muted : .normal
             fill(NoteShapes.tie(from: tie.start, to: tie.end, up: tie.up, space: s), tieInk)
         }
 
@@ -213,7 +202,7 @@ struct BarStaffView: View {
     private func drawOctaveMarks(_ layout: BarLayout, in context: inout GraphicsContext) {
         let s = layout.space
         for mark in layout.octaveMarks {
-            let muted = mark.symbols.allSatisfy { bar.answered.contains($0) }
+            let muted = mark.symbols.allSatisfy { layout.role(of: $0) == .muted }
             let color = muted ? Theme.ink.opacity(0.3) : Theme.ink
             context.fill(StaffDrawing.octaveMarkPath(mark.shift, left: mark.textLeft, middle: mark.lineY, space: s),
                          with: .color(color))
@@ -227,5 +216,15 @@ struct BarStaffView: View {
         let text = context.resolve(StaffDrawing.pillText(currentLabel, size: layout.space * 0.8).foregroundStyle(.white))
         context.fill(Path(roundedRect: pill, cornerRadius: pill.height / 2), with: .color(currentColor))
         context.draw(text, at: CGPoint(x: pill.midX, y: pill.midY))
+    }
+
+    /// Each wrong note's name, white on `Theme.wrong`.
+    private func drawMarkPills(_ layout: BarLayout, in context: inout GraphicsContext) {
+        for pill in layout.markPills {
+            guard case .wrong(let name) = bar.marks[pill.symbol] else { continue }
+            let text = context.resolve(StaffDrawing.pillText(name, size: pill.fontSize).foregroundStyle(.white))
+            context.fill(Path(roundedRect: pill.rect, cornerRadius: pill.rect.height / 2), with: .color(Theme.wrong))
+            context.draw(text, at: CGPoint(x: pill.rect.midX, y: pill.rect.midY))
+        }
     }
 }
