@@ -81,6 +81,44 @@ struct ScoreMeasure: Hashable {
     /// Every note and rest drawn in the bar, on all staves: by offset, then staff, then voice,
     /// then low to high (rests before notes at the same offset and voice).
     let symbols: [BarSymbol]
+    /// The time signature in force in this bar; nil when the score gives none.
+    var time: TimeSignature? = nil
+    /// The score writes the time signature at the start of this bar (the first bar, or a change),
+    /// so the bar view draws it there, after the key signature.
+    var printsTime = false
+}
+
+/// A time signature: 3/4, 6/8, or common or cut time.
+struct TimeSignature: Hashable {
+    enum Symbol: Hashable {
+        /// Two numbers, one above the other.
+        case numbers
+        /// 𝄴 for 4/4 and 𝄵 for 2/2, when the score asks for them (`<time symbol="common">`).
+        case common, cut
+    }
+
+    let beats: Int
+    let beatType: Int
+    var symbol = Symbol.numbers
+}
+
+/// One beam level's part for a note, as in MusicXML's `<beam>`: a beamed group of eighths begins,
+/// continues and ends on level 1; sixteenths add level 2 within it, and so on. A hook is a short
+/// partial beam that only this note has, pointing forward (right) or backward (left).
+enum BeamPart: Hashable {
+    case begin, `continue`, end, forwardHook, backwardHook
+
+    /// From the text of a `<beam>` element; nil for anything else.
+    init?(musicXML text: String) {
+        switch text.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "begin": self = .begin
+        case "continue": self = .continue
+        case "end": self = .end
+        case "forward hook": self = .forwardHook
+        case "backward hook": self = .backwardHook
+        default: return nil
+        }
+    }
 }
 
 /// A note or rest as drawn in a bar. Notes the bar view can't draw are left out, like the
@@ -122,6 +160,11 @@ struct BarSymbol: Hashable {
     /// A rest that fills the whole bar, drawn as a whole rest in the middle of the bar whatever
     /// the time signature (`<rest measure="yes">`, or a rest lasting the whole bar with no type).
     let isWholeBarRest: Bool
+    /// How the note is beamed to its neighbours, level by level: `beams[0]` is the eighth beam,
+    /// `beams[1]` the sixteenth beam… Empty for a note drawn with flags (or none) and for rests.
+    /// Every note of a beamed chord carries the chord's beams. Beams join notes on one staff and
+    /// voice, within the bar.
+    var beams: [BeamPart] = []
 
     var isRest: Bool { pitch == nil }
 

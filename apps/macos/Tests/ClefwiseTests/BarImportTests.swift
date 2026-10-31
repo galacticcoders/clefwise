@@ -176,6 +176,29 @@ private func close(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-9 }
         #expect(measure.symbols[index].pitch == carried.pitch && measure.symbols[index].accidental == nil)
     }
 
+    @Test func beamsAsTheScoreWritesThem() {
+        let measures = piano.measures
+        // The pickup's two eighths; the left hand's eighths in fours, as written.
+        #expect(measures[0].beamMarks() == ["[", "]"])
+        #expect(measures[1].beamMarks(staff: 2) == ["[", "=", "=", "]", "[", "=", "=", "]"])
+        // An eighth after a dotted quarter has a flag of its own.
+        #expect(measures[1].beamMarks() == ["-", "-", "-", "-"])
+        // A dotted eighth and a sixteenth, with a backward hook; a run of sixteenths.
+        #expect(measures[2].beamMarks() == ["-", "[", "]<", "-"])
+        #expect(measures[4].beamMarks() == ["-", "[[", "==", "==", "]]", "-", "-"])
+        // The triplet; the second voice's eighth after its rest isn't beamed.
+        #expect(measures[6].beamMarks().prefix(3) == ["[", "=", "]"])
+        #expect(measures[5].beamMarks(staff: 1, voice: 2) == ["r", "-", "-", "r"])
+        // Bars of chords and whole notes have none.
+        #expect(measures[8].symbols.allSatisfy { $0.beams.isEmpty } && measures[9].symbols.allSatisfy { $0.beams.isEmpty })
+        #expect(measures.flatMap(\.symbols).filter { !$0.beams.isEmpty }.count == 63)
+    }
+
+    @Test func timeSignature() {
+        #expect(piano.measures.allSatisfy { $0.time == TimeSignature(beats: 4, beatType: 4) })
+        #expect(piano.measures.map(\.printsTime) == [true] + Array(repeating: false, count: 9))
+    }
+
     @Test func notesStayInReadingOrder() {
         // The bar layout doesn't change the notes: lower staff first, then low to high.
         #expect(piano.notes.prefix(8).map(\.pitch.name) == ["B4", "E5", "E2", "G5", "B2", "E3", "G3", "F♯5"])
@@ -363,6 +386,33 @@ private func close(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-9 }
         #expect(clarinet.measures.flatMap(\.symbols).map(\.stemUp) == [true, true, false, false, false, false, false])
         #expect(clarinet.measures[1].symbols.map(\.signed) == ["D♯5 ♯", "E5", "C5"])
     }
+
+    @Test func beamsAsWrittenOrByTheBeat() throws {
+        // Written beams: the clarinet's pair of eighths and the cello's triplet.
+        #expect(try onlyPart("clarinet-tune.mxl").measures.map { $0.beamMarks() } == [["-", "[", "]", "-"], ["-", "-", "-"]])
+        let cello = try onlyPart("bar-values.musicxml")
+        #expect(cello.measures[0].beamMarks() == ["-", "[", "=", "]", "r"])
+        // A sixteenth after a double-dotted quarter has nothing to join.
+        #expect(cello.measures[3].beamMarks() == ["-", "-", "r"])
+        // The others write no beams and have no two eighths in a beat: the pickup's eighth stays
+        // on its own after its rest.
+        #expect(try onlyPart("ties-rests-grace.musicxml").measures[0].beamMarks() == ["r", "-"])
+        for name in ["grand-staff.musicxml", "accidentals.musicxml", "bar-signs.musicxml", "ottava.musicxml",
+                     "clefs.musicxml", "ties-rests-grace.musicxml", "voice-and-piano.musicxml"] {
+            #expect(try load(name).parts.allSatisfy { $0.measures.allSatisfy { $0.symbols.allSatisfy { $0.beams.isEmpty } } }, "\(name)")
+        }
+    }
+
+    @Test func timeSignatures() throws {
+        let common = TimeSignature(beats: 4, beatType: 4), threeFour = TimeSignature(beats: 3, beatType: 4)
+        #expect(try onlyPart("grand-staff.musicxml").measures.map(\.time) == [common, common, common])
+        #expect(try onlyPart("bar-values.musicxml").measures.allSatisfy { $0.time == threeFour })
+        let flute = try onlyPart("ties-rests-grace.musicxml")
+        #expect(flute.measures.map(\.time) == Array(repeating: threeFour, count: 4))
+        #expect(flute.measures.map(\.printsTime) == [true, false, false, false])
+        // Every part reads its own.
+        #expect(try load("voice-and-piano.musicxml").parts.allSatisfy { $0.measures.map(\.printsTime) == [true, false] })
+    }
 }
 
 @Suite struct BarLayoutInvariantTests {
@@ -370,6 +420,7 @@ private func close(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-9 }
         "bar-view.musicxml", "bar-signs.musicxml", "bar-values.musicxml", "grand-staff.musicxml",
         "accidentals.musicxml", "ties-rests-grace.musicxml", "ottava.musicxml", "clefs.musicxml",
         "voice-and-piano.musicxml", "clarinet-tune.musicxml", "clarinet-tune.mxl",
+        "beams.musicxml", "auto-beams.musicxml",
     ]
 
     @Test(arguments: fixtures) func everyNoteFindsItsSymbol(_ name: String) throws {

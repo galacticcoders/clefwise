@@ -70,3 +70,25 @@ import Testing
         #expect(withoutLayout.symbol(for: note) == nil)
     }
 }
+
+@Suite struct BeamAndTimeTests {
+    @Test func beamPartsReadFromMusicXML() {
+        #expect(BeamPart(musicXML: "begin") == .begin)
+        #expect(BeamPart(musicXML: "continue") == .continue)
+        #expect(BeamPart(musicXML: " end\n") == .end)
+        #expect(BeamPart(musicXML: "forward hook") == .forwardHook)
+        #expect(BeamPart(musicXML: "backward hook") == .backwardHook)
+        #expect(BeamPart(musicXML: "middle") == nil)
+    }
+
+    @Test func barsAndSymbolsDefaultToNoTimeAndNoBeams() {
+        let measure = ScoreMeasure(number: 1, start: 0, length: 4, staves: [.init(clef: .treble, keySignature: .cMajor)],
+                                   symbols: [])
+        #expect(measure.time == nil && !measure.printsTime)
+        let rest = BarSymbol(pitch: nil, clef: .treble, staff: 1, voice: 1, offset: 0, duration: 4,
+                             value: NoteValue(.whole), octaveShift: 0, accidental: nil, stemUp: nil, chord: 1,
+                             tiedToNext: false, tiedFromPrevious: false, restPosition: nil, isWholeBarRest: true)
+        #expect(rest.beams.isEmpty)
+        #expect(TimeSignature(beats: 6, beatType: 8).symbol == .numbers)
+    }
+}

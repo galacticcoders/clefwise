@@ -48,10 +48,6 @@ struct BarStaffView: View {
             let size = context.resolve(StaffDrawing.pillText(currentLabel, size: 0.8 * unit)).measure(in: bounds)
             metrics.labelSize = CGSize(width: size.width / unit, height: size.height / unit)
         }
-        for shift in [-2, -1, 1, 2] {
-            let text = context.resolve(Text(StaffDrawing.octaveLabel(shift)).font(StaffDrawing.octaveFont(size: 0.85 * unit)))
-            metrics.octaveTextWidths[shift] = text.measure(in: bounds).width / unit
-        }
         return metrics
     }
 
@@ -68,9 +64,15 @@ struct BarStaffView: View {
 
     /// A stem, flags or ledger lines: the note's own colour on a single note; on a chord, muted
     /// only once every note in it is answered (the note being asked colours just its head and sign).
-    private func ink(for chord: BarLayout.Chord) -> Ink {
+    /// A beamed note's stem goes with its group's beams, muted once every note they join is answered.
+    private func ink(for chord: BarLayout.Chord, in layout: BarLayout) -> Ink {
+        if let beam = chord.beam { return ink(for: layout.beams[beam]) }
         if chord.heads.count == 1 { return ink(for: chord.heads[0].symbol) }
         return chord.heads.allSatisfy { bar.answered.contains($0.symbol) } ? .muted : .normal
+    }
+
+    private func ink(for beam: BarLayout.Beam) -> Ink {
+        beam.symbols.allSatisfy(bar.answered.contains) ? .muted : .normal
     }
 
     private func draw(_ layout: BarLayout, in context: inout GraphicsContext) {
@@ -84,9 +86,11 @@ struct BarStaffView: View {
 
         drawStaves(layout, in: &context)
 
-        // Answered notes in one translucent layer, so where their parts overlap they don't darken.
-        context.drawLayer { layer in
-            layer.opacity = 0.3
+        // Answered notes in one translucent layer, so where their parts overlap (a stem under its beam)
+        // they don't darken: the layer is drawn opaque, then laid down at 30%.
+        var muted = context
+        muted.opacity = 0.3
+        muted.drawLayer { layer in
             drawMusic(layout, only: [.muted], in: &layer)
         }
         drawMusic(layout, only: [.normal, .current], in: &context)
@@ -103,6 +107,9 @@ struct BarStaffView: View {
             let clefEnd = StaffDrawing.drawClef(staff.display.clef, in: &context, geometry, left: staff.clefLeft)
             _ = StaffDrawing.drawKeySignature(staff.display.keySignature, clef: staff.display.clef, after: clefEnd,
                                               in: &context, geometry)
+            if let time = layout.timeSignature {
+                context.fill(BarLayout.timeSignaturePath(time, left: layout.timeSignatureLeft, geometry), with: .color(Theme.ink))
+            }
             if let hints = layout.hints {
                 let names = StaffDrawing.hintNames(for: staff.display.positions, clef: staff.endClef,
                                                    keySignature: staff.display.keySignature, naming: naming)
@@ -121,7 +128,7 @@ struct BarStaffView: View {
             // The brace, and the opening bar line joining the staves.
             let brace = NoteShapes.brace(height: (bottom - top) / s)
                 .applying(CGAffineTransform(scaleX: s, y: s)
-                    .concatenating(CGAffineTransform(translationX: layout.staffLeft - 0.4 * s, y: top)))
+                    .concatenating(CGAffineTransform(translationX: layout.staffLeft - 0.3 * s, y: top)))
             context.fill(brace, with: .color(Theme.ink))
             context.fill(Path(CGRect(x: layout.staffLeft, y: top, width: thin, height: bottom - top)), with: .color(Theme.ink))
         }
@@ -149,42 +156,43 @@ struct BarStaffView: View {
         func fill(_ path: Path, _ ink: Ink) {
             if inks.contains(ink) { context.fill(path, with: .color(color(ink))) }
         }
+        func placed(_ shape: Path, at origin: CGPoint) -> Path {
+            shape.applying(CGAffineTransform(scaleX: s, y: s).concatenating(CGAffineTransform(translationX: origin.x, y: origin.y)))
+        }
         func dot(_ center: CGPoint, _ ink: Ink) {
-            let r = NoteShapes.dotRadius * s
-            fill(Path(ellipseIn: CGRect(x: center.x - r, y: center.y - r, width: 2 * r, height: 2 * r)), ink)
+            fill(placed(NoteShapes.dot, at: center), ink)
         }
         func ledger(_ ledger: BarLayout.Ledger, _ ink: Ink, _ staff: StaffGeometry) {
-            guard inks.contains(ink) else { return }
-            var path = Path()
-            path.move(to: CGPoint(x: ledger.left, y: ledger.y))
-            path.addLine(to: CGPoint(x: ledger.right, y: ledger.y))
-            context.stroke(path, with: .color(color(ink)), lineWidth: staff.lineWidth * 1.3)
+            fill(Path(CGRect(x: ledger.left, y: ledger.y - staff.ledgerWidth / 2, width: ledger.right - ledger.left,
+                             height: staff.ledgerWidth)), ink)
         }
 
         for rest in layout.rests {
             let staff = layout.staves[rest.staff].geometry
             if let line = rest.ledger { ledger(line, .normal, staff) }
-            fill(NoteShapes.rest(rest.kind).applying(CGAffineTransform(scaleX: s, y: s)
-                .concatenating(CGAffineTransform(translationX: rest.origin.x, y: rest.origin.y))), .normal)
+            fill(placed(NoteShapes.rest(rest.kind), at: rest.origin), .normal)
             for center in rest.dots { dot(center, .normal) }
+        }
+
+        // Beams in ink, muted once every note they join is answered.
+        for beam in layout.beams {
+            for segment in beam.segments { fill(segment.path, ink(for: beam)) }
         }
 
         for chord in layout.chords {
             let staff = layout.staves[chord.staff].geometry
-            let chordInk = ink(for: chord)
+            let chordInk = ink(for: chord, in: layout)
             // Ledger lines stay in ink, as `StaffView` draws them.
             for line in chord.ledgers { ledger(line, chordInk == .current ? .normal : chordInk, staff) }
             if let stem = chord.stem { fill(Path(stem), chordInk) }
-            if let anchor = chord.flagAnchor {
-                fill(BarLayout.flagPath(chord.value.flags, at: anchor, up: chord.stemUp, space: s), chordInk)
+            if let origin = chord.flagOrigin {
+                fill(BarLayout.flagPath(chord.flags, at: origin, up: chord.stemUp, space: s), chordInk)
             }
             for head in chord.heads {
                 let headInk = ink(for: head.symbol)
-                fill(NoteShapes.head(head.kind).applying(CGAffineTransform(scaleX: s, y: s)
-                    .concatenating(CGAffineTransform(translationX: head.center.x, y: head.center.y))), headInk)
+                fill(placed(NoteShapes.head(head.kind), at: head.center), headInk)
                 if let accidental = head.accidental, let frame = head.accidentalFrame {
-                    let sign = StaffDrawing.accidentalPath(accidental, at: head.position, staff)
-                    fill(sign.offsetBy(dx: frame.maxX - sign.cgPath.boundingBoxOfPath.maxX, dy: 0), headInk)
+                    fill(StaffDrawing.accidentalPath(accidental, at: head.position, staff).offsetBy(dx: frame.minX, dy: 0), headInk)
                 }
                 // Dots go with the note but stay in ink: only the head and its sign take the highlight.
                 for center in head.dots { dot(center, headInk == .muted ? .muted : .normal) }
@@ -201,29 +209,16 @@ struct BarStaffView: View {
         }
     }
 
-    /// As `StaffView` draws them: the number in bold serif italics, then dashes to a hook.
+    /// As `StaffView` draws them: Bravura's number, then dashes to a hook.
     private func drawOctaveMarks(_ layout: BarLayout, in context: inout GraphicsContext) {
         let s = layout.space
         for mark in layout.octaveMarks {
             let muted = mark.symbols.allSatisfy { bar.answered.contains($0) }
             let color = muted ? Theme.ink.opacity(0.3) : Theme.ink
-            let text = context.resolve(Text(StaffDrawing.octaveLabel(mark.shift))
-                .font(StaffDrawing.octaveFont(size: mark.fontSize)).foregroundStyle(color))
-            let textSize = text.measure(in: CGSize(width: 1000, height: 1000))
-            let baseline = text.firstBaseline(in: textSize)
-            context.draw(text, in: CGRect(x: mark.textLeft, y: mark.lineY + mark.halfDigit - baseline,
-                                          width: textSize.width, height: textSize.height))
-            let dash = s * 0.3
-            let count = max(2, Int(((mark.hookX - mark.lineStart + s * 0.2) / (s * 0.5)).rounded()))
-            let step = (mark.hookX - mark.lineStart - dash) / CGFloat(count - 1)
-            var line = Path()
-            for index in 0..<count {
-                let start = mark.lineStart + CGFloat(index) * step
-                line.move(to: CGPoint(x: start, y: mark.lineY))
-                line.addLine(to: CGPoint(x: start + dash, y: mark.lineY))
-            }
-            line.addLine(to: CGPoint(x: mark.hookX, y: mark.lineY + (mark.shift > 0 ? 1 : -1) * s * 0.45))
-            context.stroke(line, with: .color(color), lineWidth: layout.staves[mark.staff].geometry.lineWidth * 1.2)
+            context.fill(StaffDrawing.octaveMarkPath(mark.shift, left: mark.textLeft, middle: mark.lineY, space: s),
+                         with: .color(color))
+            context.fill(StaffDrawing.octaveLinePath(from: mark.lineStart, to: mark.hookX, at: mark.lineY, above: mark.shift > 0,
+                                                     space: s), with: .color(color))
         }
     }
 

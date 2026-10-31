@@ -69,8 +69,9 @@ the right hand, bottom note in the left). Clef, key signature and range come fro
 those toolbar settings are greyed out; Mode, note names and the answer method still apply.
 
 - **The whole bar is on the staff**, as on the printed page:
-  - **What's drawn:** note values, rests, chords, ties and dots; both staves with a brace for both
-    hands. The note to name is highlighted in blue, and notes you've answered fade.
+  - **What's drawn:** engraved with the Bravura music font: note values, beams (as the score
+    writes them, or by the beat when it has none), rests, chords, ties, dots and the time signature;
+    both staves with a brace for both hands. The note to name is highlighted in blue, and notes you've answered fade.
   - **Bar strip:** under the staff it shows where you are in the piece.
   - **Sharps and flats:** printed only where the sheet prints them. A sign holds until the bar
     line, so an F♯ whose sharp came earlier in the bar is still F♯.
@@ -154,5 +155,6 @@ Sources/Clefwise/
 Tests/ClefwiseTests/  Swift Testing tests (`swift test`); the MusicXML test scores they read are
                       shared by every version, in ../../spec/fixtures/scores
 Resources/AppIcon.icns
+Resources/Fonts/      the Bravura music font (SIL Open Font License, see OFL.txt), unmodified
 build-app.sh          packages the release binary as a .app
 ```
