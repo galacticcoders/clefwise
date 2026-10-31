@@ -177,9 +177,10 @@ private func onlyPart(xml: String) throws -> ScorePart {
 
     @Test func theReferenceBar() {
         let bar = piano.measures[0]
-        // An eighth rest; G4 F4 G4 (16 16 8) as one group; B4 C5 (16 16); a B4 half note.
+        // An eighth rest; G4 F4 G4 B4 C5 (16 16 8 16 16) under one beam, with a second beam over
+        // each pair of sixteenths, as the user's score prints it; then a B4 half note.
         #expect(bar.on(staff: 1).map(\.label) == ["rest", "G4", "F4", "G4", "B4", "C5", "B4"])
-        #expect(bar.beamMarks() == ["r", "[[", "=]", "]", "[[", "]]", "-"])
+        #expect(bar.beamMarks() == ["r", "[[", "=]", "=", "=[", "]]", "-"])
         #expect(bar.on(staff: 1).last?.stemUp == false)
         // The left hand's eighths are beamed in fours, as written, not by the beat.
         #expect(bar.beamMarks(staff: 2) == ["[", "=", "=", "]", "[", "=", "=", "]"])
