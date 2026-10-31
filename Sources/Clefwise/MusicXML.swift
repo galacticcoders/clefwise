@@ -205,16 +205,45 @@ private final class ScoreReader: NSObject, XMLParserDelegate {
 }
 
 /// Follows one `<part>`: the position within each measure, and the clef, key and 8va lines on
-/// each staff. Notes get their clef, key and octave shift once the whole part has been read.
+/// each staff. Notes and rests get their clef, key and octave shift once the whole part has been
+/// read, and then the bars are laid out.
 private struct PartReader {
-    private struct Note {
-        let pitch: Pitch
+    /// A note or rest as read, before every clef, key and 8va line is known.
+    private struct Symbol {
+        /// nil for a rest.
+        let pitch: Pitch?
         /// The `<accidental>` printed in the score, if it's one we can show.
-        let accidental: Accidental?
+        let printedAccidental: Accidental?
         let staff: Int
+        /// The score's `<voice>`, numbered once the whole part is read.
+        let voice: String?
         let measure: Int
         let onset: Double
+        /// Quarter notes from the start of the bar.
+        let offset: Double
+        let duration: Double
+        let value: NoteValue
+        /// Whether `value` comes from a `<type>` rather than from the duration.
+        let hasType: Bool
+        let stemUp: Bool?
         let chord: Int
+        let tiedToNext: Bool
+        let tiedFromPrevious: Bool
+        /// Rests only: `<display-step>` and `<display-octave>`, as a written pitch.
+        let restDisplay: Pitch?
+        /// `<rest measure="yes">`.
+        let isMeasureRest: Bool
+
+        /// A note to read: played, so neither a rest nor the held-over end of a tie.
+        var isQuestion: Bool { pitch != nil && !tiedFromPrevious }
+    }
+
+    /// Where a symbol stands, worked out once the part has been read.
+    private struct Placement {
+        let clef: Clef
+        let key: KeySignature
+        let octaveShift: Int
+        let voice: Int
     }
 
     let name: String
@@ -235,7 +264,10 @@ private struct PartReader {
     private var clefs = Timeline<Clef?>()
     private var keys = Timeline<KeySignature>()
     private var octaveShifts = Timeline<Int>()
-    private var notes: [Note] = []
+    /// Every note and rest we could draw, in document order.
+    private var symbols: [Symbol] = []
+    /// Start and length of each finished measure, in quarter notes.
+    private var bars: [(start: Double, length: Double)] = []
     private var skippedNoteCount = 0
 
     init(name: String) {
@@ -252,6 +284,7 @@ private struct PartReader {
 
     /// A measure lasts as long as its longest voice, so a pickup bar is only as long as its notes.
     mutating func endMeasure() {
+        bars.append((measureStart, measureLength / divisions))
         measureStart += measureLength / divisions
     }
 
@@ -332,40 +365,84 @@ private struct PartReader {
             if !note.has("grace") { advance(by: note.double("duration") ?? 0) }
         }
 
-        // Not notes to read: rests, ornaments, cues for another instrument, hidden notes,
-        // and the held-over end of a tie, which isn't played again.
-        guard !note.has("rest"), !note.has("grace"), !note.has("cue"),
-              note.attributes["print-object"] != "no", !Self.continuesTie(note) else { return }
-        guard let pitch = note.child("pitch") else {
-            if note.has("unpitched") { skippedNoteCount += 1 }
-            return
-        }
-        guard let letter = pitch.string("step").flatMap(\.first).flatMap(NoteLetter.init(character:)),
-              let octave = pitch.int("octave") else { return }
-        // Double sharps and flats, and microtones, have no sign we can draw.
-        guard let accidental = Accidental(alter: pitch.double("alter") ?? 0) else {
-            skippedNoteCount += 1
-            return
-        }
-
+        // Neither drawn nor read: ornaments, cues for another instrument, and hidden notes.
+        guard !note.has("grace"), !note.has("cue"), note.attributes["print-object"] != "no" else { return }
         let staff = note.int("staff") ?? 1
+        let rest = note.child("rest")
+        // The held-over end of a tie is drawn, but it isn't played again, so it isn't read.
+        let tiedFromPrevious = rest == nil && Self.continuesTie(note)
+
+        let pitch: Pitch?
         let chord: Int
-        if let id = chordIDs[staff] {
-            chord = id
-        } else {
+        if rest != nil {
+            pitch = nil
             nextChordID += 1
             chord = nextChordID
-            chordIDs[staff] = chord
+        } else {
+            guard let pitchElement = note.child("pitch") else {
+                if note.has("unpitched"), !tiedFromPrevious { skippedNoteCount += 1 }
+                return
+            }
+            guard let letter = pitchElement.string("step").flatMap(\.first).flatMap(NoteLetter.init(character:)),
+                  let octave = pitchElement.int("octave") else { return }
+            // Double sharps and flats, and microtones, have no sign we can draw.
+            guard let accidental = Accidental(alter: pitchElement.double("alter") ?? 0) else {
+                if !tiedFromPrevious { skippedNoteCount += 1 }
+                return
+            }
+            pitch = Pitch(letter, octave, accidental)
+            if let id = chordIDs[staff] {
+                chord = id
+            } else {
+                nextChordID += 1
+                chord = nextChordID
+                chordIDs[staff] = chord
+            }
         }
-        notes.append(Note(pitch: Pitch(letter, octave, accidental),
-                          accidental: note.child("accidental").flatMap(Self.printedAccidental),
-                          staff: staff, measure: measureCount, onset: measureStart + start / divisions, chord: chord))
+
+        let duration = (note.double("duration") ?? 0) / divisions
+        let type = note.string("type").flatMap(NoteValue.Kind.init(musicXMLType:))
+        let display = rest.flatMap { rest -> Pitch? in
+            guard let letter = rest.string("display-step").flatMap(\.first).flatMap(NoteLetter.init(character:)),
+                  let octave = rest.int("display-octave") else { return nil }
+            return Pitch(letter, octave)
+        }
+        let stemUp: Bool? = switch note.string("stem") {
+        case "up": true
+        case "down": false
+        default: nil
+        }
+        symbols.append(Symbol(
+            pitch: pitch,
+            printedAccidental: pitch == nil ? nil : note.child("accidental").flatMap(Self.printedAccidental),
+            staff: staff, voice: note.string("voice").flatMap { $0.isEmpty ? nil : $0 }, measure: measureCount,
+            onset: measureStart + start / divisions, offset: start / divisions, duration: duration,
+            value: type.map { NoteValue($0, dots: note.children(named: "dot").count) }
+                ?? NoteValue.nearest(toQuarters: Self.writtenLength(of: note, duration: duration)),
+            hasType: type != nil, stemUp: stemUp, chord: chord,
+            tiedToNext: rest == nil && Self.startsTie(note), tiedFromPrevious: tiedFromPrevious,
+            restDisplay: display, isMeasureRest: rest?.attributes["measure"] == "yes"))
+    }
+
+    /// How long a note is written, in quarter notes: a triplet eighth lasts a third of a beat but
+    /// is written as an eighth, so `<time-modification>` is undone.
+    private static func writtenLength(of note: Element, duration: Double) -> Double {
+        guard let modification = note.child("time-modification"),
+              let actual = modification.double("actual-notes"), let normal = modification.double("normal-notes"),
+              actual > 0, normal > 0 else { return duration }
+        return duration * actual / normal
     }
 
     private static func continuesTie(_ note: Element) -> Bool {
         let tied = note.children(named: "notations").flatMap { $0.children(named: "tied") }
         return note.children(named: "tie").contains { $0.attributes["type"] == "stop" }
             || tied.contains { ["stop", "continue"].contains($0.attributes["type"]) }
+    }
+
+    private static func startsTie(_ note: Element) -> Bool {
+        let tied = note.children(named: "notations").flatMap { $0.children(named: "tied") }
+        return note.children(named: "tie").contains { $0.attributes["type"] == "start" }
+            || tied.contains { ["start", "continue"].contains($0.attributes["type"]) }
     }
 
     private static func printedAccidental(_ accidental: Element) -> Accidental? {
@@ -379,39 +456,149 @@ private struct PartReader {
     }
 
     func finish() -> ScorePart? {
+        let clefs = self.clefs.lookup(), keys = self.keys.lookup(), octaveShifts = self.octaveShifts.lookup()
+        // Before any `<clef>`, assume a grand staff: treble on top, bass below.
+        func clefInForce(at time: Double, staff: Int) -> Clef? {
+            clefs.value(at: time, staff: staff) ?? (staff == 1 ? .treble : .bass)
+        }
+        func keyInForce(at time: Double, staff: Int) -> KeySignature {
+            keys.value(at: time, staff: staff) ?? .cMajor
+        }
+
         var skipped = skippedNoteCount
-        var result: [ScoreNote] = []
-        for note in notes {
-            guard let clef = clef(at: note.onset, staff: note.staff) else {
-                skipped += 1
+        let voices = voiceNumbers()
+        var placements = [Placement?](repeating: nil, count: symbols.count)
+        var notes: [ScoreNote] = []
+        // For each of `notes`, its index in `symbols`.
+        var noteSymbols: [Int] = []
+        // A measure left open by a file that ends early still gets its bar.
+        let bars = self.bars.count < measureCount ? self.bars + [(measureStart, measureLength / divisions)] : self.bars
+        var symbolsInBar = [[Int]](repeating: [], count: bars.count)
+
+        for (index, symbol) in symbols.enumerated() {
+            guard let clef = clefInForce(at: symbol.onset, staff: symbol.staff) else {
+                if symbol.isQuestion { skipped += 1 }
                 continue
             }
-            let key = keys.value(at: note.onset, staff: note.staff) ?? .cMajor
-            result.append(ScoreNote(pitch: note.pitch, clef: clef, keySignature: key,
-                                    printedAccidental: Self.sign(for: note, in: key),
-                                    octaveShift: octaveShifts.value(at: note.onset, staff: note.staff) ?? 0,
-                                    staff: note.staff, measure: note.measure, onset: note.onset, chord: note.chord))
+            let key = keyInForce(at: symbol.onset, staff: symbol.staff)
+            let placement = Placement(clef: clef, key: key,
+                                      octaveShift: octaveShifts.value(at: symbol.onset, staff: symbol.staff) ?? 0,
+                                      voice: voices[index])
+            placements[index] = placement
+            if symbolsInBar.indices.contains(symbol.measure - 1) { symbolsInBar[symbol.measure - 1].append(index) }
+            guard let pitch = symbol.pitch, symbol.isQuestion else { continue }
+            notes.append(ScoreNote(pitch: pitch, clef: clef, keySignature: key,
+                                   printedAccidental: Self.sign(for: pitch, printed: symbol.printedAccidental, in: key),
+                                   octaveShift: placement.octaveShift, staff: symbol.staff,
+                                   measure: symbol.measure, onset: symbol.onset, chord: symbol.chord))
+            noteSymbols.append(index)
         }
-        guard !result.isEmpty else { return nil }
+        guard !notes.isEmpty else { return nil }
 
-        let ordered = result.enumerated().sorted { a, b in
+        var symbolIndices = [Int?](repeating: nil, count: symbols.count)
+        var measures: [ScoreMeasure] = []
+        measures.reserveCapacity(bars.count)
+        for (bar, members) in symbolsInBar.enumerated() {
+            let (start, length) = bars[bar]
+            let signs = barSigns(members, placements: placements)
+            let ordered = members.sorted { drawsBefore($0, $1, placements: placements) }
+            for (position, index) in ordered.enumerated() { symbolIndices[index] = position }
+            let staves = (1...max(1, staffCount)).map { staff in
+                ScoreMeasure.StaffStart(clef: clefInForce(at: start, staff: staff),
+                                        keySignature: keyInForce(at: start, staff: staff))
+            }
+            let drawn = ordered.map { index -> BarSymbol in
+                let symbol = symbols[index], placement = placements[index]!
+                let fillsBar = symbol.isMeasureRest || (symbol.pitch == nil && !symbol.hasType && length > 0
+                    && abs(symbol.offset) < 1e-9 && symbol.duration >= length - 1e-9)
+                return BarSymbol(pitch: symbol.pitch, clef: placement.clef, staff: symbol.staff, voice: placement.voice,
+                                 offset: symbol.offset, duration: symbol.duration, value: symbol.value,
+                                 octaveShift: placement.octaveShift, accidental: signs[index], stemUp: symbol.stemUp,
+                                 chord: symbol.chord, tiedToNext: symbol.tiedToNext,
+                                 tiedFromPrevious: symbol.tiedFromPrevious,
+                                 restPosition: symbol.restDisplay.map(placement.clef.position(of:)),
+                                 isWholeBarRest: fillsBar)
+            }
+            measures.append(ScoreMeasure(number: bar + 1, start: start, length: length, staves: staves, symbols: drawn))
+        }
+        for (note, index) in noteSymbols.enumerated() { notes[note].symbolIndex = symbolIndices[index] }
+
+        let ordered = notes.enumerated().sorted { a, b in
             (a.element.onset, -a.element.staff, a.element.pitch.midiNumber, a.offset)
                 < (b.element.onset, -b.element.staff, b.element.pitch.midiNumber, b.offset)
         }
-        return ScorePart(name: name, notes: ordered.map(\.element), measureCount: measureCount,
+        return ScorePart(name: name, notes: ordered.map(\.element), measures: measures, measureCount: measureCount,
                          staffCount: staffCount, skippedNoteCount: skipped)
     }
 
-    /// Before any `<clef>`, assume a grand staff: treble on top, bass below.
-    private func clef(at time: Double, staff: Int) -> Clef? {
-        clefs.value(at: time, staff: staff) ?? (staff == 1 ? .treble : .bass)
+    /// The score's voices as numbers: `<voice>3</voice>` is 3, no voice is 1, and voices named
+    /// otherwise get numbers above every numbered one, in the order they first appear.
+    private func voiceNumbers() -> [Int] {
+        let highest = symbols.compactMap { $0.voice.flatMap { Int($0) } }.filter { $0 > 0 }.max() ?? 1
+        var named: [String: Int] = [:]
+        return symbols.map { symbol in
+            guard let voice = symbol.voice else { return 1 }
+            if let number = Int(voice), number > 0 { return number }
+            if let number = named[voice] { return number }
+            let number = highest + named.count + 1
+            named[voice] = number
+            return number
+        }
+    }
+
+    /// Draw order within a bar: by offset, then staff, then voice, rests first, then low to high.
+    private func drawsBefore(_ a: Int, _ b: Int, placements: [Placement?]) -> Bool {
+        let x = symbols[a], y = symbols[b]
+        if x.offset != y.offset { return x.offset < y.offset }
+        if x.staff != y.staff { return x.staff < y.staff }
+        let voiceX = placements[a]?.voice ?? 1, voiceY = placements[b]?.voice ?? 1
+        if voiceX != voiceY { return voiceX < voiceY }
+        switch (x.pitch, y.pitch) {
+        case (nil, .some): return true
+        case (.some, nil): return false
+        case let (.some(p), .some(q)) where p != q:
+            return (p.midiNumber, p.diatonicIndex) < (q.midiNumber, q.diatonicIndex)
+        default: return a < b
+        }
+    }
+
+    /// The sign each note of a bar prints there, by the usual rule: on each staff, a sign holds for
+    /// its letter and written octave until the bar line, starting from the key signature. The
+    /// score's own sign always prints (courtesy signs included); otherwise a note prints its
+    /// accidental when it differs from the one in force. The held-over end of a tie prints only
+    /// a sign the score gives it and leaves the signs in force alone.
+    private func barSigns(_ members: [Int], placements: [Placement?]) -> [Int: Accidental] {
+        var signs: [Int: Accidental] = [:]
+        let notesByStaff = Dictionary(grouping: members.filter { symbols[$0].pitch != nil }) { symbols[$0].staff }
+        for staffNotes in notesByStaff.values {
+            // In time order, low to high within a chord and across voices.
+            let ordered = staffNotes.sorted { a, b in
+                let x = symbols[a], y = symbols[b], p = x.pitch!, q = y.pitch!
+                return (x.offset, p.midiNumber, p.diatonicIndex, a) < (y.offset, q.midiNumber, q.diatonicIndex, b)
+            }
+            // The accidental in force for each written staff step (letter and octave as written).
+            var inForce: [Int: Accidental] = [:]
+            for index in ordered {
+                let symbol = symbols[index], pitch = symbol.pitch!, placement = placements[index]!
+                let printed = symbol.printedAccidental == pitch.accidental ? symbol.printedAccidental : nil
+                if symbol.tiedFromPrevious {
+                    signs[index] = printed
+                    continue
+                }
+                let step = pitch.diatonicIndex - 7 * placement.octaveShift
+                let current = inForce[step] ?? placement.key.accidental(for: pitch.letter)
+                signs[index] = printed ?? (pitch.accidental != current ? pitch.accidental : nil)
+                inForce[step] = pitch.accidental
+            }
+        }
+        return signs
     }
 
     /// The score's own sign; failing that, the one the pitch needs against the key signature. Only
     /// one note is on screen, so an F♯ whose sharp was printed earlier in the bar still shows ♯.
-    private static func sign(for note: Note, in key: KeySignature) -> Accidental? {
-        if let printed = note.accidental, printed == note.pitch.accidental { return printed }
-        return note.pitch.accidental == key.accidental(for: note.pitch.letter) ? nil : note.pitch.accidental
+    private static func sign(for pitch: Pitch, printed: Accidental?, in key: KeySignature) -> Accidental? {
+        if let printed, printed == pitch.accidental { return printed }
+        return pitch.accidental == key.accidental(for: pitch.letter) ? nil : pitch.accidental
     }
 }
 
@@ -426,13 +613,34 @@ private struct Timeline<Value> {
         changes.append((time, staff, value))
     }
 
-    /// The latest change at or before `time` for `staff`; of two at the same time, the later written.
-    func value(at time: Double, staff: Int) -> Value? {
-        var latest: (time: Double, value: Value)?
-        for change in changes where change.time <= time && (change.staff ?? staff) == staff {
-            if change.time >= latest?.time ?? -.infinity { latest = (change.time, change.value) }
+    /// For looking values up once every change is in: each staff's changes in time order.
+    func lookup() -> Lookup {
+        let ordered = changes.indices
+            .sorted { (changes[$0].time, $0) < (changes[$1].time, $1) }
+            .map { changes[$0] }
+        var byStaff: [Int: [(time: Double, value: Value)]] = [:]
+        for staff in Set(changes.compactMap(\.staff)) {
+            byStaff[staff] = ordered.filter { ($0.staff ?? staff) == staff }.map { ($0.time, $0.value) }
         }
-        return latest?.value
+        return Lookup(byStaff: byStaff, everyStaff: ordered.filter { $0.staff == nil }.map { ($0.time, $0.value) })
+    }
+
+    struct Lookup {
+        /// In time order; of two at the same time, the earlier written first.
+        let byStaff: [Int: [(time: Double, value: Value)]]
+        /// The changes that name no staff, for staves no change names.
+        let everyStaff: [(time: Double, value: Value)]
+
+        /// The latest change at or before `time` for `staff`; of two at the same time, the later written.
+        func value(at time: Double, staff: Int) -> Value? {
+            let changes = byStaff[staff] ?? everyStaff
+            var low = 0, high = changes.count
+            while low < high {
+                let middle = (low + high) / 2
+                if changes[middle].time <= time { low = middle + 1 } else { high = middle }
+            }
+            return low > 0 ? changes[low - 1].value : nil
+        }
     }
 }
 
