@@ -62,11 +62,18 @@ or **shuffled**, the **bar to start at**, and whether to ask **one note per chor
 the right hand, bottom note in the left). Clef, key signature and range come from the piece, so
 those toolbar settings are greyed out; Mode, note names and the answer method still apply.
 
-- Notes come one at a time in reading order; chords bottom to top, both hands lower staff first.
-  Rests and tied continuations are skipped. In Practice mode the round ends with the last note;
-  a 60s Sprint wraps back to the start bar.
-- Since the rest of the bar isn't on screen, a note whose sharp or flat comes from earlier in the
-  bar gets its sign printed.
+- **The whole bar is on the staff**, as on the printed page:
+  - **What's drawn:** note values, rests, chords, ties and dots; both staves with a brace for both
+    hands. The note to name is highlighted in blue, and notes you've answered fade.
+  - **Bar strip:** under the staff it shows where you are in the piece.
+  - **Sharps and flats:** printed only where the sheet prints them. A sign holds until the bar
+    line, so an F♯ whose sharp came earlier in the bar is still F♯.
+  - **Turning it off:** untick **Show the whole bar** in the piece panel to go back to one note
+    at a time. Each note then carries any sign it needs.
+- **Order and pace:**
+  - Notes come in reading order, chords bottom to top, both hands lower staff first.
+  - Rests and tied-over notes are drawn but not asked.
+  - In Practice mode the round ends with the last note; a 60s Sprint wraps back to the start bar.
 - Under an 8va/8vb line the note is drawn where it's written, with the mark; the piano answer is
   the key that actually sounds.
 - Notes in other clefs (C clefs, octave clefs) and double sharps/flats are left out, with a note
@@ -117,12 +124,16 @@ Sources/Clefwise/
   ClefwiseApp.swift   app entry, window, File → Open Piece…
   ContentView.swift   UI: stats, staff card, start/summary panels, answer keys
   PiecePanel.swift    piece setup panel, opening and dropping files
-  StaffView.swift     staff, clef, key signature, note, ledger lines, 8va and hints (Canvas)
+  StaffView.swift     one note on a staff: clef, key signature, ledger lines, 8va and hints (Canvas)
+  BarStaffView.swift  a whole bar of a piece (one staff or a grand staff), laid out by BarLayout.swift
+  StaffDrawing.swift  drawing shared by both: staff geometry, glyphs, key signatures, hints, pill
+  NoteShapes.swift    note heads, flags, rests, brace and ties as paths
+  BarDisplay.swift    what the bar view shows: the bar, its staves, the note asked, notes answered
   PianoKeyboard.swift piano answer input
   TypingPad.swift     keyboard (typing) answer input
   Game.swift          round logic (random and piece rounds), adaptive note picking, persistence
   Music.swift         pitches, accidentals, key signatures, clefs, ranges, naming systems
-  Song.swift          a piece read from MusicXML
+  Song.swift          a piece read from MusicXML: notes to ask, and every bar as drawn
   MusicXML.swift      MusicXML / .mxl importer
   UsageEvents.swift   what the usage log records (event format)
   UsageLog.swift      the usage log on disk (daily JSON Lines files)
