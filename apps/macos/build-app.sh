@@ -14,6 +14,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/Clefwise" "$APP/Contents/MacOS/Clefwise"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# The Bravura music font (SIL Open Font License, shipped unmodified with its licence).
+cp Resources/Fonts/Bravura.otf Resources/Fonts/OFL.txt "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

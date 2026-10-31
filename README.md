@@ -39,4 +39,6 @@ More in [apps/macos/README.md](apps/macos/README.md).
 
 ## Licence
 
-[GPL-3.0](LICENSE)
+[GPL-3.0](LICENSE). Music is drawn with [Bravura](https://github.com/steinbergmedia/bravura),
+© Steinberg Media Technologies GmbH, under the SIL Open Font License 1.1; it ships unmodified in
+`apps/macos/Resources/Fonts`, with its licence.

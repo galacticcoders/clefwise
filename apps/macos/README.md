@@ -154,5 +154,6 @@ Sources/Clefwise/
 Tests/ClefwiseTests/  Swift Testing tests (`swift test`); the MusicXML test scores they read are
                       shared by every version, in ../../spec/fixtures/scores
 Resources/AppIcon.icns
+Resources/Fonts/      the Bravura music font (SIL Open Font License, see OFL.txt), unmodified
 build-app.sh          packages the release binary as a .app
 ```
