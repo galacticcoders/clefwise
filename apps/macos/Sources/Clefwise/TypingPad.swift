@@ -37,7 +37,7 @@ struct TypingPad: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
-        .opacity(game.phase == .playing ? 1 : 0.5)
+        .opacity(game.isTakingAnswers ? 1 : 0.5)
     }
 
     /// Words rather than ♯/♭, which are too small at this size to tell from # and b.
@@ -91,7 +91,7 @@ struct TypingPad: View {
     }
 
     private var showsCaret: Bool {
-        game.phase == .playing && highlight == .none && !game.isShowingMiss
+        game.isTakingAnswers && highlight == .none && !game.isShowingMiss
     }
 }
 

@@ -22,6 +22,9 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
     *+3 ledger lines* goes three lines above and below.
   - *60s Sprint*: name as many notes as you can in a minute; best score is kept per clef/range.
   - *Practice*: no clock; press Stop (Esc) to see your summary.
+  - **Pause** (or Space) during a round stops the clock and hides the note until you press
+    Resume (or Space again). Paused time doesn't count towards the sprint, your response times
+    or your practice time.
 - Pick a **key** (C major, up to 5 sharps or 5 flats, or a random key each round) and tick
   **Accidentals** to also get notes with a printed ♯, ♭ or ♮ now and then. Answer with the full
   name, so in G major an unmarked F is F♯. Letters and solfège go by spelling (F♯ isn't G♭);
@@ -53,7 +56,7 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
 - **Hints** (H) prints the name of every line and space and, with letter names, shows the
   mnemonics (Every Good Boy Does Fine / FACE, Good Boys Do Fine Always / All Cows Eat Grass).
 
-Keyboard: Space/Return start · Esc stop · H hints · K key names (piano) · M mute · ⌘O open a piece.
+Keyboard: Space/Return start · Space pause/resume during a round · Esc stop · H hints · K key names (piano) · M mute · ⌘O open a piece.
 
 ## Practise a piece
 

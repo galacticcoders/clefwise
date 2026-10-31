@@ -101,7 +101,7 @@ struct ContentView: View {
         if game.settings.answerInput == .buttons, game.accidentalsPossible {
             parts += game.settings.naming == .sargam ? ["# tivra", "− komal"] : ["# sharp", "− flat"]
         }
-        parts += ["Space start", "Esc stop"]
+        parts += [game.phase == .playing ? "Space pause" : "Space start", "Esc stop"]
         switch game.settings.answerInput {
         case .buttons: parts += ["H hints", "M mute"]
         case .piano: parts += ["H hints", "K key names", "M mute"]
@@ -274,10 +274,19 @@ private struct StatsBar: View {
             .labelStyle(.iconOnly)
 
             if game.phase == .playing {
+                // Spelled out, and it says what it will do: Pause, then Resume.
+                Button(game.isPaused ? "Resume" : "Pause", systemImage: game.isPaused ? "play.fill" : "pause.fill") {
+                    game.recorder.recordUIAction(game.isPaused ? "resumeButton" : "pauseButton")
+                    game.togglePause(via: .button)
+                }
+                .help(game.isPaused ? "Carry on with the round (Space)" : "Stop the clock and hide the note for a moment (Space)")
+                .fixedSize()
+
                 Button("Stop", systemImage: "stop.fill") {
                     game.recorder.recordUIAction("stopButton")
                     game.stop()
                 }
+                .fixedSize()
             }
         }
         .controlSize(.large)
@@ -316,7 +325,8 @@ private struct StatTile: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
         }
-        .frame(width: width, alignment: .leading)
+        // A narrow window takes a little from each tile rather than squeeze the buttons' labels.
+        .frame(minWidth: min(width, 72), maxWidth: width, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -371,9 +381,10 @@ private struct StaffCard: View {
                 if let bar {
                     VStack(spacing: BarStripView.spacing) {
                         BarStaffView(
-                            bar: bar,
+                            // Paused, the bar's notes are left out until the round carries on.
+                            bar: game.isPaused ? bar.withoutNotes : bar,
                             currentColor: game.isShowingMiss ? Theme.wrong : Theme.accent,
-                            currentLabel: game.isShowingMiss ? game.question.map(answerLabel) : nil,
+                            currentLabel: game.isShowingMiss && !game.isPaused ? game.question.map(answerLabel) : nil,
                             showsHints: game.settings.showHints,
                             naming: game.settings.naming
                         )
@@ -384,10 +395,11 @@ private struct StaffCard: View {
                     StaffView(
                         clef: game.displayedClef,
                         keySignature: game.currentKeySignature,
-                        note: game.question,
+                        // Paused, the note is left out until the round carries on.
+                        note: game.isPaused ? nil : game.question,
                         positionsToFit: game.staffPositionsToFit,
                         noteColor: game.isShowingMiss ? Theme.wrong : Theme.ink,
-                        noteLabel: game.isShowingMiss ? game.question.map(answerLabel) : nil,
+                        noteLabel: game.isShowingMiss && !game.isPaused ? game.question.map(answerLabel) : nil,
                         // A piece's notes can go past the range setting, so hints cover as far as they go.
                         hintPositions: game.settings.showHints ? game.staffPositionsToFit ?? game.settings.range.positions : nil,
                         naming: game.settings.naming
@@ -396,7 +408,7 @@ private struct StaffCard: View {
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 12)
-            .opacity(game.phase == .playing ? 1 : 0.35)
+            .opacity(game.isTakingAnswers ? 1 : 0.35)
 
             switch game.phase {
             case .idle:
@@ -410,7 +422,9 @@ private struct StaffCard: View {
                     SummaryPanel(summary: summary, game: game)
                 }
             case .playing:
-                EmptyView()
+                if game.isPaused {
+                    PausedPanel(game: game)
+                }
             }
         }
         .frame(minHeight: 340)
@@ -504,6 +518,44 @@ private struct BarStripView: View {
             context.fill(segment(x - 1.5, marker + 3, raised: true), with: .color(Theme.paper))
             context.fill(segment(x, marker, raised: true), with: .color(done))
         }
+    }
+}
+
+private extension BarDisplay {
+    /// The bar's staves with nothing on them, for a paused round: no studying the notes while the
+    /// clock is stopped.
+    var withoutNotes: BarDisplay {
+        BarDisplay(staves: staves,
+                   measure: ScoreMeasure(number: measure.number, start: measure.start, length: measure.length,
+                                         staves: measure.staves, symbols: []),
+                   current: nil, answered: [], isLastBar: isLastBar)
+    }
+}
+
+private struct PausedPanel: View {
+    let game: Game
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text("Paused")
+                .font(.title2.weight(.semibold))
+            Text("The clock is stopped and the note is hidden until you carry on.")
+                .foregroundStyle(.secondary)
+            Button {
+                game.recorder.recordUIAction("resumePanelButton")
+                game.resume(via: .button)
+            } label: {
+                Label("Resume", systemImage: "play.fill")
+                    .frame(minWidth: 110)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.extraLarge)
+            .padding(.top, 6)
+            Text("or press Space")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .panel()
     }
 }
 
@@ -724,7 +776,7 @@ private struct AnswerPad: View {
                     .padding(.leading, 8)
             }
         }
-        .disabled(game.phase != .playing)
+        .disabled(!game.isTakingAnswers)
     }
 
     /// ♭ or ♯: arms the sign for the next letter pressed.

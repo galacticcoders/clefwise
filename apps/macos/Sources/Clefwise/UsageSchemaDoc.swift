@@ -157,7 +157,7 @@ extension UsageExport {
         | Field | Meaning |
         |---|---|
         | `round`, `question` | Ids of the round and the question answered. |
-        | `responseMs` | From the question appearing to the answer. |
+        | `responseMs` | From the question appearing to the answer, pauses left out. |
         | `source` | `click` (note buttons clicked), `shortcut` (keyboard shortcuts for the buttons: letters, 1–7), `typing` (typed names), `piano` (piano keys). |
         | `letter`, `accidental` | What was answered: letter and sign. |
         | `name` | Its name in the naming system in use: `F♯`, `Fa♯`, `komal Re`. |
@@ -166,10 +166,12 @@ extension UsageExport {
         | `wrongOctave` | Piano only: the right note in the wrong octave. |
         | `keystrokes` | Every key pressed while the question was up, in order, each with `key`, `ms` (since the question appeared) and `result`: `typed` (kept as part of a name), `rejected` (refused; the box shook), `deleted` (Backspace), `submitted` (Return, or a completed name submitting), `armed` (♯/♭ armed or disarmed on the note buttons; clicks on those buttons appear as keys `click ♯` / `click ♭`), `other` (pressed but not part of answering). |
         | `scoreAfter`, `streakAfter` | Score and current streak after this answer. |
+        | `pausedMs` | How long the round was paused while the question was up (absent when it wasn't). |
 
         ### `inputIgnored`: an answer or keystroke that didn't count
 
-        During the pause after a miss, a sign with no name in the naming system, and so on.
+        While the round is paused (`reason` `paused`), during the pause after a miss, a sign with
+        no name in the naming system, and so on.
 
         | Field | Meaning |
         |---|---|
@@ -178,13 +180,35 @@ extension UsageExport {
         | `source` | As for answers, when it was one. |
         | `detail` | More about it, when there is more. |
 
+        ### `roundPaused`: the round's clock stopped
+
+        The Pause button or Space, during a round. While it's paused the time stands still, the
+        note is hidden and answers don't count.
+
+        | Field | Meaning |
+        |---|---|
+        | `round`, `question` | The round, and the question on screen if one was. |
+        | `via` | `button` (Pause) or `key` (Space). |
+        | `activeMs` | Round time so far, earlier pauses left out. |
+
+        ### `roundResumed`: the round carried on
+
+        | Field | Meaning |
+        |---|---|
+        | `round`, `question` | As in `roundPaused`. |
+        | `via` | `button` (Resume) or `key` (Space). |
+        | `pausedMs` | How long this pause lasted. |
+
+        A round can also end while paused (Stop, Esc, quitting), with no `roundResumed`.
+
         ### `roundEnded`
 
         | Field | Meaning |
         |---|---|
         | `round` | The round's id. |
         | `reason` | `timeUp` (the sprint clock ran out), `stopped` (Stop or Esc), `pieceComplete` (the last note of a piece), `abandoned` (replaced by opening or closing a piece, or starting over), `appQuit` (the app quit mid-round). |
-        | `durationMs` | How long the round went on. |
+        | `durationMs` | How long the round went on, pauses left out. |
+        | `pausedMs` | Time spent paused (absent when the round never was). |
         | `score` | Correct answers. |
         | `attempts` | All answers. |
         | `bestStreak` | Longest run of correct answers. |
@@ -192,7 +216,7 @@ extension UsageExport {
         | `bestScore` | The best sprint score for these settings (sprints on random notes only). |
         | `isNewBest` | This round set a new best score. |
         | `notesToReview` | The notes missed most, as listed in the round summary. |
-        | `unansweredQuestion` | The question still on screen when the round ended, if any: `question` id, `shownMs` (how long it was up) and its `keystrokes` (as in `answerGiven`). |
+        | `unansweredQuestion` | The question still on screen when the round ended, if any: `question` id, `shownMs` (how long it was up, pauses left out), `pausedMs` (how long the round was paused meanwhile, if it was) and its `keystrokes` (as in `answerGiven`). |
 
         ### `pieceOpened`: a MusicXML file was opened
 
@@ -292,7 +316,8 @@ extension UsageExport {
         | `answerPitch`, `answerMidi` | The key played, for piano answers. |
         | `correct` | Whether it was right. |
         | `wrongOctave` | Piano only: the right note in the wrong octave. |
-        | `responseMs` | From the question appearing to the answer. |
+        | `responseMs` | From the question appearing to the answer, pauses left out. |
+        | `pausedMs` | How long the round was paused while the question was up; empty when it wasn't. |
         | `keystrokes` | How many keys were pressed while the question was up (the keys themselves are in the log). |
         | `rejectedKeystrokes` | How many of those were refused. |
         | `scoreAfter`, `streakAfter` | Score and streak after the answer. |
@@ -317,7 +342,7 @@ extension UsageExport {
         | `keySetting` | The key setting: a fixed key in fifths, or `random`. |
         | `keyFifths` | The key the round was in (a random key resolved). |
         | `pieceTitle`, `piecePart`, `pieceHand`, `pieceOrder`, `pieceStartBar`, `pieceOneNotePerChord`, `pieceNotes` | Piece rounds only: as in `roundStarted.piece` (`pieceNotes` is `noteCount`). |
-        | `endReason`, `durationMs`, `score`, `attempts`, `bestStreak`, `averageResponseMs`, `bestScore`, `isNewBest` | From `roundEnded`. |
+        | `endReason`, `durationMs`, `pausedMs`, `score`, `attempts`, `bestStreak`, `averageResponseMs`, `bestScore`, `isNewBest` | From `roundEnded`. |
         | `accuracy` | `score / attempts`, 0–1. |
         | `notesToReview` | Space-separated. |
         | `answers` | `answerGiven` events logged for the round; equals `attempts` unless lines are missing. |
