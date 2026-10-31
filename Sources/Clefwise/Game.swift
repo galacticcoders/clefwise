@@ -157,6 +157,8 @@ final class Game {
         var startBar = 1
         /// Only the top note of right-hand chords and the bottom note of left-hand ones.
         var oneNotePerChord = false
+        /// Draw the whole bar the note is in, as the score has it, rather than the note on its own.
+        var showsWholeBar = true
 
         init() {}
 
@@ -168,7 +170,21 @@ final class Game {
             order = try container.decodeIfPresent(Order.self, forKey: .order) ?? order
             startBar = try container.decodeIfPresent(Int.self, forKey: .startBar) ?? startBar
             oneNotePerChord = try container.decodeIfPresent(Bool.self, forKey: .oneNotePerChord) ?? oneNotePerChord
+            showsWholeBar = try container.decodeIfPresent(Bool.self, forKey: .showsWholeBar) ?? showsWholeBar
         }
+    }
+
+    /// Where a piece round in the bar view is, bar by bar, for the strip along the staff card.
+    struct BarStrip: Equatable {
+        /// The bars the round goes through, first to last.
+        let bars: ClosedRange<Int>
+        /// Bar of the note being asked.
+        let current: Int
+        /// The part's last bar, as in "Bar 9 of 32".
+        let pieceBars: Int
+        /// In order, the bars before `current` are done (on this pass); shuffled rounds jump about,
+        /// so only the current bar is marked.
+        let showsDone: Bool
     }
 
     /// Where a piece round is up to.
@@ -231,6 +247,8 @@ final class Game {
     var pieceError: String?
     /// The notes of the loaded piece the next round asks, kept up to date with the piece settings.
     private var selectedNotes: [ScoreNote] = []
+    /// The bar view's layout for `selectedNotes`, worked out with them; nil without a bar layout.
+    private var selectedBarLayout: BarLayout?
     /// How many notes the next piece round asks with the current hand, start bar and chord settings.
     var pieceRoundNoteCount: Int { selectedNotes.count }
     /// The round in progress when it's on a piece; nil between rounds and in random rounds.
@@ -239,20 +257,27 @@ final class Game {
     /// A round on a piece, fixed at `start()`: later changes to the piece settings wait for the next one.
     private struct PieceRound {
         let title: String
+        /// The part the notes come from, kept so the round never mixes up parts.
+        let part: ScorePart
         let notes: [ScoreNote]
         let bars: Int
         let order: PieceSettings.Order
+        /// The bar view's layout for `notes`; nil when the round shows one note at a time (the
+        /// setting is off, or the part has no bar layout).
+        let barLayout: BarLayout?
         /// Shuffled rounds draw a note (as stats count them: clef and pitch), then one of its places
         /// in `notes`, so a note the piece repeats often isn't asked any more often for it.
         let places: [(statKey: String, indices: [Int])]
         /// Index in `notes` of the note being asked.
         var index = 0
 
-        init(title: String, notes: [ScoreNote], bars: Int, order: PieceSettings.Order) {
+        init(title: String, part: ScorePart, notes: [ScoreNote], order: PieceSettings.Order, barLayout: BarLayout?) {
             self.title = title
+            self.part = part
             self.notes = notes
-            self.bars = bars
+            bars = part.measureCount
             self.order = order
+            self.barLayout = barLayout
             guard order == .shuffled else {
                 places = []
                 return
@@ -260,6 +285,36 @@ final class Game {
             places = Dictionary(grouping: notes.indices) { Game.statKey(notes[$0].clef, notes[$0].pitch) }
                 .map { ($0.key, $0.value) }
         }
+
+        /// The note being asked.
+        var note: ScoreNote { notes[index] }
+
+        /// The bar the note being asked is in, as the bar view draws it; nil when it's shown on its own.
+        var barDisplay: BarDisplay? {
+            guard let barLayout else { return nil }
+            let note = note
+            // In order, the notes before this one in its bar on this pass: they come just before it.
+            var answered = Set<Int>()
+            if order == .inOrder {
+                for earlier in notes[..<index].reversed() {
+                    guard earlier.measure == note.measure else { break }
+                    if let symbol = earlier.symbolIndex { answered.insert(symbol) }
+                }
+            }
+            return Game.barDisplay(for: note, in: part, layout: barLayout, isAsked: true, answered: answered)
+        }
+    }
+
+    /// What the bar view needs that takes a scan through the piece, worked out once per selection
+    /// (and so once per round) rather than for every note.
+    private struct BarLayout: Equatable {
+        /// The bars the notes are in, first to last.
+        let bars: ClosedRange<Int>
+        /// The notes are on both staves of a grand staff, so both are drawn.
+        let isGrandStaff: Bool
+        /// By staff number: lowest to highest position of the notes drawn on it in `bars`, and at
+        /// least the staff itself (0…8).
+        let positions: [Int: ClosedRange<Int>]
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -354,9 +409,69 @@ final class Game {
     /// it counts answers, so it can pass `total`.
     var pieceProgress: PieceProgress? {
         guard phase == .playing, let pieceRound else { return nil }
-        return PieceProgress(bar: pieceRound.notes[pieceRound.index].measure, bars: pieceRound.bars,
+        return PieceProgress(bar: pieceRound.note.measure, bars: pieceRound.bars,
                              done: pieceRound.order == .inOrder ? pieceRound.index : attempts,
                              total: pieceRound.notes.count)
+    }
+
+    /// What the staff card draws in the whole-bar view: during a piece round the bar of the note
+    /// being asked, between rounds the bar the next one starts in. Nil shows one note at a time:
+    /// for random notes, with the setting off (as it was when the round started), when the part
+    /// has no bar layout, or when a staff to draw has a clef that can't be drawn there.
+    var barDisplay: BarDisplay? {
+        if let pieceRound { return pieceRound.barDisplay }
+        guard piece != nil, settings.piece.showsWholeBar, let part = piecePart, let selectedBarLayout,
+              let first = selectedNotes.first else { return nil }
+        return Self.barDisplay(for: first, in: part, layout: selectedBarLayout, isAsked: false, answered: [])
+    }
+
+    /// Where a piece round in the bar view is, bar by bar; nil outside one.
+    var barStrip: BarStrip? {
+        guard phase == .playing, let pieceRound, let layout = pieceRound.barLayout else { return nil }
+        return BarStrip(bars: layout.bars, current: pieceRound.note.measure, pieceBars: pieceRound.bars,
+                        showsDone: pieceRound.order == .inOrder)
+    }
+
+    /// `note`'s bar on its staff, or on both staves of a grand staff; nil when it has no bar or
+    /// a staff to draw has no clef the bar view can draw. `isAsked`: `note` is being asked now.
+    nonisolated private static func barDisplay(for note: ScoreNote, in part: ScorePart, layout: BarLayout,
+                                               isAsked: Bool, answered: Set<Int>) -> BarDisplay? {
+        guard let symbol = part.symbol(for: note) else { return nil }
+        let measure = symbol.measure
+        let numbers = layout.isGrandStaff && (1...2).contains(note.staff) ? [1, 2] : [note.staff]
+        var staves: [BarDisplay.Staff] = []
+        for number in numbers {
+            guard measure.staves.indices.contains(number - 1), let clef = measure.staves[number - 1].clef else { return nil }
+            staves.append(BarDisplay.Staff(number: number, clef: clef, keySignature: measure.staves[number - 1].keySignature,
+                                           positions: layout.positions[number] ?? 0...8))
+        }
+        return BarDisplay(staves: staves, measure: measure, current: isAsked ? symbol.index : nil,
+                          answered: answered.filter(measure.symbols.indices.contains),
+                          isLastBar: measure.number == part.measureCount)
+    }
+
+    /// The bar view's layout for `notes` of `part`; nil when the part has no bar layout for them.
+    private static func barLayout(of notes: [ScoreNote], in part: ScorePart) -> BarLayout? {
+        guard let first = notes.map(\.measure).min(), let last = notes.map(\.measure).max(),
+              first >= 1, first <= part.measures.count else { return nil }
+        let staves = Set(notes.map(\.staff))
+        var positions: [Int: ClosedRange<Int>] = [:]
+        for measure in part.measures[(first - 1)..<min(last, part.measures.count)] {
+            for symbol in measure.symbols where staves.contains(symbol.staff) {
+                guard let position = symbol.position else { continue }
+                let range = positions[symbol.staff] ?? 0...8
+                positions[symbol.staff] = min(range.lowerBound, position)...max(range.upperBound, position)
+            }
+        }
+        return BarLayout(bars: first...last, isGrandStaff: staves.contains(1) && staves.contains(2), positions: positions)
+    }
+
+    /// The question for a piece note: in the bar view it prints the sign the bar prints (a sign
+    /// earlier in the bar carries on), on its own the note's `printedAccidental`.
+    private static func question(for note: ScoreNote, in bar: BarDisplay?) -> Question {
+        guard let bar, let current = bar.current else { return note.question }
+        return Question(clef: note.clef, pitch: note.pitch, keySignature: note.keySignature,
+                        printedAccidental: bar.measure.symbols[current].accidental, octaveShift: note.octaveShift)
     }
 
     /// Staff positions the staff has to fit for the round's notes (both clefs), so it doesn't
@@ -463,6 +578,7 @@ final class Game {
 
     private func updateSelection() {
         selectedNotes = piecePart.map { Self.notes(of: $0, with: settings.piece) } ?? []
+        selectedBarLayout = piecePart.flatMap { Self.barLayout(of: selectedNotes, in: $0) }
     }
 
     /// The notes a round on `part` asks, in reading order: from the start bar on, on the hand's
@@ -532,8 +648,8 @@ final class Game {
                 return
             }
             pieceError = nil
-            pieceRound = PieceRound(title: piece.title, notes: selectedNotes, bars: part.measureCount,
-                                    order: settings.piece.order)
+            pieceRound = PieceRound(title: piece.title, part: part, notes: selectedNotes, order: settings.piece.order,
+                                    barLayout: settings.piece.showsWholeBar ? selectedBarLayout : nil)
         } else {
             pieceRound = nil
             roundKey = pickRoundKey()
@@ -957,7 +1073,7 @@ final class Game {
             pickChance = pick.chance
         }
         self.pieceRound = pieceRound
-        show(pieceRound.notes[pieceRound.index].question, pickChance: pickChance)
+        show(Self.question(for: pieceRound.note, in: pieceRound.barDisplay), pickChance: pickChance)
     }
 
     /// `pickChance`: how likely the weighted pick was to choose this note, for the log.
@@ -1108,17 +1224,22 @@ final class Game {
         guard let question, let roundLog else { return }
         questionLog = QuestionLog(id: question.id)
         self.roundLog?.questionsShown += 1
-        let note = pieceRound.map { $0.notes[$0.index] }
+        let note = pieceRound?.note
+        let bar = pieceRound?.barDisplay
         recorder.record(.questionShown(QuestionShown(
             round: roundLog.id, question: question.id, index: roundLog.questionsShown,
             clef: question.clef.rawValue, pitch: LoggedPitch(question.pitch), written: LoggedPitch(question.writtenPitch),
             position: question.position, keyFifths: question.keySignature.fifths,
+            // As drawn: in the bar view, the bar's sign.
             printedAccidental: question.printedAccidental?.rawValue, octaveShift: question.octaveShift,
-            pieceNote: note.map { PieceNoteRef(measure: $0.measure, staff: $0.staff, onset: $0.onset, chord: $0.chord) },
+            pieceNote: note.map {
+                PieceNoteRef(measure: $0.measure, staff: $0.staff, onset: $0.onset, chord: $0.chord, symbolIndex: $0.symbolIndex)
+            },
             pickChance: pickChance, naming: settings.naming.rawValue, input: settings.answerInput.rawValue,
             hintsVisible: settings.showHints,
             // Key names are only drawn on the piano.
-            keyNamesVisible: settings.answerInput == .piano && settings.showKeyNames)))
+            keyNamesVisible: settings.answerInput == .piano && settings.showKeyNames,
+            barView: pieceRound.map { _ in bar != nil }, barStaves: bar?.staves.map(\.number))))
     }
 
     /// Adds a key to the keystrokes of the question on screen, if one is up and not yet answered;

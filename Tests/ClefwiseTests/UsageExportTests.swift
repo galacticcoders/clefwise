@@ -25,12 +25,13 @@ import Testing
 
     private func question(_ script: Script, _ number: Int, round: UUID, index: Int, _ pitch: Pitch, position: Int,
                           key: Int = 0, printed: Int? = nil, piece: PieceNoteRef? = nil, pickChance: Double? = nil,
-                          naming: String = "letters", input: String) -> UsageEvent {
+                          naming: String = "letters", input: String, barStaves: [Int]? = nil) -> UsageEvent {
         .questionShown(QuestionShown(round: round, question: script.questions[number], index: index, clef: "treble",
                                      pitch: LoggedPitch(pitch), written: LoggedPitch(pitch), position: position,
                                      keyFifths: key, printedAccidental: printed, octaveShift: 0, pieceNote: piece,
                                      pickChance: pickChance, naming: naming, input: input,
-                                     hintsVisible: false, keyNamesVisible: input == "piano"))
+                                     hintsVisible: false, keyNamesVisible: input == "piano",
+                                     barView: piece.map { _ in barStaves != nil }, barStaves: barStaves))
     }
 
     private func answer(_ script: Script, _ number: Int, round: UUID, ms: Int, source: AnswerSource,
@@ -80,7 +81,8 @@ import Testing
                 $0.answerInput = .piano
             }, keyFifths: 0, piece: piece))),
             (70, question(script, 2, round: script.round2, index: 0, Pitch(.e, 5), position: 7,
-                          piece: PieceNoteRef(measure: 9, staff: 1, onset: 24, chord: 46), naming: "solfege", input: "piano")),
+                          piece: PieceNoteRef(measure: 9, staff: 1, onset: 24, chord: 46, symbolIndex: 0), naming: "solfege",
+                          input: "piano", barStaves: [1, 2])),
             (71.2, answer(script, 2, round: script.round2, ms: 1200, source: .piano, "E", 0, name: "Mi", piano: Pitch(.e, 4),
                           correct: false, wrongOctave: true, score: 0, streak: 0)),
             (71.2, question(script, 3, round: script.round2, index: 1, Pitch(.d, 5, .sharp), position: 6, printed: 1,
@@ -230,6 +232,7 @@ import Testing
         let expected: [String: String] = [
             "questionIndex": "0", "clef": "treble", "pitch": "F♯5", "pitchMidi": "78", "written": "F♯5", "position": "8",
             "keyFifths": "1", "printedAccidental": "", "octaveShift": "0", "pieceBar": "", "pieceStaff": "",
+            "barView": "", "barStaves": "",
             "naming": "letters", "input": "keyboard", "source": "typing", "answerLetter": "F", "answerAccidental": "1",
             "answerName": "F♯", "answerPitch": "", "answerMidi": "", "correct": "true", "wrongOctave": "",
             "responseMs": "1500", "keystrokes": "3", "rejectedKeystrokes": "1", "scoreAfter": "1", "streakAfter": "1",
@@ -249,7 +252,9 @@ import Testing
         #expect(piano["naming"] == "solfege" && piano["input"] == "piano" && piano["mode"] == "practice")
         #expect(piano["keySetting"] == "0" && piano["keystrokes"] == "0")
         #expect(piano["pieceTitle"] == pieceTitle)
+        #expect(piano["barView"] == "true" && piano["barStaves"] == "1 2")
         #expect(answers[3]["answerName"] == "Re♯" && answers[3]["printedAccidental"] == "1")
+        #expect(answers[3]["barView"] == "false" && answers[3]["barStaves"] == "")
     }
 
     @Test func roundsAndSessionsAreSummed() throws {
