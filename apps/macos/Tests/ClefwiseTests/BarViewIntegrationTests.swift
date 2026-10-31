@@ -8,8 +8,7 @@ import Testing
 @MainActor
 @Suite final class BarViewIntegrationTests: GameTestBench {
     private func openLantern(hand: Game.PieceSettings.Hand) throws {
-        let url = try #require(Bundle.module.url(forResource: "bar-view.musicxml", withExtension: nil,
-                                                 subdirectory: "Fixtures"))
+        let url = try #require(Fixtures.url("bar-view.musicxml"))
         game.settings.mode = .practice
         game.openPiece(at: url)
         #expect(game.pieceError == nil)

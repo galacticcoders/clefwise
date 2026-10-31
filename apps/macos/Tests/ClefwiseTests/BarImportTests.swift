@@ -8,7 +8,7 @@ import Testing
 // rests, voices and stems. The older fixtures are checked too.
 
 private func load(_ name: String) throws -> Score {
-    let url = try #require(Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Fixtures"))
+    let url = try #require(Fixtures.url(name))
     return try MusicXMLImporter.load(from: url)
 }
 

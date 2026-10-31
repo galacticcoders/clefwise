@@ -6,7 +6,7 @@ import Testing
 // its settings in memory (see `GameTestBench`), so nothing reaches the real log or preferences.
 
 private func fixture(_ name: String) throws -> URL {
-    try #require(Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Fixtures"))
+    try #require(Fixtures.url(name))
 }
 
 /// G major, one part on one staff: G4 and F♯4 in bar 1, then E6 under an 8va line (written E5) in bar 2.

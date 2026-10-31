@@ -7,7 +7,7 @@ import Testing
 // zipped-score.xml hold accidentals.musicxml without one. All three were made with `zip`.
 
 private func fixture(_ name: String) throws -> URL {
-    try #require(Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Fixtures"))
+    try #require(Fixtures.url(name))
 }
 
 private func load(_ name: String) throws -> Score {
