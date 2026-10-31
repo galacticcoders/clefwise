@@ -153,6 +153,27 @@ private extension GameTestBench {
         #expect(game.isTakingAnswers)
     }
 
+    @Test func switchingAppsPausesARoundGoing() {
+        game.appDidResignActive()
+        #expect(!game.isPaused && paused.isEmpty) // no round, nothing to pause
+
+        game.start()
+        game.appDidResignActive()
+        #expect(game.isPaused && game.pausedVia == .appSwitch)
+        #expect(paused.map(\.via) == [.appSwitch])
+        // Coming back doesn't carry on by itself; Space does.
+        game.appDidResignActive()
+        #expect(paused.count == 1)
+        _ = game.handleKey(characters: " ", keyCode: 49)
+        #expect(!game.isPaused && game.pausedVia == nil)
+        #expect(resumed.map(\.via) == [.key])
+
+        // A round already paused by hand stays paused by hand.
+        game.pause(via: .button)
+        game.appDidResignActive()
+        #expect(game.pausedVia == .button && paused.count == 2)
+    }
+
     @Test func aNewRoundStartsUnpaused() {
         game.start()
         game.pause()

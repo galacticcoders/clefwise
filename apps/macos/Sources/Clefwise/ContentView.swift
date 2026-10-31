@@ -539,7 +539,9 @@ private struct PausedPanel: View {
         VStack(spacing: 10) {
             Text("Paused")
                 .font(.title2.weight(.semibold))
-            Text("The clock is stopped and the note is hidden until you carry on.")
+            Text(game.pausedVia == .appSwitch
+                 ? "Paused while you were in another app. The note is hidden until you carry on."
+                 : "The clock is stopped and the note is hidden until you carry on.")
                 .foregroundStyle(.secondary)
             Button {
                 game.recorder.recordUIAction("resumePanelButton")
