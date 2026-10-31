@@ -68,46 +68,46 @@ struct StaffView: View {
         let space = staff.space
         let position = note.position
         let y = staff.y(position)
+        let halfHead = NoteShapes.headWidth / 2 * space
 
-        // Ledger lines for notes above or below the staff.
+        // Ledger lines for notes above or below the staff, reaching past the head as Bravura's defaults say.
+        let ledgerReach = halfHead + SMuFL.legerLineExtension * space
         var ledgers = Path()
         let ledgerPositions = position < 0 ? Array(stride(from: -2, through: position, by: -2))
             : position > 8 ? Array(stride(from: 10, through: position, by: 2)) : []
         for ledger in ledgerPositions {
-            ledgers.move(to: CGPoint(x: x - space * 1.05, y: staff.y(ledger)))
-            ledgers.addLine(to: CGPoint(x: x + space * 1.05, y: staff.y(ledger)))
+            ledgers.addRect(CGRect(x: x - ledgerReach, y: staff.y(ledger) - staff.ledgerWidth / 2,
+                                   width: 2 * ledgerReach, height: staff.ledgerWidth))
         }
-        context.stroke(ledgers, with: .color(Theme.ink), lineWidth: staff.lineWidth * 1.3)
+        context.fill(ledgers, with: .color(Theme.ink))
 
-        // Slightly tilted oval note head.
-        let headWidth = space * 1.32
-        let headHeight = space * 0.94
-        let head = Path(ellipseIn: CGRect(x: -headWidth / 2, y: -headHeight / 2, width: headWidth, height: headHeight))
-            .applying(CGAffineTransform(rotationAngle: -.pi / 9).concatenating(CGAffineTransform(translationX: x, y: y)))
+        let head = NoteShapes.head(.quarter).applying(CGAffineTransform(scaleX: space, y: space)
+            .concatenating(CGAffineTransform(translationX: x, y: y)))
         context.fill(head, with: .color(noteColor))
 
         // A little air before the head, or before the ledger lines, which would otherwise cut through the sign.
         var accidentalBounds: CGRect?
         if let accidental = note.printedAccidental {
-            let sign = StaffDrawing.accidentalPath(accidental, at: position, staff)
-            let right = x - (ledgerPositions.isEmpty ? headWidth / 2 + space * 0.25 : space * (1.05 + 0.15))
-            let placed = sign.offsetBy(dx: right - sign.boundingRect.maxX, dy: 0)
+            let right = x - (ledgerPositions.isEmpty ? halfHead + space * 0.25 : ledgerReach + space * 0.15)
+            let placed = StaffDrawing.accidentalPath(accidental, at: position, staff)
+                .offsetBy(dx: right - StaffMetrics.accidentalWidth(accidental) * space, dy: 0)
             context.fill(placed, with: .color(noteColor))
             accidentalBounds = placed.cgPath.boundingBoxOfPath
         }
 
-        // Stem goes up from the right of the head below the middle line, down from the left otherwise,
-        // and always reaches at least the middle line.
+        // Stem up from the right of the head below the middle line, down from the left otherwise, where
+        // Bravura's anchors put it; 3.5 spaces long, and always reaching at least the middle line.
         let stemUp = position < 4
-        let stemWidth = space * 0.12
-        let stemX = x + (stemUp ? 1 : -1) * (headWidth / 2 - stemWidth / 2 - space * 0.02)
+        let stemWidth = NoteShapes.stemWidth * space
+        let stemX = x + (stemUp ? 1 : -1) * NoteShapes.stemOffset * space
+        let stemStart = y + (stemUp ? -1 : 1) * NoteShapes.stemStart * space
         let stemEnd = stemUp ? min(y - space * 3.5, staff.y(4)) : max(y + space * 3.5, staff.y(4))
-        let stem = Path(CGRect(x: stemX - stemWidth / 2, y: min(y, stemEnd), width: stemWidth, height: abs(stemEnd - y)))
+        let stem = Path(CGRect(x: stemX - stemWidth / 2, y: min(stemStart, stemEnd), width: stemWidth,
+                               height: abs(stemEnd - stemStart)))
         context.fill(stem, with: .color(noteColor))
 
         if note.octaveShift != 0 {
-            // The mark goes outside the staff and everything drawn for the note. The head's ink, that is:
-            // its `boundingRect` also takes in the ellipse's control points.
+            // The mark goes outside the staff and everything drawn for the note.
             let drawn = head.cgPath.boundingBoxOfPath.union(stem.boundingRect).union(accidentalBounds ?? .null)
             let column = min(drawn.minY, staff.y(8))...max(drawn.maxY, staff.y(0))
             drawOctaveMark(note.octaveShift, at: x, outside: column, accidental: accidentalBounds, in: &context, staff)
@@ -130,20 +130,15 @@ struct StaffView: View {
                                 in context: inout GraphicsContext, _ staff: StaffGeometry) {
         let space = staff.space
         let above = shift > 0
-        let fontSize = space * 0.85
-        let label = StaffDrawing.octaveLabel(shift)
-        let text = context.resolve(Text(label).font(StaffDrawing.octaveFont(size: fontSize))
-            .foregroundStyle(noteColor))
-        let textSize = text.measure(in: CGSize(width: 1000, height: 1000))
-        // The line runs through the middle of the digits, which stand about three quarters of an em tall.
-        let halfDigit = fontSize * 0.37
+        let size = StaffMetrics.octaveMarkSize(shift)
+        let halfDigit = size.height / 2 * space
         let clearance = space * 0.4 + halfDigit
         var lineY = above ? column.lowerBound - clearance : column.upperBound + clearance
         // A note at the very edge of a piece's range leaves less room than that; stay on the canvas.
         lineY = min(max(lineY, halfDigit + space * 0.15), staff.height - halfDigit - space * 0.15)
 
         var textRight = x - space * 0.8
-        var lineStart = textRight + space * 0.2
+        var lineStart = textRight + space * 0.25
         if let accidental, lineY - halfDigit < accidental.maxY + space * 0.15,
            lineY + halfDigit > accidental.minY - space * 0.15 {
             // Squeezed against the edge, the number can't clear the accidental: set it before the sign
@@ -151,23 +146,10 @@ struct StaffView: View {
             textRight = accidental.minX - space * 0.25
             lineStart = accidental.maxX + space * 0.2
         }
-        let baseline = text.firstBaseline(in: textSize)
-        context.draw(text, in: CGRect(x: textRight - textSize.width, y: lineY + halfDigit - baseline,
-                                      width: textSize.width, height: textSize.height))
-
-        // Dashes spread evenly from the number to the hook, which stops short of the answer pill and the
-        // hint labels; the last dash turns down (or up) into the hook.
-        let hookX = x + space * 1.2
-        let dash = space * 0.3
-        let count = max(2, Int(((hookX - lineStart + space * 0.2) / (space * 0.5)).rounded()))
-        let step = (hookX - lineStart - dash) / CGFloat(count - 1)
-        var line = Path()
-        for index in 0..<count {
-            let start = lineStart + CGFloat(index) * step
-            line.move(to: CGPoint(x: start, y: lineY))
-            line.addLine(to: CGPoint(x: start + dash, y: lineY))
-        }
-        line.addLine(to: CGPoint(x: hookX, y: lineY + (above ? 1 : -1) * space * 0.45))
-        context.stroke(line, with: .color(noteColor), lineWidth: staff.lineWidth * 1.2)
+        context.fill(StaffDrawing.octaveMarkPath(shift, left: textRight - size.width * space, middle: lineY, space: space),
+                     with: .color(noteColor))
+        // Dashes from the number to the hook, which stops short of the answer pill and the hint labels.
+        context.fill(StaffDrawing.octaveLinePath(from: lineStart, to: x + space * 1.2, at: lineY, above: above, space: space),
+                     with: .color(noteColor))
     }
 }

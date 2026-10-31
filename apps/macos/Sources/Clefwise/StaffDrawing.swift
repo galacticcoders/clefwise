@@ -1,8 +1,9 @@
 import CoreText
 import SwiftUI
 
-// What `StaffView` (one note) and `BarStaffView` (a whole bar) draw alike: the staff geometry, the
-// clef and accidental outlines, key signatures, hint labels and the answer pill's text.
+// What `StaffView` (one note) and `BarStaffView` (a whole bar) draw alike: the staff geometry, Bravura's
+// glyphs placed on it (clefs, key and time signatures, accidentals, octave marks), hint labels and the
+// answer pill's text.
 
 /// Maps staff positions to points for a given canvas size.
 struct StaffGeometry {
@@ -52,7 +53,9 @@ struct StaffGeometry {
         return (max(CGFloat(positions.upperBound - 4) / 2 + 1.5, 5), max(CGFloat(4 - positions.lowerBound) / 2 + 1.5, 5))
     }
 
-    var lineWidth: CGFloat { max(1, space * 0.08) }
+    /// Staff lines, as thick as Bravura's engraving defaults say (never under a pixel).
+    var lineWidth: CGFloat { max(1, space * SMuFL.staffLineThickness) }
+    var ledgerWidth: CGFloat { max(1, space * SMuFL.legerLineThickness) }
 
     func y(_ position: Int) -> CGFloat {
         bottomLineY - CGFloat(position) * space / 2
@@ -64,71 +67,98 @@ struct StaffGeometry {
     }
 }
 
-/// Clef and accidental outlines from the system "Apple Symbols" font, shifted so the bounding box
-/// starts at the origin with y pointing down. (The font has no rests, flags or note heads:
-/// `NoteShapes` draws those.)
+/// Bravura's glyphs (see `MusicFont`) set at a size: one staff space to `space` points.
 enum MusicGlyph {
-    private static let treble = outline(of: "\u{1D11E}")
-    private static let bass = outline(of: "\u{1D122}")
-    private static let sharp = outline(of: "\u{266F}")
-    private static let flat = outline(of: "\u{266D}")
-    private static let natural = outline(of: "\u{266E}")
-
-    static func path(for clef: Clef) -> CGPath {
-        clef == .treble ? treble : bass
+    /// The glyph with its SMuFL origin at `origin`: a notehead's left edge on its line or space, a
+    /// clef's on its line (G or F), a rest's on its reference line, a flag's at the stem's end.
+    static func path(_ glyph: SMuFL.Glyph, at origin: CGPoint, space: CGFloat, scale: CGFloat = 1) -> Path {
+        Path(MusicFont.outline(glyph)).applying(CGAffineTransform(scaleX: space * scale, y: space * scale)
+            .concatenating(CGAffineTransform(translationX: origin.x, y: origin.y)))
     }
 
-    static func path(for accidental: Accidental) -> CGPath {
-        switch accidental {
-        case .sharp: sharp
-        case .flat: flat
-        case .natural: natural
-        }
-    }
-
-    private static func outline(of character: String) -> CGPath {
-        let font = CTFontCreateWithName("Apple Symbols" as CFString, 100, nil)
-        var utf16 = Array(character.utf16)
-        var glyphs = [CGGlyph](repeating: 0, count: utf16.count)
-        guard CTFontGetGlyphsForCharacters(font, &utf16, &glyphs, utf16.count),
-              let raw = CTFontCreatePathForGlyph(font, glyphs[0], nil) else { return CGMutablePath() }
-        var flip = CGAffineTransform(scaleX: 1, y: -1)
-        let flipped = raw.copy(using: &flip) ?? raw
-        let box = flipped.boundingBoxOfPath
-        var shift = CGAffineTransform(translationX: -box.minX, y: -box.minY)
-        return flipped.copy(using: &shift) ?? flipped
+    /// The glyph's ink in staff spaces, y down from its origin.
+    static func bounds(_ glyph: SMuFL.Glyph) -> CGRect {
+        MusicFont.bounds(glyph)
     }
 }
 
 /// Sizes of the clefs and signs, in staff spaces, for layout without drawing.
 enum StaffMetrics {
-    /// Vertical extent of each clef, in staff spaces above the bottom line.
-    static func clefExtent(_ clef: Clef) -> (bottom: CGFloat, top: CGFloat) {
-        clef == .treble ? (-1.55, 5.45) : (0.48, 4.05)
+    /// The staff position a clef is set on: the G clef curls round the G line, the F clef's dots
+    /// straddle the F line.
+    static func clefPosition(_ clef: Clef) -> Int {
+        clef == .treble ? 2 : 6
     }
 
-    /// The clef's width at full size.
-    static func clefWidth(_ clef: Clef) -> CGFloat {
-        let (bottom, top) = clefExtent(clef)
-        let box = MusicGlyph.path(for: clef).boundingBoxOfPath
-        return box.width * (top - bottom) / box.height
+    /// Vertical extent of each clef, in staff spaces above the bottom line; `change` for the smaller
+    /// clef of a change partway through a bar.
+    static func clefExtent(_ clef: Clef, change: Bool = false) -> (bottom: CGFloat, top: CGFloat) {
+        let box = MusicGlyph.bounds(.clef(clef, change: change))
+        let line = CGFloat(clefPosition(clef)) / 2
+        return (line - box.maxY, line - box.minY)
     }
 
-    /// The sign's height in spaces, and how much of it hangs below its line or space. Sharps and
-    /// naturals a touch under the usual 2.7–2.8: Apple Symbols draws them wider and heavier than
-    /// engraving fonts, and at full height they dwarf the note.
+    /// The clef's inked width.
+    static func clefWidth(_ clef: Clef, change: Bool = false) -> CGFloat {
+        MusicGlyph.bounds(.clef(clef, change: change)).width
+    }
+
+    /// The sign's height in spaces, and how much of it hangs below its line or space.
     static func accidentalExtent(_ accidental: Accidental) -> (height: CGFloat, below: CGFloat) {
-        switch accidental {
-        case .sharp: (2.5, 1.25)
-        case .natural: (2.5, 1.25)
-        case .flat: (2.3, 0.6)
+        let box = MusicGlyph.bounds(.accidental(accidental))
+        return (box.height, box.maxY)
+    }
+
+    /// The sign's inked width.
+    static func accidentalWidth(_ accidental: Accidental) -> CGFloat {
+        MusicGlyph.bounds(.accidental(accidental)).width
+    }
+
+    /// Air between a clef and the key signature after it, and between the signature's signs.
+    static let clefToKeySignature: CGFloat = 0.7
+    static let keySignatureGap: CGFloat = 0.12
+    /// Air before a time signature, after the key signature (or the clef, with none).
+    static let beforeTimeSignature: CGFloat = 0.9
+
+    /// The glyphs of a time signature and where their origins go: x from its left edge, y as
+    /// staff positions. Numbers stand one above the other, centred on each other; common and cut
+    /// time sit on the middle line.
+    static func timeSignatureGlyphs(_ time: TimeSignature) -> [(glyph: SMuFL.Glyph, x: CGFloat, position: Int)] {
+        func number(_ value: Int) -> [SMuFL.Glyph] {
+            String(max(0, value)).compactMap(\.wholeNumberValue).map(SMuFL.Glyph.timeSignatureDigit)
+        }
+        switch time.symbol {
+        case .common: return [(.timeSigCommon, 0, 4)]
+        case .cut: return [(.timeSigCutCommon, 0, 4)]
+        case .numbers:
+            let rows = [(number(time.beats), 6), (number(time.beatType), 2)]
+            let widths = rows.map { $0.0.reduce(0) { $0 + MusicFont.advance($1) } }
+            let width = widths.max() ?? 0
+            var result: [(SMuFL.Glyph, CGFloat, Int)] = []
+            for (row, rowWidth) in zip(rows, widths) {
+                var x = (width - rowWidth) / 2
+                for glyph in row.0 {
+                    result.append((glyph, x, row.1))
+                    x += MusicFont.advance(glyph)
+                }
+            }
+            return result
         }
     }
 
-    /// The sign's inked width, thickening included.
-    static func accidentalWidth(_ accidental: Accidental) -> CGFloat {
-        let box = MusicGlyph.path(for: accidental).boundingBoxOfPath
-        return box.width * accidentalExtent(accidental).height / box.height + 0.04
+    /// The time signature's width, side bearings included.
+    static func timeSignatureWidth(_ time: TimeSignature) -> CGFloat {
+        timeSignatureGlyphs(time).map { $0.x + MusicFont.advance($0.glyph) }.max() ?? 0
+    }
+
+    /// How much an octave mark ("8va"…) is scaled from Bravura's size, which is meant for a printed
+    /// part, to sit with the notes of a staff as large as Clefwise's.
+    static let octaveMarkScale: CGFloat = 0.5
+
+    /// The octave mark's inked width and the height of its number, in spaces.
+    static func octaveMarkSize(_ shift: Int) -> CGSize {
+        let box = MusicGlyph.bounds(.octave(shift))
+        return CGSize(width: box.maxX * octaveMarkScale, height: -box.minY * octaveMarkScale)
     }
 }
 
@@ -144,33 +174,20 @@ enum StaffDrawing {
         context.stroke(lines, with: .color(Theme.ink), lineWidth: staff.lineWidth)
     }
 
-    /// The clef's outline with its left edge at `left`; `scale` below 1 gives the smaller clef of a
-    /// change partway through a bar, still curled round its own line (G or F).
-    static func clefPath(_ clef: Clef, left: CGFloat, _ staff: StaffGeometry, scale size: CGFloat = 1) -> Path {
-        var (bottom, top) = StaffMetrics.clefExtent(clef)
-        if size != 1 {
-            let anchor: CGFloat = clef == .treble ? 1 : 3
-            bottom = anchor + (bottom - anchor) * size
-            top = anchor + (top - anchor) * size
-        }
-        let glyph = MusicGlyph.path(for: clef)
-        let scale = (top - bottom) * staff.space / glyph.boundingBoxOfPath.height
-        let transform = CGAffineTransform(scaleX: scale, y: scale)
-            .concatenating(CGAffineTransform(translationX: left, y: staff.bottomLineY - top * staff.space))
-        return Path(glyph).applying(transform)
+    /// The clef with its inked left edge at `left`, on its line; `change` gives the smaller clef of a
+    /// change partway through a bar.
+    static func clefPath(_ clef: Clef, left: CGFloat, _ staff: StaffGeometry, change: Bool = false) -> Path {
+        let glyph = SMuFL.Glyph.clef(clef, change: change)
+        let origin = CGPoint(x: left - MusicGlyph.bounds(glyph).minX * staff.space, y: staff.y(StaffMetrics.clefPosition(clef)))
+        return MusicGlyph.path(glyph, at: origin, space: staff.space)
     }
 
     /// Draws the clef at the start of the staff and returns its right edge.
     static func drawClef(_ clef: Clef, in context: inout GraphicsContext, _ staff: StaffGeometry,
                          left: CGFloat? = nil) -> CGFloat {
-        let (bottom, top) = StaffMetrics.clefExtent(clef)
-        let glyph = MusicGlyph.path(for: clef)
-        let scale = (top - bottom) * staff.space / glyph.boundingBoxOfPath.height
         let left = left ?? staff.left + staff.space * 0.5
-        let transform = CGAffineTransform(scaleX: scale, y: scale)
-            .concatenating(CGAffineTransform(translationX: left, y: staff.bottomLineY - top * staff.space))
-        context.fill(Path(glyph).applying(transform), with: .color(Theme.ink))
-        return left + glyph.boundingBoxOfPath.width * scale
+        context.fill(clefPath(clef, left: left, staff), with: .color(Theme.ink))
+        return left + StaffMetrics.clefWidth(clef) * staff.space
     }
 
     /// Draws the signature after the clef and returns where it ends (the clef's edge when there's none).
@@ -187,29 +204,56 @@ enum StaffDrawing {
     static func keySignatureSigns(_ keySignature: KeySignature, clef: Clef, after clefEnd: CGFloat,
                                   _ staff: StaffGeometry) -> (signs: [Path], end: CGFloat) {
         let accidental: Accidental = keySignature.fifths > 0 ? .sharp : .flat
+        let width = StaffMetrics.accidentalWidth(accidental) * staff.space
         var signs: [Path] = []
         var end = clefEnd
-        // Measured from the clef's real edge, so the bass clef's dots get the same air as the treble's curl.
-        var left = clefEnd + staff.space * 0.6
+        var left = clefEnd + staff.space * StaffMetrics.clefToKeySignature
         for position in keySignature.staffPositions(for: clef) {
-            let sign = accidentalPath(accidental, at: position, staff)
-            signs.append(sign.offsetBy(dx: left - sign.boundingRect.minX, dy: 0))
-            end = left + sign.boundingRect.width
-            left = end + staff.space * 0.15
+            signs.append(accidentalPath(accidental, at: position, staff).offsetBy(dx: left, dy: 0))
+            end = left + width
+            left = end + staff.space * StaffMetrics.keySignatureGap
         }
         return (signs, end)
     }
 
-    /// The sign sized and set on `position` as engravers do: ♯ and ♮ centred on the line or space,
-    /// ♭ with its bowl there. It starts at about x = 0; callers line it up by its bounds.
+    /// The sign on `position` as SMuFL sets it (♯ and ♮ centred on the line or space, ♭ with its bowl
+    /// there), its left edge at x = 0.
     static func accidentalPath(_ accidental: Accidental, at position: Int, _ staff: StaffGeometry) -> Path {
-        let (height, below) = StaffMetrics.accidentalExtent(accidental)
-        let glyph = MusicGlyph.path(for: accidental)
-        let scale = height * staff.space / glyph.boundingBoxOfPath.height
-        let outline = Path(glyph).applying(CGAffineTransform(scaleX: scale, y: scale)
-            .concatenating(CGAffineTransform(translationX: 0, y: staff.y(position) + (below - height) * staff.space)))
-        // Apple Symbols' accidentals are lighter than engraved ones; thicken them to sit with the clef and note.
-        return outline.union(outline.strokedPath(StrokeStyle(lineWidth: staff.space * 0.04, lineJoin: .round)))
+        MusicGlyph.path(.accidental(accidental), at: CGPoint(x: 0, y: staff.y(position)), space: staff.space)
+    }
+
+    /// The time signature with its left edge at `left`.
+    static func timeSignaturePath(_ time: TimeSignature, left: CGFloat, _ staff: StaffGeometry) -> Path {
+        var path = Path()
+        for item in StaffMetrics.timeSignatureGlyphs(time) {
+            path.addPath(MusicGlyph.path(item.glyph, at: CGPoint(x: left + item.x * staff.space, y: staff.y(item.position)),
+                                         space: staff.space))
+        }
+        return path
+    }
+
+    /// An octave mark's number ("8va", "15mb"…) with its left edge at `left` and its digits'
+    /// vertical middle on `middle`.
+    static func octaveMarkPath(_ shift: Int, left: CGFloat, middle: CGFloat, space: CGFloat) -> Path {
+        let size = StaffMetrics.octaveMarkSize(shift)
+        return MusicGlyph.path(.octave(shift), at: CGPoint(x: left, y: middle + size.height / 2 * space), space: space,
+                               scale: StaffMetrics.octaveMarkScale)
+    }
+
+    /// The dashed line from an octave mark's number to the end of its run, where it turns down (for
+    /// a mark above) or up into a hook.
+    static func octaveLinePath(from start: CGFloat, to hookX: CGFloat, at y: CGFloat, above: Bool, space: CGFloat) -> Path {
+        let dash = space * 0.45
+        let count = max(2, Int(((hookX - start + space * 0.3) / (space * 0.8)).rounded()))
+        let step = (hookX - start - dash) / CGFloat(count - 1)
+        var line = Path()
+        for index in 0..<count {
+            let x = start + CGFloat(index) * step
+            line.move(to: CGPoint(x: x, y: y))
+            line.addLine(to: CGPoint(x: x + dash, y: y))
+        }
+        line.addLine(to: CGPoint(x: hookX, y: y + (above ? 1 : -1) * space * 0.6))
+        return line.strokedPath(StrokeStyle(lineWidth: max(1, space * SMuFL.octaveLineThickness)))
     }
 
     /// Hint names for `positions`, carrying the key signature's sharps and flats: in G major the
@@ -259,14 +303,5 @@ enum StaffDrawing {
             }
             return Text("\(text)\(piece)")
         }
-    }
-
-    /// The octave mark's number: "8va" an octave up, "15ma" two, "8vb" and "15mb" down.
-    static func octaveLabel(_ shift: Int) -> String {
-        "\(abs(shift) * 7 + 1)\(abs(shift) == 1 ? "v" : "m")\(shift > 0 ? "a" : "b")"
-    }
-
-    static func octaveFont(size: CGFloat) -> Font {
-        .system(size: size, weight: .bold, design: .serif).italic()
     }
 }
