@@ -92,3 +92,14 @@ import Testing
         #expect(TimeSignature(beats: 6, beatType: 8).symbol == .numbers)
     }
 }
+
+@Suite struct BarDisplayGroupTests {
+    @Test func oneNoteAtATimeByDefault() {
+        let measure = ScoreMeasure(number: 1, start: 0, length: 4, staves: [.init(clef: .treble, keySignature: .cMajor)],
+                                   symbols: [])
+        let display = BarDisplay(staves: [.init(number: 1, clef: .treble, keySignature: .cMajor, positions: 0...8)],
+                                 measure: measure, current: nil, answered: [], isLastBar: false)
+        #expect(display.together.isEmpty && display.marks.isEmpty)
+        #expect(BarDisplay.NoteMark.wrong(name: "Sol") != .right)
+    }
+}
