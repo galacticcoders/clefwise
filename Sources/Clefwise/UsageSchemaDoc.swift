@@ -131,9 +131,11 @@ extension UsageExport {
         | `written` | The note as written; differs from `pitch` under an 8va or 8vb line. |
         | `position` | Staff position of the written note. |
         | `keyFifths` | The key signature. |
-        | `printedAccidental` | The sign printed right before the note, −1/0/1 (0 = ♮); absent when none is printed and the key signature applies. |
+        | `printedAccidental` | The sign printed right before the note, −1/0/1 (0 = ♮); absent when none is printed and the key signature applies. In the whole-bar view it's the sign the bar prints: one earlier in the bar carries on, so a note can be sharp with no sign of its own. Shown on its own, a note gets the sign it needs printed on it. |
         | `octaveShift` | Octaves the note is written below how it sounds: 1 under 8va, −1 under 8vb, 0 normally. |
-        | `pieceNote` | Where the note is in the piece (pieces only): `measure` (bar), `staff`, `onset` (quarter notes from the start), `chord` (notes struck together on one staff share a chord id). |
+        | `pieceNote` | Where the note is in the piece (pieces only): `measure` (bar), `staff`, `onset` (quarter notes from the start), `chord` (notes struck together on one staff share a chord id), `symbolIndex` (where it's drawn in its bar: its 0-based index among the notes and rests drawn in the bar on all staves, ordered by time, then staff, voice and pitch, rests first; absent when the piece has no bar layout). |
+        | `barView` | Pieces only: `true` when the note was asked in the whole-bar view (its whole bar drawn, the note highlighted), `false` when it was shown on its own. Absent for random notes. |
+        | `barStaves` | In the whole-bar view, the staves drawn, top to bottom: `[1, 2]` for both staves of a grand staff, `[1]` or `[2]` for one. Absent otherwise. |
         | `pickChance` | The chance this note had of being picked (random and shuffled rounds), 0–1, for studying the adaptive picking. |
         | `naming` | Note names in use: `letters` (C D E), `solfege` (Do Re Mi, fixed: Do = C), `sargam` (Sa Re Ga, Sa = C). |
         | `input` | How answers are given: `buttons`, `piano`, `keyboard` (typing names). |
@@ -248,7 +250,7 @@ extension UsageExport {
         | `isMuted` | Sound off. |
         | `key` | `{"fixed":{"_0":{"fifths":N}}}` for a fixed key signature, `{"random":{}}` for a new random one each round. |
         | `addsAccidentals` | Now and then print a ♯, ♭ or ♮ in front of a note, on top of the key signature. |
-        | `piece` | `part` (index from 0), `hand`, `order`, `startBar`, `oneNotePerChord`, as in `roundStarted.piece`. |
+        | `piece` | `part` (index from 0), `hand`, `order`, `startBar`, `oneNotePerChord`, as in `roundStarted.piece`; and `showsWholeBar`, the "Show the whole bar" checkbox (true unless switched off). |
         | `piecePath` | The last piece opened, reopened at launch. |
 
         ### `note-stats.json` and `best-scores.json`
@@ -282,6 +284,8 @@ extension UsageExport {
         | `printedAccidental` | −1/0/1; empty when no sign was printed. |
         | `octaveShift` | 1 under 8va, −1 under 8vb, 0 normally. |
         | `pieceBar`, `pieceStaff` | Where the note is in the piece; empty for random notes. |
+        | `barView` | Pieces only: `true` when asked in the whole-bar view, `false` when shown on its own; empty for random notes. |
+        | `barStaves` | In the whole-bar view, the staves drawn, space-separated: `1 2` for a grand staff, `1` or `2` for one. |
         | `naming`, `input` | The naming system and answer input in use. |
         | `source` | How the answer was given: `click`, `shortcut`, `typing`, `piano`. |
         | `answerLetter`, `answerAccidental`, `answerName` | What was answered. |

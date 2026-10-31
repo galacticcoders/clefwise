@@ -98,6 +98,7 @@ private extension GameTestBench {
             #expect(shown.position == question.position)
             #expect(shown.keyFifths == 0 && shown.printedAccidental == nil && shown.octaveShift == 0)
             #expect(shown.pieceNote == nil)
+            #expect(shown.barView == nil && shown.barStaves == nil)
             let chance = try #require(shown.pickChance)
             #expect(chance > 0 && chance <= 1)
             #expect(shown.naming == "letters" && shown.input == "buttons")
@@ -435,6 +436,8 @@ private extension GameTestBench {
                                            PieceNoteRef(measure: 1, staff: 1, onset: 1, chord: 2),
                                            PieceNoteRef(measure: 2, staff: 1, onset: 4, chord: 3)])
         #expect(shown.allSatisfy { $0.pickChance == nil && $0.keyFifths == 1 })
+        // The tune has no bar layout, so its notes are shown on their own.
+        #expect(shown.allSatisfy { $0.barView == false && $0.barStaves == nil })
         #expect(shown[1].pitch.accidental == 1 && shown[1].printedAccidental == nil)
         #expect(shown[2].pitch.name == "E6" && shown[2].written.name == "E5")
         #expect(shown[2].octaveShift == 1 && shown[2].position == 7)

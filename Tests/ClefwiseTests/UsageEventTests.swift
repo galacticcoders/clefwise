@@ -45,9 +45,9 @@ import Testing
             .questionShown(QuestionShown(round: UUID(), question: UUID(), index: 0, clef: "treble",
                                          pitch: LoggedPitch(Pitch(.f, 6, .sharp)), written: LoggedPitch(Pitch(.f, 5, .sharp)),
                                          position: 8, keyFifths: 1, printedAccidental: nil, octaveShift: 1,
-                                         pieceNote: PieceNoteRef(measure: 9, staff: 1, onset: 24, chord: 46),
+                                         pieceNote: PieceNoteRef(measure: 9, staff: 1, onset: 24, chord: 46, symbolIndex: 3),
                                          pickChance: nil, naming: "letters", input: "piano",
-                                         hintsVisible: false, keyNamesVisible: true)),
+                                         hintsVisible: false, keyNamesVisible: true, barView: true, barStaves: [1, 2])),
             .roundEnded(RoundEnded(round: UUID(), reason: .pieceComplete, durationMs: 61_000, score: 38, attempts: 38,
                                    bestStreak: 38, averageResponseMs: 950, bestScore: nil, isNewBest: false, notesToReview: [])),
             .statsSnapshot(StatsSnapshot(reason: "test", noteStats: ["treble.C4": NoteStat()], bestScores: ["treble.staff": 12])),
@@ -62,6 +62,31 @@ import Testing
             // Times are written to the millisecond.
             #expect(abs(decoded.time.timeIntervalSince(logged.time)) < 0.001)
         }
+    }
+
+    @Test func barViewFieldsAreLeftOutWithoutAValue() throws {
+        var shown = QuestionShown(round: UUID(), question: UUID(), index: 0, clef: "bass",
+                                  pitch: LoggedPitch(Pitch(.c, 3)), written: LoggedPitch(Pitch(.c, 3)), position: 3,
+                                  keyFifths: 0, printedAccidental: nil, octaveShift: 0, pieceNote: nil, pickChance: 0.5,
+                                  naming: "letters", input: "buttons", hintsVisible: false, keyNamesVisible: false)
+        var json = try line(.questionShown(shown)).json
+        #expect(json["barView"] == nil && json["barStaves"] == nil)
+
+        shown.pieceNote = PieceNoteRef(measure: 2, staff: 2, onset: 4, chord: 7, symbolIndex: 1)
+        shown.barView = true
+        shown.barStaves = [1, 2]
+        json = try line(.questionShown(shown)).json
+        #expect(json["barView"] as? Bool == true)
+        #expect(json["barStaves"] as? [Int] == [1, 2])
+        #expect((json["pieceNote"] as? [String: Any])?["symbolIndex"] as? Int == 1)
+
+        // A piece without a bar layout: shown on its own, nowhere drawn.
+        shown.pieceNote = PieceNoteRef(measure: 2, staff: 2, onset: 4, chord: 7)
+        shown.barView = false
+        shown.barStaves = nil
+        json = try line(.questionShown(shown)).json
+        #expect(json["barView"] as? Bool == false && json["barStaves"] == nil)
+        #expect((json["pieceNote"] as? [String: Any])?["symbolIndex"] == nil)
     }
 
     @Test func settingsBecomePlainJSON() {

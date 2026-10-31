@@ -115,6 +115,10 @@ struct QuestionShown: Codable, Equatable {
     var input: String
     var hintsVisible: Bool
     var keyNamesVisible: Bool
+    /// Pieces only: asked in the whole-bar view (true) or on its own (false); nil for random notes.
+    var barView: Bool? = nil
+    /// The staves the bar view drew, top to bottom: [1, 2] for a grand staff; nil outside it.
+    var barStaves: [Int]? = nil
 }
 
 struct LoggedPitch: Codable, Equatable {
@@ -141,6 +145,9 @@ struct PieceNoteRef: Codable, Equatable {
     /// Quarter notes from the start of the piece.
     var onset: Double
     var chord: Int
+    /// Where the note is drawn in its bar: its index among the bar's notes and rests on all
+    /// staves (`ScoreNote.symbolIndex`); nil when the piece has no bar layout.
+    var symbolIndex: Int? = nil
 }
 
 struct AnswerGiven: Codable, Equatable {
