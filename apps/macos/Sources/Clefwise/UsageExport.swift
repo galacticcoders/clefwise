@@ -141,6 +141,8 @@ enum UsageExport {
         Column("pieceStaff") { $0.question?.pieceNote?.staff },
         Column("barView") { $0.question?.barView },
         Column("barStaves") { $0.question?.barStaves?.map(String.init).joined(separator: " ") },
+        Column("group") { ($0.answer.group ?? $0.question?.group)?.uuidString },
+        Column("groupSize") { $0.answer.groupSize ?? $0.question?.groupSize },
         Column("naming") { $0.question?.naming ?? setting("naming", in: $0.round?.settings) },
         Column("input") { $0.question?.input ?? setting("answerInput", in: $0.round?.settings) },
         Column("source") { $0.answer.source.rawValue },
@@ -190,6 +192,8 @@ enum UsageExport {
         Column("pieceOrder") { $0.start?.piece?.order },
         Column("pieceStartBar") { $0.start?.piece?.startBar },
         Column("pieceOneNotePerChord") { $0.start?.piece?.oneNotePerChord },
+        // Rounds logged before the setting existed had only the checkbox, so it says which.
+        Column("pieceChords") { $0.start?.piece.map { $0.chords ?? ($0.oneNotePerChord ? "topOrBottom" : "eachNote") } },
         Column("pieceNotes") { $0.start?.piece?.noteCount },
         Column("endReason") { $0.end?.reason.rawValue },
         Column("durationMs") { $0.end?.durationMs },
