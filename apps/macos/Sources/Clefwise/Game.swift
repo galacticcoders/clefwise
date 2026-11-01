@@ -505,6 +505,9 @@ final class Game {
     @ObservationIgnored private let synth = Synth()
     /// Where usage events go (the usage log on disk in the app; memory in tests).
     @ObservationIgnored let recorder: UsageRecorder
+    /// The pieces opened before, kept to practise again (the app's own folder; tests pass a
+    /// throwaway one).
+    let library: PieceLibrary
     /// The saved settings as last logged, to tell which ones a change touched.
     @ObservationIgnored private var settingsAsLogged = JSONValue.null
     /// The round being logged, from `roundStarted` to `roundEnded`.
@@ -513,10 +516,12 @@ final class Game {
     @ObservationIgnored private var questionLog: QuestionLog?
 
     /// `defaults` is where settings, note stats and best scores are kept, `recorder` where usage
-    /// events go; tests pass their own.
-    init(defaults: UserDefaults = .standard, recorder: UsageRecorder = UsageLog.shared) {
+    /// events go, `library` where opened pieces are kept; tests pass their own. The library has no
+    /// default, so nothing can reach the real one by accident.
+    init(defaults: UserDefaults = .standard, recorder: UsageRecorder = UsageLog.shared, library: PieceLibrary) {
         self.defaults = defaults
         self.recorder = recorder
+        self.library = library
         settings = Self.load(Settings.self, from: Keys.settings, in: defaults) ?? Settings()
         noteStats = Self.load([String: NoteStat].self, from: Keys.noteStats, in: defaults) ?? [:]
         bestScores = Self.load([String: Int].self, from: Keys.bestScores, in: defaults) ?? [:]
@@ -762,6 +767,12 @@ final class Game {
         newSettings.piecePath = url.path
         settings = newSettings
         updateSelection()
+    }
+
+    /// Opens a piece from the library. (Contract stub: opens its copy like any file; the library
+    /// integration fills this in.)
+    func open(_ entry: PieceLibrary.Entry, via source: PieceOpenSource = .library) {
+        openPiece(at: library.fileURL(for: entry), via: source)
     }
 
     /// Back to random notes; a round in progress is dropped without a summary.

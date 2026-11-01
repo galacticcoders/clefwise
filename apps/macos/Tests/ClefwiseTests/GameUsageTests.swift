@@ -68,7 +68,7 @@ private extension GameTestBench {
         older.set(try JSONEncoder().encode(stats), forKey: "noteStats")
         older.set(try JSONEncoder().encode(["treble.staff": 12]), forKey: "bestScores")
         let recorder = MemoryUsageRecorder()
-        _ = Game(defaults: older, recorder: recorder)
+        _ = Game(defaults: older, recorder: recorder, library: .temporary())
         #expect(recorder.events.map(\.event) == [
             .statsSnapshot(StatsSnapshot(reason: "beforeUsageLog", noteStats: stats, bestScores: ["treble.staff": 12])),
         ])

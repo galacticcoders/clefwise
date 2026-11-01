@@ -141,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Before the game exists, so the session's log starts with the launch: making the game
         // reopens last time's piece, which is logged too.
         UsageLog.shared.record(.appLaunched(.current))
-        game = Game()
+        game = Game(library: .shared)
         progressStore = ProgressStore()
         super.init()
     }

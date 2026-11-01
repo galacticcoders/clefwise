@@ -377,7 +377,7 @@ private extension GameTestBench {
         // Through a launch, from settings saved before the bar view existed.
         let defaults = InMemoryDefaults()
         defaults.set(Data(#"{"naming":"solfege","piece":{"hand":"both","startBar":2}}"#.utf8), forKey: "settings")
-        let launched = Game(defaults: defaults, recorder: MemoryUsageRecorder())
+        let launched = Game(defaults: defaults, recorder: MemoryUsageRecorder(), library: .temporary())
         #expect(launched.settings.piece.showsWholeBar)
         #expect(launched.settings.piece.hand == .both && launched.settings.naming == .solfege)
     }
