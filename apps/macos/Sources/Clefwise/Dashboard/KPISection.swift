@@ -253,7 +253,7 @@ private struct Sparkline: View {
             }
             if let last = values.indices.last(where: { values[$0] != nil }), let value = values[last] {
                 let latest = point(last, value)
-                context.fill(Path(ellipseIn: CGRect(x: latest.x - 6, y: latest.y - 6, width: 12, height: 12)), with: .color(.white))
+                context.fill(Path(ellipseIn: CGRect(x: latest.x - 6, y: latest.y - 6, width: 12, height: 12)), with: .color(DashboardTheme.surface))
                 context.fill(Path(ellipseIn: CGRect(x: latest.x - 4, y: latest.y - 4, width: 8, height: 8)),
                              with: .color(DashboardTheme.accent))
             }

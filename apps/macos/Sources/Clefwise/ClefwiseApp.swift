@@ -11,7 +11,10 @@ struct ClefwiseApp: App {
         Window("Clefwise", id: "main") {
             ContentView(game: game)
                 .tint(Theme.accent)
-                .preferredColorScheme(.light)
+                // For the whole app: both windows, menus, alerts and the open panel.
+                .onChange(of: game.settings.appearance, initial: true) { _, appearance in
+                    NSApp.appearance = appearance.nsAppearance
+                }
                 .background(WindowSizeRecorder(recorder: game.recorder))
                 .background(WindowReader { appDelegate.mainWindow = $0 })
         }
@@ -30,13 +33,13 @@ struct ClefwiseApp: App {
                 Button("Show Usage Data in Finder") { UsageData.showInFinder() }
             }
             ProgressCommands(game: game)
+            AppearanceCommands(game: game)
         }
 
         // Its own window, so it can stay open beside the game and follow along round by round.
         Window("Progress", id: ProgressWindow.id) {
             DashboardView(game: game, store: appDelegate.progressStore)
                 .tint(Theme.accent)
-                .preferredColorScheme(.light)
         }
         .defaultSize(width: 1150, height: 900)
         .windowResizability(.contentMinSize)
@@ -66,6 +69,20 @@ private struct ProgressCommands: Commands {
         CommandGroup(before: .windowList) {
             Button("Progress") { ProgressWindow.open(from: "menu", game: game, with: openWindow) }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
+            Divider()
+        }
+    }
+}
+
+/// View ▸ Appearance: Match System, Light or Dark.
+private struct AppearanceCommands: Commands {
+    @Bindable var game: Game
+
+    var body: some Commands {
+        CommandGroup(before: .toolbar) {
+            Picker("Appearance", selection: $game.settings.appearance) {
+                ForEach(Appearance.allCases) { Text($0.label).tag($0) }
+            }
             Divider()
         }
     }

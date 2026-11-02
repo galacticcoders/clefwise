@@ -34,6 +34,10 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
   app works exactly as before.
 - Pick **note names**: letters (C D E F G A B), solfège (Do Re Mi Fa Sol La Si) or sargam
   (Sa Re Ga Ma Pa Dha Ni). Solfège and sargam are used as fixed names: Do = Sa = C.
+- **Light or dark**: Clefwise follows macOS's appearance. **View ▸ Appearance** keeps it Light or
+  Dark whatever macOS is set to. In dark mode the staff is dark with light notes, the piano keeps
+  its white keys (dimmed), and the Progress window's charts use colours checked for the dark
+  background.
 - Pick how to **answer** with the *Answer with* switch under the answer area:
   - *Note buttons*: click a name, press **1–7** (button position), or with letter names type
     **C D E F G A B**. Any octave counts. When notes can be sharp or flat, ♭ and ♯ buttons

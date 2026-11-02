@@ -223,6 +223,7 @@ enum UsageExport {
         Column("model") { $0.launch?.model },
         Column("locale") { $0.launch?.locale },
         Column("timeZone") { $0.launch?.timeZone },
+        Column("systemAppearance") { $0.launch?.systemAppearance },
         Column("events") { $0.events },
         Column("rounds") { $0.rounds },
         Column("answers") { $0.answers },

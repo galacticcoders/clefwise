@@ -48,6 +48,7 @@ struct DashboardView: View {
             .pickerStyle(.menu)
             .labelsHidden()
             .fixedSize()
+            .rebuiltOnAppearanceChange()
             .help("Which days the dashboard counts")
 
             Picker("Clef", selection: clef) {

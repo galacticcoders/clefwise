@@ -105,6 +105,8 @@ final class Game {
         var piece = PieceSettings()
         /// The last piece opened, reopened at launch.
         var piecePath: String?
+        /// Light or dark, or as macOS is set (View ▸ Appearance).
+        var appearance = Appearance.system
 
         init() {}
 
@@ -123,6 +125,7 @@ final class Game {
             addsAccidentals = try container.decodeIfPresent(Bool.self, forKey: .addsAccidentals) ?? addsAccidentals
             piece = try container.decodeIfPresent(PieceSettings.self, forKey: .piece) ?? piece
             piecePath = try container.decodeIfPresent(String.self, forKey: .piecePath) ?? piecePath
+            appearance = try container.decodeIfPresent(Appearance.self, forKey: .appearance) ?? appearance
         }
     }
 

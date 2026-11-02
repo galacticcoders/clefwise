@@ -74,6 +74,7 @@ extension UsageExport {
         | `locale` | e.g. `en_GB`. |
         | `timeZone` | e.g. `Europe/Bucharest`. |
         | `screen` | Screen size in points, `{"width":…,"height":…}` (optional). |
+        | `systemAppearance` | How macOS was set at launch: `light` or `dark`, whatever the app's own `appearance` setting (missing before dark mode existed). |
 
         ### `appTerminated`: the app quit
 
@@ -293,6 +294,7 @@ extension UsageExport {
         | `addsAccidentals` | Now and then print a ♯, ♭ or ♮ in front of a note, on top of the key signature. |
         | `piece` | `part` (index from 0), `hand`, `order`, `startBar`, `chords`, as in `roundStarted.piece` (settings saved before `chords` existed have `oneNotePerChord` instead); and `showsWholeBar`, the "Show the whole bar" checkbox (true unless switched off; with `chords` `together` the whole bar is shown whatever it says). |
         | `piecePath` | The last piece opened, reopened at launch. |
+        | `appearance` | View ▸ Appearance: `system` (as macOS is set, the default), `light` or `dark`. |
 
         ### `note-stats.json` and `best-scores.json`
 
@@ -377,7 +379,7 @@ extension UsageExport {
         | `session` | Id, as in the log. |
         | `durationSeconds` | Launch to quit, as the app measured it; without a quit, up to the session's last event. |
         | `foregroundSeconds` | Time Clefwise was the active app: from each `appActivity` `true` to the next `false`, or to the session's end. A first `false` counts from launch. Empty when the session logged no `appActivity`. |
-        | `appVersion`, `build`, `osVersion`, `model`, `locale`, `timeZone` | From `appLaunched`. |
+        | `appVersion`, `build`, `osVersion`, `model`, `locale`, `timeZone`, `systemAppearance` | From `appLaunched`. |
         | `events` | Events logged. |
         | `rounds` | Rounds started. |
         | `answers`, `correct`, `accuracy` | Answers given, how many were right, and the share right (0–1). |

@@ -43,6 +43,8 @@ struct AppLaunched: Codable, Equatable {
     var locale: String
     var timeZone: String
     var screen: Size?
+    /// How macOS was set at launch, `light` or `dark`, whatever the app's own Appearance setting.
+    var systemAppearance: String?
 }
 
 struct AppTerminated: Codable, Equatable {

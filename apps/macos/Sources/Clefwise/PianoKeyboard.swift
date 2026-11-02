@@ -163,11 +163,11 @@ private struct WhiteKeyStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         let shape = UnevenRoundedRectangle(bottomLeadingRadius: 6, bottomTrailingRadius: 6)
         configuration.label
-            .foregroundStyle(highlight == .none ? Theme.hint : highlight.foreground)
+            .foregroundStyle(highlight == .none ? Theme.pianoKeyLabel : highlight.foreground)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .background(highlight.fill, in: shape)
+            .background(highlight == .none ? Theme.pianoWhiteKey : highlight.fill, in: shape)
             .overlay {
-                shape.strokeBorder(highlight == .none ? Theme.keyBorder : highlight.border,
+                shape.strokeBorder(highlight == .none ? Theme.pianoKeyBorder : highlight.border,
                                    lineWidth: highlight == .reveal ? 2.5 : 1)
             }
             .brightness(configuration.isPressed ? -0.08 : 0)
@@ -195,7 +195,7 @@ private struct BlackKey: View {
         let shape = UnevenRoundedRectangle(bottomLeadingRadius: 4, bottomTrailingRadius: 4)
         shape
             .fill(highlight == .none
-                  ? AnyShapeStyle(LinearGradient(colors: [Color(white: 0.28), Theme.ink], startPoint: .top, endPoint: .bottom))
+                  ? AnyShapeStyle(LinearGradient(colors: [Theme.blackKeyTop, Theme.blackKeyBottom], startPoint: .top, endPoint: .bottom))
                   : AnyShapeStyle(highlight.fill))
             .overlay {
                 if highlight != .none {
