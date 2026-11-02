@@ -533,7 +533,7 @@ final class Game {
     /// and so do key signatures and printed accidentals, so each setup keeps its own best scores.
     /// Plain C major adds nothing, so scores saved before keys existed still count.
     private var bestScoreKey: String {
-        var key = "\(settings.clefChoice.rawValue).\(settings.range.rawValue)"
+        var key = "\(settings.clefChoice.rawValue).\(settings.range.key)"
             + (settings.answerInput == .buttons ? "" : ".\(settings.answerInput.rawValue)")
         switch settings.key {
         case .fixed(let signature) where signature != .cMajor: key += ".key\(signature.fifths)"
@@ -697,14 +697,21 @@ final class Game {
                         printedAccidental: bar.measure.symbols[symbol].accidental, octaveShift: note.octaveShift)
     }
 
-    /// Staff positions the staff has to fit for the round's notes (both clefs), so it doesn't
-    /// rescale from note to note; nil when they fit the usual layout (three ledger lines either
-    /// side), and for random rounds.
+    /// Staff positions the staff has to fit (both clefs), so it doesn't rescale from note to note:
+    /// a piece round's notes, or every note random rounds can ask. Nil when they fit the usual
+    /// layout (three ledger lines either side).
     var staffPositionsToFit: ClosedRange<Int>? {
         let positions = pieceNotes.map(\.question.position)
-        guard let low = positions.min(), let high = positions.max() else { return nil }
-        let usual = NoteRange.threeLedgerLines.positions
-        return low < usual.lowerBound || high > usual.upperBound ? low...high : nil
+        let fit: ClosedRange<Int>
+        if let low = positions.min(), let high = positions.max() {
+            fit = low...high
+        } else if isPractisingPiece {
+            return nil
+        } else {
+            fit = settings.range.span
+        }
+        let usual = NoteRange.threeLedgerLines.span
+        return fit.lowerBound < usual.lowerBound || fit.upperBound > usual.upperBound ? fit : nil
     }
 
     /// The notes piece state describes: the round's during one, otherwise the next round's.
@@ -853,7 +860,7 @@ final class Game {
             return ((low / 12 - 1) * 7)...((high / 12 - 1) * 7 + 6)
         }
         let indices = settings.clefChoice.clefs.flatMap { clef in
-            [settings.range.positions.lowerBound, settings.range.positions.upperBound]
+            [settings.range.span.lowerBound, settings.range.span.upperBound]
                 .map { clef.pitch(atPosition: $0).diatonicIndex }
         }
         return (indices.min()! / 7 * 7)...(indices.max()! / 7 * 7 + 6)

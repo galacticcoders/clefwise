@@ -125,7 +125,8 @@ private struct Writer {
         let onPiece = chance(0.15)
         var next = Game.Settings()
         next.clefChoice = pick([.treble, .treble, .treble, .bass, .bass, .both])
-        next.range = pick([.staff, .staff, .staff, .oneLedgerLine, .oneLedgerLine, .threeLedgerLines])
+        next.range = pick([.staff, .staff, .staff, .oneLedgerLine, .oneLedgerLine, .threeLedgerLines,
+                           NoteRange(above: true, ledgerLines: 2), NoteRange(below: true, onStaff: false, ledgerLines: 4)])
         next.mode = onPiece || chance(0.3) ? .practice : .sprint
         next.naming = pick([.letters, .letters, .letters, .letters, .letters, .letters, .letters, .solfege, .solfege, .sargam])
         next.answerInput = pick([.buttons, .buttons, .buttons, .piano, .piano, .keyboard])
@@ -223,7 +224,7 @@ private struct Writer {
         } else {
             clef = pick(settings.clefChoice.clefs)
             let positions = settings.range.positions
-            let natural = clef.pitch(atPosition: positions.lowerBound + number(below: positions.count))
+            let natural = clef.pitch(atPosition: positions[number(below: positions.count)])
             let fromKey = key.accidental(for: natural.letter)
             // Added accidentals: now and then a printed sharp on a note the key leaves natural.
             let sharpened = settings.addsAccidentals && fromKey == .natural && ![.e, .b].contains(natural.letter) && chance(0.3)
@@ -281,7 +282,7 @@ private struct Writer {
                               correctMs: [Int], missed: [String], unanswered: UnansweredQuestion?) {
         var bestScore: Int?, isNewBest = false
         if settings.mode == .sprint, settings.piecePath == nil {
-            let key = "\(settings.clefChoice.rawValue).\(settings.range.rawValue)"
+            let key = "\(settings.clefChoice.rawValue).\(settings.range.key)"
             isNewBest = score > (bestScores[key] ?? 0)
             bestScores[key] = max(bestScores[key] ?? 0, score)
             bestScore = bestScores[key]
@@ -299,13 +300,22 @@ private struct Writer {
     private mutating func logChanges(to next: Game.Settings) {
         let pairs: [(String, String, String)] = [
             ("clefChoice", settings.clefChoice.rawValue, next.clefChoice.rawValue),
-            ("range", settings.range.rawValue, next.range.rawValue),
             ("mode", settings.mode.rawValue, next.mode.rawValue),
             ("naming", settings.naming.rawValue, next.naming.rawValue),
             ("answerInput", settings.answerInput.rawValue, next.answerInput.rawValue),
         ]
         for (setting, from, to) in pairs where from != to {
             log(.settingChanged(SettingChanged(setting: setting, from: .string(from), to: .string(to))))
+        }
+        // The range is saved as an object, so each of its values is logged on its own.
+        let range: [(String, JSONValue, JSONValue)] = [
+            ("range.above", .bool(settings.range.above), .bool(next.range.above)),
+            ("range.below", .bool(settings.range.below), .bool(next.range.below)),
+            ("range.ledgerLines", .number(Double(settings.range.ledgerLines)), .number(Double(next.range.ledgerLines))),
+            ("range.onStaff", .bool(settings.range.onStaff), .bool(next.range.onStaff)),
+        ]
+        for (setting, from, to) in range where from != to {
+            log(.settingChanged(SettingChanged(setting: setting, from: from, to: to)))
         }
     }
 }

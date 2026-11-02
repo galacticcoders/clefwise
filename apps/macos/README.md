@@ -17,15 +17,16 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
 
 ## How to play
 
-- Pick a **clef** (Treble, Bass, Both), a **note range** and a **mode** in the toolbar.
-  - *On the staff*: lines and spaces only. *+1 ledger line* adds middle C and friends.
-    *+3 ledger lines* goes three lines above and below.
+- Pick a **clef** (Treble, Bass, Both) and a **mode** in the toolbar.
   - *60s Sprint*: name as many notes as you can in a minute; best score is kept per clef/range.
   - *Practice*: no clock; press Stop (Esc) to see your summary.
   - **Pause** (or Space) during a round stops the clock and hides the note until you press
     Resume (or Space again). Paused time doesn't count towards the sprint, your response times
     or your practice time. Switching to another app mid-round pauses it too; it waits for you
     to resume.
+- Pick the **notes** on the start panel, under the staff: tick any mix of *Above the staff*,
+  *On the staff* (lines and spaces, the default) and *Below the staff*. *Ledger lines* (1 to 5)
+  sets how far above and below go: one line adds middle C and friends below the treble staff.
 - Pick a **key** (C major, up to 5 sharps or 5 flats, or a random key each round) and tick
   **Accidentals** to also get notes with a printed ♯, ♭ or ♮ now and then. Answer with the full
   name, so in G major an unmarked F is F♯. Letters and solfège go by spelling (F♯ isn't G♭);

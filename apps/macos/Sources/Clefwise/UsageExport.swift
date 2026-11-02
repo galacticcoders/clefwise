@@ -164,7 +164,7 @@ enum UsageExport {
         Column("pickChance") { $0.question?.pickChance },
         Column("mode") { setting("mode", in: $0.round?.settings) },
         Column("clefChoice") { setting("clefChoice", in: $0.round?.settings) },
-        Column("range") { setting("range", in: $0.round?.settings) },
+        Column("range") { range(in: $0.round?.settings) },
         Column("keySetting") { keySetting(in: $0.round?.settings) },
         Column("addsAccidentals") { setting("addsAccidentals", in: $0.round?.settings) },
         Column("pieceTitle") { $0.round?.piece?.title },
@@ -180,7 +180,7 @@ enum UsageExport {
         Column("via") { $0.start?.via.rawValue },
         Column("mode") { setting("mode", in: $0.start?.settings) },
         Column("clefChoice") { setting("clefChoice", in: $0.start?.settings) },
-        Column("range") { setting("range", in: $0.start?.settings) },
+        Column("range") { range(in: $0.start?.settings) },
         Column("keySetting") { keySetting(in: $0.start?.settings) },
         Column("keyFifths") { $0.start?.keyFifths },
         Column("addsAccidentals") { setting("addsAccidentals", in: $0.start?.settings) },
@@ -241,6 +241,15 @@ enum UsageExport {
     }
 
     /// A value from a round's saved settings by key path ("piece.hand"), as cell text.
+    /// The notes' range by its short name (`staff`, `below2+staff+above2`), as best scores key it,
+    /// from its saved parts or the name older versions saved.
+    private static func range(in settings: JSONValue?) -> String? {
+        guard case .object(let object)? = settings, let value = object["range"],
+              let data = try? JSONEncoder().encode(value),
+              let range = try? JSONDecoder().decode(NoteRange.self, from: data) else { return nil }
+        return range.key
+    }
+
     private static func setting(_ path: String, in settings: JSONValue?) -> String? {
         var value = settings
         for key in path.split(separator: ".") {
