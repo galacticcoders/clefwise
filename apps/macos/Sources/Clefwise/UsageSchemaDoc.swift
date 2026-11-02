@@ -282,7 +282,7 @@ extension UsageExport {
         | Key | Meaning |
         |---|---|
         | `clefChoice` | `treble`, `bass` or `both`. |
-        | `range` | `staff` (on the staff), `oneLedgerLine` or `threeLedgerLines` (above and below). |
+        | `range` | Where random notes come from: `below`, `onStaff` and `above` (booleans, any mix; nothing chosen counts as `onStaff`), and `ledgerLines`, how far below and above go (1 to 5 ledger lines). Changes are logged per value (`range.above`, `range.ledgerLines`). Older versions saved a name instead: `staff` (on the staff), `oneLedgerLine` or `threeLedgerLines` (on the staff and that many ledger lines below and above). |
         | `mode` | `sprint` (60 seconds) or `practice` (untimed). |
         | `naming` | `letters`, `solfege` or `sargam`. |
         | `answerInput` | `buttons`, `piano` or `keyboard`. |
@@ -298,7 +298,9 @@ extension UsageExport {
 
         Note stats are keyed by clef and pitch (`treble.F♯4`): `attempts`, `correct`, and
         `recent`, the latest results (up to 8, oldest first, `true` = correct). Best scores are
-        keyed by the sprint's setup: `clefChoice.range`, then `.piano` or `.keyboard` unless
+        keyed by the sprint's setup: `clefChoice.range`, where the range is `staff`, `oneLedgerLine` or
+        `threeLedgerLines` for those choices (as older versions saved them) and otherwise lists the
+        parts with the ledger lines, like `below2+staff` or `below5+above5`; then `.piano` or `.keyboard` unless
         answering with buttons, `.keyN` or `.keyRandom` unless in C major, and `.acc` with added
         accidentals, e.g. `treble.staff` or `both.oneLedgerLine.piano.key-2.acc`.
 
@@ -341,7 +343,7 @@ extension UsageExport {
         | `scoreAfter`, `streakAfter` | Score and streak after the answer. |
         | `hintsVisible`, `keyNamesVisible` | Whether the staff hints and the names on the piano keys were showing. |
         | `pickChance` | The chance the note had of being picked (random and shuffled rounds). |
-        | `mode`, `clefChoice`, `range`, `addsAccidentals` | The round's settings. |
+        | `mode`, `clefChoice`, `range`, `addsAccidentals` | The round's settings. `range` by its short name, as best scores key it (`staff`, `below2+staff+above2`). |
         | `keySetting` | The round's key setting: a fixed key in fifths, or `random`. |
         | `pieceTitle` | The piece, for piece rounds. |
 
@@ -356,7 +358,7 @@ extension UsageExport {
         | `endLocalTime`, `endTime` | When it ended; empty if no `roundEnded` was logged (the app crashed, or the round is still going). |
         | `session`, `round` | Ids, as in the log. |
         | `via` | What started it. |
-        | `mode`, `clefChoice`, `range`, `addsAccidentals`, `naming`, `answerInput` | Settings at the start. |
+        | `mode`, `clefChoice`, `range`, `addsAccidentals`, `naming`, `answerInput` | Settings at the start. `range` by its short name, as best scores key it (`staff`, `below2+staff+above2`). |
         | `keySetting` | The key setting: a fixed key in fifths, or `random`. |
         | `keyFifths` | The key the round was in (a random key resolved). |
         | `pieceTitle`, `piecePart`, `pieceHand`, `pieceOrder`, `pieceStartBar`, `pieceOneNotePerChord`, `pieceNotes` | Piece rounds only: as in `roundStarted.piece` (`pieceNotes` is `noteCount`). |

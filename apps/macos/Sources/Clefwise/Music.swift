@@ -239,24 +239,82 @@ enum ClefChoice: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-enum NoteRange: String, CaseIterable, Identifiable, Codable {
-    case staff, oneLedgerLine, threeLedgerLines
+/// Where random notes come from: any mix of below the staff, on it and above it. Below and above
+/// reach out as far as `ledgerLines` ledger lines.
+struct NoteRange: Codable, Equatable {
+    var below = false
+    var onStaff = true
+    var above = false
+    /// How far notes below or above the staff go, from 1 to `maxLedgerLines` ledger lines.
+    var ledgerLines = 1
 
-    var id: Self { self }
-    var label: String {
-        switch self {
-        case .staff: "On the staff"
-        case .oneLedgerLine: "+1 ledger line"
-        case .threeLedgerLines: "+3 ledger lines"
-        }
+    static let maxLedgerLines = 5
+
+    /// The three choices the app first had, under the names it saved them by.
+    static let staff = NoteRange()
+    static let oneLedgerLine = NoteRange(below: true, above: true, ledgerLines: 1)
+    static let threeLedgerLines = NoteRange(below: true, above: true, ledgerLines: 3)
+    private static let oldNames: [(name: String, range: NoteRange)] =
+        [("staff", .staff), ("oneLedgerLine", .oneLedgerLine), ("threeLedgerLines", .threeLedgerLines)]
+
+    init(below: Bool = false, onStaff: Bool = true, above: Bool = false, ledgerLines: Int = 1) {
+        self.below = below
+        self.onStaff = onStaff
+        self.above = above
+        self.ledgerLines = ledgerLines
     }
-    /// Staff positions (0 = bottom line, 8 = top line) that questions are drawn from.
-    var positions: ClosedRange<Int> {
-        switch self {
-        case .staff: 0...8
-        case .oneLedgerLine: -2...10
-        case .threeLedgerLines: -6...14
+
+    /// Staff positions (0 = bottom line, 8 = top line) questions are drawn from, lowest first.
+    /// A ledger line every two steps: one line reaches -2 below the staff and 10 above it. With
+    /// nothing chosen, the staff.
+    var positions: [Int] {
+        let reach = 2 * min(max(ledgerLines, 1), Self.maxLedgerLines)
+        return (below ? Array(-reach ... -1) : [])
+            + (includesStaff ? Array(0...8) : [])
+            + (above ? Array(9...8 + reach) : [])
+    }
+
+    /// From the lowest position to the highest: with below and above only, the staff in between.
+    var span: ClosedRange<Int> { positions.first!...positions.last! }
+
+    private var includesStaff: Bool { onStaff || !(below || above) }
+
+    /// "On the staff", "+3 ledger lines" (both sides), "+2 ledger lines above",
+    /// "Below the staff, 1 ledger line", "Above & below the staff, 5 ledger lines".
+    var label: String {
+        guard below || above else { return "On the staff" }
+        let lines = ledgerLines == 1 ? "1 ledger line" : "\(ledgerLines) ledger lines"
+        if includesStaff {
+            return "+\(lines)" + (below && above ? "" : above ? " above" : " below")
         }
+        return (below && above ? "Above & below" : above ? "Above" : "Below") + " the staff, \(lines)"
+    }
+
+    /// What best scores are kept under: the old names for the three choices the app first had,
+    /// so their best scores still count, otherwise like `below2+staff+above2`.
+    var key: String {
+        if let old = Self.oldNames.first(where: { $0.range.positions == positions }) { return old.name }
+        return [below ? "below\(ledgerLines)" : nil, includesStaff ? "staff" : nil, above ? "above\(ledgerLines)" : nil]
+            .compactMap { $0 }.joined(separator: "+")
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case below, onStaff, above, ledgerLines
+    }
+
+    /// Also reads the names older versions saved: `staff`, `oneLedgerLine` and `threeLedgerLines`.
+    init(from decoder: Decoder) throws {
+        if let name = try? decoder.singleValueContainer().decode(String.self) {
+            self = Self.oldNames.first { $0.name == name }?.range ?? NoteRange()
+            return
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = NoteRange()
+        below = try container.decodeIfPresent(Bool.self, forKey: .below) ?? defaults.below
+        onStaff = try container.decodeIfPresent(Bool.self, forKey: .onStaff) ?? defaults.onStaff
+        above = try container.decodeIfPresent(Bool.self, forKey: .above) ?? defaults.above
+        let lines = try container.decodeIfPresent(Int.self, forKey: .ledgerLines) ?? defaults.ledgerLines
+        ledgerLines = min(max(lines, 1), Self.maxLedgerLines)
     }
 }
 

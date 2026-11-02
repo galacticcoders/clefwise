@@ -131,11 +131,6 @@ struct ContentView: View {
                     .pickerStyle(.segmented)
                     .help(pieceHelp("Which clef to read", piece: "The piece sets the clef"))
 
-                    Picker("Notes", selection: $game.settings.range) {
-                        ForEach(NoteRange.allCases) { Text($0.label).tag($0) }
-                    }
-                    .help(pieceHelp("How far above and below the staff notes can go", piece: "The notes come from the piece"))
-
                     keyMenu
 
                     Toggle("Accidentals", isOn: $game.settings.addsAccidentals)
@@ -411,7 +406,7 @@ private struct StaffCard: View {
                         noteColor: game.isShowingMiss ? Theme.wrong : Theme.ink,
                         noteLabel: game.isShowingMiss && !game.isPaused ? game.question.map(answerLabel) : nil,
                         // A piece's notes can go past the range setting, so hints cover as far as they go.
-                        hintPositions: game.settings.showHints ? game.staffPositionsToFit ?? game.settings.range.positions : nil,
+                        hintPositions: game.settings.showHints ? game.staffPositionsToFit ?? game.settings.range.span : nil,
                         naming: game.settings.naming
                     )
                 }
@@ -576,6 +571,8 @@ private struct StartPanel: View {
                 .font(.title2.weight(.semibold))
             Text(details)
                 .foregroundStyle(.secondary)
+            NoteRangeControls(game: game)
+                .padding(.top, 4)
             Button {
                 game.start(via: .button)
             } label: {
@@ -604,7 +601,8 @@ private struct StartPanel: View {
     }
 
     private var details: String {
-        var parts = [game.settings.clefChoice.summary, game.settings.range.label]
+        // The notes' range has its own checkboxes just below.
+        var parts = [game.settings.clefChoice.summary]
         // Plain C major goes unsaid, as before keys existed.
         if game.accidentalsPossible {
             parts.append(game.settings.key.shortLabel + (game.settings.addsAccidentals ? " + accidentals" : ""))
@@ -613,6 +611,49 @@ private struct StartPanel: View {
             parts.append("Best: \(best)")
         }
         return parts.joined(separator: "  ·  ")
+    }
+}
+
+/// Which notes random rounds ask: below, on and above the staff in any mix, and how far below
+/// and above reaches.
+private struct NoteRangeControls: View {
+    @Bindable var game: Game
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 14) {
+                Text("Notes")
+                    .foregroundStyle(.secondary)
+                zone("Above the staff", \.above, help: "Notes above the staff, on and between ledger lines")
+                zone("On the staff", \.onStaff, help: "Notes on the staff's lines and spaces")
+                zone("Below the staff", \.below, help: "Notes below the staff, on and between ledger lines")
+            }
+            HStack(spacing: 8) {
+                Text("Ledger lines")
+                    .foregroundStyle(.secondary)
+                Picker("Ledger lines", selection: $game.settings.range.ledgerLines) {
+                    ForEach(1...NoteRange.maxLedgerLines, id: \.self) { Text("\($0)").tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+            .disabled(!range.above && !range.below)
+            .help(range.above || range.below
+                  ? "How many ledger lines notes above and below the staff go out to"
+                  : "Tick Above or Below the staff to choose how far notes go")
+        }
+    }
+
+    private var range: NoteRange { game.settings.range }
+
+    /// A checkbox for one part of the range. The last one ticked can't be unticked.
+    private func zone(_ title: String, _ zone: WritableKeyPath<NoteRange, Bool>, help: String) -> some View {
+        let isLastTicked = range[keyPath: zone] && [range.below, range.onStaff, range.above].filter { $0 }.count == 1
+        return Toggle(title, isOn: $game.settings.range[dynamicMember: zone])
+            .toggleStyle(.checkbox)
+            .disabled(isLastTicked)
+            .help(isLastTicked ? "\(help). Tick another part before unticking this one." : help)
     }
 }
 
