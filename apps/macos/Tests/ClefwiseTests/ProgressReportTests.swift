@@ -25,8 +25,16 @@ import Testing
     }
 
     @Test func rampEndsLightAndDark() {
-        #expect(DashboardTheme.rampColor(0) == DashboardTheme.ramp.first)
-        #expect(DashboardTheme.rampColor(1) == DashboardTheme.ramp.last)
-        #expect(DashboardTheme.rampColor(0, fromStep: 3) == DashboardTheme.ramp[3])
+        // Light: from the palest step to the darkest, starting at step 250 for ordered marks.
+        #expect(DashboardTheme.rampColor(0).hex(in: .aqua) == 0xCDE2FB)
+        #expect(DashboardTheme.rampColor(1).hex(in: .aqua) == 0x0D366B)
+        #expect(DashboardTheme.rampColor(0, fromStep: 3).hex(in: .aqua) == 0x86B6EF)
+        // Dark: the other way, so more stands out further from the dark card; from step 550.
+        #expect(DashboardTheme.rampColor(0).hex(in: .darkAqua) == 0x0D366B)
+        #expect(DashboardTheme.rampColor(1).hex(in: .darkAqua) == 0xCDE2FB)
+        #expect(DashboardTheme.rampColor(0, fromStep: 3).hex(in: .darkAqua) == 0x1C5CAB)
+        // Text on the darker half is light in both.
+        #expect(DashboardTheme.textOnRamp(0.2).hex(in: .aqua) == 0x0B0B0B && DashboardTheme.textOnRamp(0.8).hex(in: .aqua) == 0xFFFFFF)
+        #expect(DashboardTheme.textOnRamp(0.2).hex(in: .darkAqua) == 0xF0EFEC && DashboardTheme.textOnRamp(0.8).hex(in: .darkAqua) == 0x0B0B0B)
     }
 }

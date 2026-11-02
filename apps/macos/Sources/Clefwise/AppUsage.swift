@@ -6,7 +6,8 @@ import UniformTypeIdentifiers
 // usage data items, and clicks no other event captures.
 
 extension AppLaunched {
-    /// This launch: the app and macOS versions, the Mac, its locale and time zone, the main screen.
+    /// This launch: the app and macOS versions, the Mac, its locale and time zone, the main screen,
+    /// and whether macOS is light or dark.
     @MainActor
     static var current: AppLaunched {
         let info = Bundle.main.infoDictionary
@@ -19,7 +20,9 @@ extension AppLaunched {
             model: modelIdentifier ?? "unknown",
             locale: Locale.current.identifier,
             timeZone: TimeZone.current.identifier,
-            screen: NSScreen.main.map { Size(width: $0.frame.width, height: $0.frame.height) }
+            screen: NSScreen.main.map { Size(width: $0.frame.width, height: $0.frame.height) },
+            // Set while macOS is dark, including when it switches automatically.
+            systemAppearance: UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark" ? "dark" : "light"
         )
     }
 

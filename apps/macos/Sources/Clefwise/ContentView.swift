@@ -332,7 +332,7 @@ private struct StatTile: View {
         .frame(minWidth: min(width, 72), maxWidth: width, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Theme.tile, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -756,7 +756,7 @@ extension View {
         multilineTextAlignment(.center)
             .padding(.horizontal, 36)
             .padding(.vertical, 22)
-            .background(.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(Theme.panel, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .shadow(color: .black.opacity(0.12), radius: 24, y: 10)
     }
 }
@@ -767,7 +767,7 @@ private struct DropHighlight: View {
         ZStack {
             // Veils what's underneath so the message reads on its own.
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.white.opacity(0.8))
+                .fill(Theme.veil)
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(Theme.accent.opacity(0.06))
                 .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 3, dash: [10, 7]))
@@ -1073,7 +1073,7 @@ enum KeyHighlight {
 
     var fill: Color {
         switch self {
-        case .none: .white
+        case .none: Theme.keyFill
         case .correct: Theme.correct
         case .wrong: Theme.wrong
         case .reveal: Theme.correctTint
@@ -1094,7 +1094,7 @@ enum KeyHighlight {
         switch self {
         case .none: Theme.ink
         case .correct, .wrong, .armed: .white
-        case .reveal: Theme.correct
+        case .reveal: Theme.correctOnTint
         }
     }
 }

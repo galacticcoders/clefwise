@@ -68,6 +68,7 @@ struct PiecePanel: View {
                         }
                         .labelsHidden()
                         .fixedSize()
+                        .rebuiltOnAppearanceChange()
                         .help("Which instrument or voice to read")
                     }
                     if part.staffCount == 2 {
