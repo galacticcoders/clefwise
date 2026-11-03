@@ -100,10 +100,22 @@ struct RecentPiecesSection: View {
     static let width: CGFloat = 340
 
     var body: some View {
+        if count == 0 {
+            // No room for a row: just the way to them, rather than a heading over nothing.
+            Button("Open one of your pieces…") { PieceListSheet.shared.show(from: "startPanel", game: game) }
+                .buttonStyle(.link)
+                .font(.callout)
+                .help("Every piece you've opened, to practise, find or remove one")
+        } else {
+            rows
+        }
+    }
+
+    private var rows: some View {
         let entries = Array(game.library.entries.prefix(count))
         let titles = entries.distinctTitles()
         let now = Date.now
-        VStack(alignment: .leading, spacing: 1) {
+        return VStack(alignment: .leading, spacing: 1) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Your pieces")
                     .font(.callout.weight(.semibold))

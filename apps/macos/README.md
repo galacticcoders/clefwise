@@ -62,7 +62,7 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
 - **Hints** (H) prints the name of every line and space and, with letter names, shows the
   mnemonics (Every Good Boy Does Fine / FACE, Good Boys Do Fine Always / All Cows Eat Grass).
 
-Keyboard: Space/Return start · Space pause/resume during a round · Esc stop · H hints · K key names (piano) · M mute · ⌘O open a piece.
+Keyboard: Space/Return start · Space pause/resume during a round · Esc stop · H hints · K key names (piano) · M mute · ⌘O open a piece · ⇧⌘O your pieces.
 
 ## Practise a piece
 
@@ -100,6 +100,19 @@ those toolbar settings are greyed out; Mode, note names and the answer method st
   saying how many. Repeats aren't expanded.
 - The last piece reopens at launch. **Back to random notes** returns to normal practice.
 
+### Your pieces
+
+Every piece you open is kept, so you can practise it again without looking for the file:
+- **Where they are:** the latest under **Your pieces** on the start panel, the others through
+  **All pieces…** there, **File → Open Recent Piece**, **File → All Pieces…** (⇧⌘O), or the piece
+  panel's **Open another…** menu. The full list can be searched once it's longer than eight.
+- **Each piece keeps its own settings** (part, hand, order, start bar, chords, whole bar), so it
+  comes back as you left it.
+- **Clefwise keeps its own copy** in `~/Library/Application Support/Clefwise/Pieces/`, so moving or
+  deleting the original doesn't matter. Opening the same file again, from anywhere, is the same
+  piece; a score exported again to the same place replaces the copy and keeps the settings.
+- **Remove…** in the list forgets a piece and its copy; the original file isn't touched.
+
 Notes you've missed recently come up more often (based on your last 8 tries at each note), so
 practice concentrates on what you don't know yet. History, best scores and settings are stored in
 `UserDefaults`; reset everything with `defaults delete local.clefwise`.
@@ -132,7 +145,7 @@ quit, time the app was in front). Nothing leaves your Mac.
 - Stored as one JSON Lines file per day in `~/Library/Application Support/Clefwise/Usage/`,
   only ever appended to.
 - **File → Export Usage Data…** (⇧⌘E) saves a zip with the raw event files, `answers.csv`,
-  `rounds.csv`, `sessions.csv`, your current settings and stats, and `SCHEMA.md` describing every
+  `rounds.csv`, `sessions.csv`, your current settings and stats, your list of pieces, and `SCHEMA.md` describing every
   field (with snippets for pandas, DuckDB and jq). **File → Show Usage Data in Finder** opens the
   folder.
 - To start the log afresh, quit the app and delete that folder.
@@ -144,6 +157,8 @@ Sources/Clefwise/
   ClefwiseApp.swift   app entry, window, File → Open Piece…
   ContentView.swift   UI: stats, staff card, start/summary panels, answer keys
   PiecePanel.swift    piece setup panel, opening and dropping files
+  PieceLibrary.swift  the pieces kept to practise again: copies, index, settings per piece
+  LibraryView.swift   Your pieces on the start panel, and the list of all of them
   StaffView.swift     one note on a staff: clef, key signature, ledger lines, 8va and hints (Canvas)
   BarStaffView.swift  a whole bar of a piece (one staff or a grand staff), laid out by BarLayout.swift
   StaffDrawing.swift  drawing shared by both: staff geometry, glyphs, key signatures, hints, pill
