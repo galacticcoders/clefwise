@@ -60,7 +60,9 @@ struct TrendSection: View {
         TrendChart(title: "Accuracy", subtitle: "Share of notes named right",
                    periods: periods, hovered: $hovered,
                    value: { $0.accuracy.map { $0 * 100 } },
-                   ticks: [0, 25, 50, 75, 100],
+                   // Focused on where the accuracy is (near the top, mostly), not always 0–100%.
+                   ticks: NiceScale.ticks(covering: periods.compactMap { $0.accuracy.map { $0 * 100 } },
+                                          minimumSpan: 10, within: 0...100),
                    tickLabel: { "\(Int($0))%" },
                    readout: { $0.accuracy.map(DashboardFormat.percent) })
             .frame(minWidth: 280)
@@ -226,7 +228,8 @@ private struct TrendChart: View {
                     .foregroundStyle(DashboardTheme.textSecondary)
             }
             Chart {
-                RuleMark(y: .value("Baseline", 0))
+                // The bottom of the scale: zero, or the lowest tick on a focused one.
+                RuleMark(y: .value("Baseline", ticks.first ?? 0))
                     .foregroundStyle(DashboardTheme.baseline)
                     .lineStyle(StrokeStyle(lineWidth: 1))
                 ForEach(points) { point in
@@ -250,7 +253,7 @@ private struct TrendChart: View {
                 }
             }
             .chartXScale(domain: xDomain)
-            .chartYScale(domain: 0...(ticks.last ?? 1))
+            .chartYScale(domain: (ticks.first ?? 0)...(ticks.last ?? 1))
             .chartXAxis {
                 AxisMarks(values: xTicks) { mark in
                     // The latest point sits by the right edge: its label ends there instead of being cut.
