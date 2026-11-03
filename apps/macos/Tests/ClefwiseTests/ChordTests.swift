@@ -198,7 +198,7 @@ private extension GameTestBench {
         let defaults = InMemoryDefaults()
         defaults.set(Data(#"{"piece":{"hand":"both","oneNotePerChord":true}}"#.utf8), forKey: "settings")
         let recorder = MemoryUsageRecorder()
-        let launched = Game(defaults: defaults, recorder: recorder)
+        let launched = Game(defaults: defaults, recorder: recorder, library: .temporary())
         #expect(launched.settings.piece.chords == .topOrBottom && launched.settings.piece.hand == .both)
         #expect(!recorder.events.contains { $0.event.type == "settingChanged" })
     }

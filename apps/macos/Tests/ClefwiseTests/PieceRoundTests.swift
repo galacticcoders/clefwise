@@ -73,16 +73,18 @@ class GameTestBench {
     let defaults: UserDefaults = InMemoryDefaults()
     /// Never the real usage log: every `Game` in the tests gets one of these.
     let recorder = MemoryUsageRecorder()
+    /// Never the real piece library either: a folder of its own in the temporary directory.
+    let library = PieceLibrary.temporary()
     let game: Game
 
     init() {
-        game = Game(defaults: defaults, recorder: recorder)
+        game = Game(defaults: defaults, recorder: recorder, library: library)
         game.settings.isMuted = true
     }
 
-    /// The app starting again on the same defaults, with its own log.
+    /// The app starting again on the same defaults and library, with its own log.
     func relaunch(recorder: MemoryUsageRecorder = MemoryUsageRecorder()) -> Game {
-        Game(defaults: defaults, recorder: recorder)
+        Game(defaults: defaults, recorder: recorder, library: library)
     }
 
     /// Answers the current question right, on the piano; returns what was asked.

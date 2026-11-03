@@ -27,6 +27,7 @@ struct ClefwiseApp: App {
                 Button("Open Piece…") { PieceFile.choose(for: game, via: .menu) }
                     .keyboardShortcut("o")
                     .disabled(game.phase == .playing)
+                PieceLibraryCommands(game: game)
                 Divider()
                 Button("Export Usage Data…") { UsageData.export() }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
@@ -70,6 +71,33 @@ private struct ProgressCommands: Commands {
             Button("Progress") { ProgressWindow.open(from: "menu", game: game, with: openWindow) }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
             Divider()
+        }
+    }
+}
+
+/// File ▸ Open Recent Piece and All Pieces…, under Open Piece…, once a piece has been kept; with
+/// none, the File menu is as it was before the library.
+private struct PieceLibraryCommands: View {
+    let game: Game
+
+    /// How many pieces Open Recent Piece lists.
+    static let count = 10
+
+    var body: some View {
+        if !game.library.isEmpty {
+            let others = Array(game.library.entries.filter { !$0.isOpen(in: game) }.prefix(Self.count))
+            if !others.isEmpty {
+                let titles = others.distinctTitles()
+                Menu("Open Recent Piece") {
+                    ForEach(others) { entry in
+                        Button(titles[entry.id] ?? entry.displayTitle) { PieceFile.open(entry, in: game, from: "fileMenu") }
+                    }
+                }
+                .disabled(game.phase == .playing)
+            }
+            Button("All Pieces…") { PieceListSheet.shared.show(from: "fileMenu", game: game) }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+                .disabled(game.phase == .playing)
         }
     }
 }
@@ -141,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Before the game exists, so the session's log starts with the launch: making the game
         // reopens last time's piece, which is logged too.
         UsageLog.shared.record(.appLaunched(.current))
-        game = Game()
+        game = Game(library: .shared)
         progressStore = ProgressStore()
         super.init()
     }

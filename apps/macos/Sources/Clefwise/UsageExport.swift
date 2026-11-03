@@ -6,9 +6,10 @@ import Foundation
 enum UsageExport {
     /// Writes everything in `log` to a zip at `destination`, replacing any file there. Reads the
     /// whole log, which after years of use takes a few seconds: call it off the main thread.
-    /// `defaults` holds the saved settings and stats; local-time columns are in `timeZone`.
+    /// `defaults` holds the saved settings and stats, `libraryFolder` the piece library (nil
+    /// writes an empty list); local-time columns are in `timeZone`.
     static func export(_ log: UsageLog, to destination: URL, defaults: UserDefaults = .standard,
-                       timeZone: TimeZone = .current) throws {
+                       libraryFolder: URL? = nil, timeZone: TimeZone = .current) throws {
         log.flush()
         let fileManager = FileManager.default
         let work = fileManager.temporaryDirectory
@@ -34,6 +35,9 @@ enum UsageExport {
             for (key, name) in savedValues {
                 try writeSaved(key, from: defaults, to: top.appendingPathComponent(name))
             }
+        }
+        try step("write the piece library") {
+            try writeLibraryIndex(from: libraryFolder, to: top.appendingPathComponent("piece-library.json"))
         }
         try step("write SCHEMA.md") {
             let skipped = counts.unreadable == 0 ? "" : ", skipping \(counts.unreadable) unreadable line"
@@ -88,6 +92,15 @@ enum UsageExport {
         }
         json.append(0x0A)
         try json.write(to: url)
+    }
+
+    /// The piece library's index as it is on disk, or `[]` without one.
+    private static func writeLibraryIndex(from folder: URL?, to url: URL) throws {
+        if let folder, let data = try? Data(contentsOf: PieceLibrary.indexURL(in: folder)) {
+            try data.write(to: url)
+        } else {
+            try Data("[]\n".utf8).write(to: url)
+        }
     }
 
     private static func zip(_ folder: URL, to archive: URL) throws {
@@ -195,6 +208,7 @@ enum UsageExport {
         // Rounds logged before the setting existed had only the checkbox, so it says which.
         Column("pieceChords") { $0.start?.piece.map { $0.chords ?? ($0.oneNotePerChord ? "topOrBottom" : "eachNote") } },
         Column("pieceNotes") { $0.start?.piece?.noteCount },
+        Column("pieceLibraryID") { $0.start?.piece?.libraryID?.uuidString },
         Column("endReason") { $0.end?.reason.rawValue },
         Column("durationMs") { $0.end?.durationMs },
         Column("pausedMs") { $0.end?.pausedMs },
