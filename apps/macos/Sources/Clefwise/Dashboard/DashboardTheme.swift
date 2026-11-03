@@ -14,6 +14,13 @@ import SwiftUI
 ///   steps are orange (OKLCH hue 41°, from `#eb6834`) at the blue ramp's lightness, step for step.
 ///   The five classes pass the ordinal checks: light 250…700 on white (palest 2.19:1), dark 550…100
 ///   on `#1a1a19` (darkest 2.49:1).
+/// - **Aqua ramp** (the speed map, the third scale on screen): the next categorical hue after orange,
+///   made the same way: aqua (OKLCH hue 162°, from `#1baf7a`) at the blue ramp's lightness, step for
+///   step, chroma scaled from blue's and clipped to sRGB. The five classes pass the ordinal checks
+///   (monotone, every gap ΔL ≥ 0.06, hue spread 1°): light 250…700 on white (palest 2.05:1), dark
+///   550…100 on `#1a1a19` (darkest 2.80:1). Labels by APCA as on orange: ink on the palest light
+///   class (Lc 64), white on the others (Lc 59–100); light on the two darkest dark classes (Lc 75,
+///   63), ink on the others (Lc 57–88).
 enum DashboardTheme {
     /// Cards (the chart surface) and the window behind them.
     static let surface = Color(light: .white, dark: NSColor(hex: 0x1A1A19))
@@ -45,6 +52,10 @@ enum DashboardTheme {
     private static let orangeRamp: [Int] = [0xFBD7CA, 0xF5C4B2, 0xF2B098, 0xEB9C7F, 0xE68764, 0xDF7249, 0xD95923,
                                             0xC94908, 0xB44005, 0x9F3600, 0x8A2E00, 0x752600, 0x611E00]
 
+    /// The aqua scale, light to dark (steps 100…700), for a third amount beside the blue and orange.
+    private static let aquaRamp: [Int] = [0xCCE8D9, 0xB4DBC6, 0x9AD0B4, 0x80C3A2, 0x62B890, 0x43AC7F, 0x039F6D,
+                                          0x018F62, 0x037F56, 0x016F4B, 0x026040, 0x025136, 0x00432B]
+
     /// `fraction` (0…1) on the blue scale: darker for more in light mode, lighter for more in dark.
     /// `fromStep` skips the steps nearest the card, where a cell must still stand out from it (an
     /// ordered scale starts no lighter than step 250 = 3 on white, no darker than step 550 on dark).
@@ -55,6 +66,11 @@ enum DashboardTheme {
     /// `fraction` on the orange scale, as `rampColor` does on the blue one.
     static func orangeRampColor(_ fraction: Double, fromStep: Int = 0) -> Color {
         color(fraction, on: orangeRamp, fromStep: fromStep)
+    }
+
+    /// `fraction` on the aqua scale, as `rampColor` does on the blue one.
+    static func aquaRampColor(_ fraction: Double, fromStep: Int = 0) -> Color {
+        color(fraction, on: aquaRamp, fromStep: fromStep)
     }
 
     private static func color(_ fraction: Double, on ramp: [Int], fromStep: Int) -> Color {

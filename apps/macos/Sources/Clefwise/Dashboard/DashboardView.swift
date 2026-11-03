@@ -115,6 +115,7 @@ struct DashboardView: View {
         return VStack(alignment: .leading, spacing: Self.spacing) {
             KPISection(report: report, naming: naming)
             TrendSection(report: report, naming: naming)
+            AutomaticSection(report: report, naming: naming)
             // Side by side, so a line or space sits at the same height in both: how well it's known
             // next to how often it comes up.
             pair(isWide, column) {
@@ -123,11 +124,15 @@ struct DashboardView: View {
                 NoteMapSection(report: report, naming: naming, measure: .practice)
             }
             pair(isWide, column) {
-                WorkOnSection(report: report, naming: naming)
+                NoteMapSection(report: report, naming: naming, measure: .speed)
             } and: {
-                CalendarSection(report: report, naming: naming)
+                WorkOnSection(report: report, naming: naming)
             }
-            BreakdownSection(report: report, naming: naming)
+            pair(isWide, column) {
+                CalendarSection(report: report, naming: naming)
+            } and: {
+                BreakdownSection(report: report, naming: naming)
+            }
             if !report.pieces.isEmpty {
                 PieceSection(report: report, naming: naming)
             }

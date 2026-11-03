@@ -1,13 +1,14 @@
 import Charts
 import SwiftUI
 
-/// Accuracy and response time per day, as two charts side by side (never one chart with two scales).
+/// Accuracy, response time and how much the times vary, per day, as three charts side by side
+/// (never one chart with two scales).
 struct TrendSection: View {
     let report: ProgressReport
     /// Note names on the dashboard follow the naming system in use.
     let naming: NamingSystem
 
-    /// The period under the pointer in either chart (its start); both show it, so they read across.
+    /// The period under the pointer in any chart (its start); all show it, so they read across.
     @State private var hovered: Date?
 
     /// Past about six weeks a point a day breaks into fragments wherever a day is skipped and
@@ -23,9 +24,13 @@ struct TrendSection: View {
                       subtitle: isWeekly ? "Per week; weeks without practice are gaps" : "Per day; days without practice are gaps") {
             if report.days.contains(where: { $0.answers > 0 }) {
                 let periods = periods
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 28) { charts(periods) }
-                    VStack(alignment: .leading, spacing: 24) { charts(periods) }
+                // Three across when they fit; else the third under the first two; else one above another.
+                ThreeAcross(spacing: 28, rowSpacing: 24) {
+                    accuracyChart(periods)
+                } second: {
+                    timeChart(periods)
+                } third: {
+                    spreadChart(periods)
                 }
             } else {
                 Text("No dated practice in this range yet.")
@@ -36,18 +41,22 @@ struct TrendSection: View {
             // Always by day, newest first: the numbers behind the points.
             DashboardTable(
                 columns: [.init(title: "Day", isNumeric: false), .init(title: "Notes"), .init(title: "Accuracy"),
-                          .init(title: "Typical response"), .init(title: "Practice time")],
+                          .init(title: "Typical response"), .init(title: "Middle half"), .init(title: "Spread"),
+                          .init(title: "Practice time")],
                 rows: report.days.reversed().map { day in
                     [DashboardFormat.day(day.day), day.answers > 0 ? day.answers.formatted() : "–",
                      day.accuracy.map(DashboardFormat.percent) ?? "–",
                      day.medianResponseMs.map { DashboardFormat.seconds(milliseconds: $0) } ?? "–",
+                     day.lowerQuartileMs.flatMap { lower in
+                         day.upperQuartileMs.map { AutomaticInsight.secondsRange(lower, $0) }
+                     } ?? "–",
+                     day.spreadMs.map { DashboardFormat.seconds(milliseconds: $0) } ?? "–",
                      day.answers > 0 ? DashboardFormat.duration(day.practiceSeconds) : "–"]
                 })
         }
     }
 
-    @ViewBuilder
-    private func charts(_ periods: [TrendPeriod]) -> some View {
+    private func accuracyChart(_ periods: [TrendPeriod]) -> some View {
         TrendChart(title: "Accuracy", subtitle: "Share of notes named right",
                    periods: periods, hovered: $hovered,
                    value: { $0.accuracy.map { $0 * 100 } },
@@ -55,12 +64,33 @@ struct TrendSection: View {
                    tickLabel: { "\(Int($0))%" },
                    readout: { $0.accuracy.map(DashboardFormat.percent) })
             .frame(minWidth: 280)
+    }
+
+    private func timeChart(_ periods: [TrendPeriod]) -> some View {
         TrendChart(title: "Typical response time", subtitle: "Median time to a right answer",
                    periods: periods, hovered: $hovered,
                    value: { $0.medianResponseMs.map { Double($0) / 1000 } },
                    ticks: NiceScale.ticks(for: periods.compactMap(\.medianResponseMs).max().map { Double($0) / 1000 } ?? 1),
                    tickLabel: { "\($0.formatted(.number.precision(.fractionLength(0...1)))) s" },
                    readout: { $0.medianResponseMs.map { DashboardFormat.seconds(milliseconds: $0) } })
+            .frame(minWidth: 280)
+    }
+
+    /// How far apart the middle half of the times is: it often draws together before the median
+    /// falls much.
+    private func spreadChart(_ periods: [TrendPeriod]) -> some View {
+        TrendChart(title: "How much your times vary", subtitle: "Spread of the middle half of right answers",
+                   periods: periods, hovered: $hovered,
+                   value: { $0.spreadMs.map { Double($0) / 1000 } },
+                   ticks: NiceScale.ticks(for: periods.compactMap(\.spreadMs).max().map { Double($0) / 1000 } ?? 1),
+                   // Spreads are small, so steps of 0.25 s come up: "0,25 s", not "0,2 s".
+                   tickLabel: { "\($0.formatted(.number.precision(.fractionLength(0...2)))) s" },
+                   readout: { $0.spreadMs.map { DashboardFormat.seconds(milliseconds: $0) } },
+                   detail: { period in
+                       // A day's own middle half; a week's spread is the middle of its days', so it has none.
+                       guard let lower = period.lowerQuartileMs, let upper = period.upperQuartileMs else { return nil }
+                       return "Middle half \(AutomaticInsight.secondsRange(lower, upper)) · \(DashboardFormat.notes(period.answers))"
+                   })
             .frame(minWidth: 280)
     }
 }
@@ -74,6 +104,11 @@ private struct TrendPeriod: Identifiable {
     let answers: Int
     let correct: Int
     let medianResponseMs: Int?
+    /// A day's quartiles of its right answers; nil for a week.
+    let lowerQuartileMs: Int?
+    let upperQuartileMs: Int?
+    /// How far apart the middle half of the times is: a day's own, or the middle of a week's days'.
+    let spreadMs: Int?
 
     var id: Date { start }
     var accuracy: Double? { answers > 0 ? Double(correct) / Double(answers) : nil }
@@ -92,6 +127,9 @@ private struct TrendPeriod: Identifiable {
         answers = day.answers
         correct = day.correct
         medianResponseMs = day.medianResponseMs
+        lowerQuartileMs = day.lowerQuartileMs
+        upperQuartileMs = day.upperQuartileMs
+        spreadMs = day.spreadMs
     }
 
     private init(week days: ArraySlice<DayProgress>) {
@@ -105,6 +143,11 @@ private struct TrendPeriod: Identifiable {
         // The middle of the week's daily medians: the report has no finer times, and a trend needs no more.
         let medians = days.compactMap(\.medianResponseMs).sorted()
         medianResponseMs = medians.isEmpty ? nil : medians[medians.count / 2]
+        // Likewise the middle of its daily spreads; a week's own quartiles would need its times.
+        lowerQuartileMs = nil
+        upperQuartileMs = nil
+        let spreads = days.compactMap(\.spreadMs).sorted()
+        spreadMs = spreads.isEmpty ? nil : spreads[spreads.count / 2]
     }
 
     /// `days` in calendar weeks; the first and last may be part weeks.
@@ -137,6 +180,8 @@ private struct TrendChart: View {
     let tickLabel: (Double) -> String
     /// The tooltip's lead value, nil when there's none.
     let readout: (TrendPeriod) -> String?
+    /// The tooltip's line under the period, when there's more to say than the number of notes.
+    var detail: ((TrendPeriod) -> String?)? = nil
 
     private let calendar = Calendar.current
 
@@ -269,7 +314,8 @@ private struct TrendChart: View {
     private func tooltip(_ period: TrendPeriod?) -> some View {
         if let period {
             if let readout = readout(period) {
-                ChartTooltip(value: readout, label: period.label, detail: DashboardFormat.notes(period.answers))
+                ChartTooltip(value: readout, label: period.label,
+                             detail: detail?(period) ?? DashboardFormat.notes(period.answers))
             } else {
                 ChartTooltip(value: period.answers > 0 ? "No right answers" : "No practice", label: period.label)
             }

@@ -6,6 +6,9 @@ enum NoteMapMeasure {
     case accuracy
     /// How often it came up: darker orange for more answers, hollow where there are none.
     case practice
+    /// How fast it's named now (`PositionProgress.recentMedianResponseMs`): darker aqua for faster
+    /// (`SpeedScale`), hollow where there are too few right answers yet.
+    case speed
 }
 
 /// A note map: every staff line and space per clef, drawn like a staff and coloured by `measure`.
@@ -17,9 +20,19 @@ struct NoteMapSection: View {
 
     @State private var hovered: String?
 
-    private var title: String { measure == .accuracy ? "Note map" : "Practice map" }
+    private var title: String {
+        switch measure {
+        case .accuracy: "Note map"
+        case .practice: "Practice map"
+        case .speed: "Speed map"
+        }
+    }
     private var subtitle: String {
-        measure == .accuracy ? "How well you know each line and space" : "How often each line and space comes up"
+        switch measure {
+        case .accuracy: "How well you know each line and space"
+        case .practice: "How often each line and space comes up"
+        case .speed: "How fast you name each line and space now"
+        }
     }
 
     var body: some View {
@@ -93,12 +106,29 @@ struct NoteMapSection: View {
             return NoteMapCellStyle(
                 fill: level.map(PracticeScale.fill), label: PracticeScale.labelColor(level: level),
                 accessibilityValue: place.attempts == 0 ? "Not practised yet" : answers(place.attempts))
+        case .speed:
+            let level = place.speedLevel
+            return NoteMapCellStyle(
+                fill: level.map(SpeedScale.fill), label: SpeedScale.labelColor(level: level),
+                accessibilityValue: place.attempts == 0 ? "No answers yet"
+                    : level == nil ? rightAnswersSoFar(place.recentRightAnswers)
+                    : "\(SpeedScale.seconds(place.recentMs)) now, from \(rightAnswers(place.recentRightAnswers))")
         }
     }
 
     /// "1 answer", "647 answers".
     private func answers(_ count: Int) -> String {
         count == 1 ? "1 answer" : "\(ReportFormat.count(count)) answers"
+    }
+
+    /// "1 right answer", "20 right answers".
+    private func rightAnswers(_ count: Int) -> String {
+        count == 1 ? "1 right answer" : "\(ReportFormat.count(count)) right answers"
+    }
+
+    /// Why a place has no speed yet: "3 right answers so far; 5 needed".
+    private func rightAnswersSoFar(_ count: Int) -> String {
+        "\(count == 0 ? "No right answers" : rightAnswers(count)) so far; \(SpeedScale.minimumRightAnswers) needed"
     }
 
     // MARK: Chart
@@ -131,10 +161,17 @@ struct NoteMapSection: View {
                 let scale = practiceScale
                 ScaleLegend(title: "Answers", classLabels: scale.classLabels, fill: PracticeScale.fill,
                             hollowMeaning: "Not practised yet", axis: axis)
+            case .speed:
+                ScaleLegend(title: "Median time now", classLabels: SpeedScale.classLabels(), fill: SpeedScale.fill,
+                            hollowMeaning: "Fewer than \(SpeedScale.minimumRightAnswers) right answers", axis: axis)
+                note("Each time is the median of that place's last \(PositionProgress.recentWindow) right answers.")
             }
             note("Lines on the left, spaces on the right. Long rules are the staff, short ones ledger lines.")
             if report.answersBeforeTracking > 0 {
-                note("Includes \(ReportFormat.count(report.answersBeforeTracking)) answers from before detailed tracking, which have no times.")
+                // They count on the other maps, but without times they can't on this one.
+                let count = ReportFormat.count(report.answersBeforeTracking)
+                note(measure == .speed ? "Leaves out the \(count) answers from before detailed tracking, which have no times."
+                                       : "Includes \(count) answers from before detailed tracking, which have no times.")
             }
         }
     }
@@ -151,6 +188,30 @@ struct NoteMapSection: View {
         switch measure {
         case .accuracy: accuracyTip
         case .practice: practiceTip
+        case .speed: speedTip
+        }
+    }
+
+    @ViewBuilder private var speedTip: some View {
+        if let hovered, let place = place(withID: hovered) {
+            let name = ReportFormat.noteName(place.natural, naming)
+            let label = "\(name) · \(place.clef.name) \(ReportFormat.staffPlace(place.position))"
+            let before = place.progress?.attemptsBeforeTracking ?? 0
+            if place.attempts == 0 {
+                HoverTipText(value: "No answers yet", label: label)
+            } else if place.speedLevel == nil {
+                HoverTipText(value: "Too few right answers yet", label: label, details: [
+                    rightAnswersSoFar(place.recentRightAnswers),
+                    before > 0 ? "\(answers(before)) from before detailed tracking, without times" : nil,
+                ].compactMap { $0 })
+            } else {
+                let used = place.recentRightAnswers
+                HoverTipText(value: "\(SpeedScale.seconds(place.recentMs)) now", label: label, details: [
+                    used >= PositionProgress.recentWindow ? "Median of its last \(used) right answers"
+                        : "Median of its \(used) right answers so far",
+                    place.progress?.medianResponseMs.map { "Over the period: \(SpeedScale.seconds($0))" },
+                ].compactMap { $0 })
+            }
         }
     }
 
@@ -205,6 +266,39 @@ struct NoteMapSection: View {
         switch measure {
         case .accuracy: accuracyTable
         case .practice: practiceTable
+        case .speed: speedTable
+        }
+    }
+
+    /// Slowest first, so the places still to speed up lead; then those with too few right answers to
+    /// judge, in staff order (as are ties).
+    private var speedTable: some View {
+        let places = columns.flatMap(\.places)
+        let ranked = places.enumerated().sorted { first, second in
+            let (a, b) = (first.element.judgedRecentMs ?? -1, second.element.judgedRecentMs ?? -1)
+            return a != b ? a > b : first.offset < second.offset
+        }.map(\.element)
+        return Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 5) {
+            GridRow {
+                ReportTable.heading("Clef")
+                ReportTable.heading("Place")
+                ReportTable.heading("Note")
+                ReportTable.heading("Now").gridColumnAlignment(.trailing)
+                ReportTable.heading("Right answers used").gridColumnAlignment(.trailing)
+                ReportTable.heading("Over the period").gridColumnAlignment(.trailing)
+            }
+            ReportTable.rule()
+            ForEach(ranked) { place in
+                let judged = place.speedLevel != nil
+                GridRow {
+                    ReportTable.cell(place.clef.name)
+                    ReportTable.cell(capitalized(ReportFormat.staffPlace(place.position)))
+                    ReportTable.cell(ReportFormat.noteName(place.natural, naming))
+                    ReportTable.cell(SpeedScale.seconds(place.recentMs), muted: !judged)
+                    ReportTable.cell(ReportFormat.count(place.recentRightAnswers), muted: !judged)
+                    ReportTable.cell(SpeedScale.seconds(place.progress?.medianResponseMs), muted: !judged)
+                }
+            }
         }
     }
 
@@ -381,4 +475,10 @@ private struct NoteMapPlace: Identifiable {
     var attempts: Int { progress?.attempts ?? 0 }
     var correct: Int { progress?.correct ?? 0 }
     var level: Int? { AccuracyScale.level(correct: correct, of: attempts) }
+    /// The median time of its latest right answers, and how many that is (`PositionProgress`).
+    var recentMs: Int? { progress?.recentMedianResponseMs }
+    var recentRightAnswers: Int { progress?.recentRightAnswers ?? 0 }
+    var speedLevel: Int? { SpeedScale.level(medianMs: recentMs, rightAnswers: recentRightAnswers) }
+    /// `recentMs` when there are enough right answers to judge it; nil otherwise.
+    var judgedRecentMs: Int? { speedLevel == nil ? nil : recentMs }
 }

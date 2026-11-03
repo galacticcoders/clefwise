@@ -140,8 +140,10 @@ private struct Log {
         #expect(week.previousTotals == ProgressTotals(answers: 5, correct: 4, rounds: 3, practiceSeconds: 1560,
                                                       daysPractised: 3, medianResponseMs: 1300))
         #expect(week.days.map(\.day) == (0..<7).reversed().map { at($0, 0) })
-        #expect(week.days.first == DayProgress(day: at(6, 0), answers: 2, correct: 2, practiceSeconds: 90, medianResponseMs: 850))
-        #expect(week.days.last == DayProgress(day: at(0, 0), answers: 3, correct: 2, practiceSeconds: 600, medianResponseMs: 2000))
+        #expect(week.days.first == DayProgress(day: at(6, 0), answers: 2, correct: 2, practiceSeconds: 90, medianResponseMs: 850,
+                                               lowerQuartileMs: 725, upperQuartileMs: 975))
+        #expect(week.days.last == DayProgress(day: at(0, 0), answers: 3, correct: 2, practiceSeconds: 600, medianResponseMs: 2000,
+                                              lowerQuartileMs: 1500, upperQuartileMs: 2500))
         #expect(week.days.dropFirst().dropLast().allSatisfy { $0.answers == 0 && $0.practiceSeconds == 0 && $0.medianResponseMs == nil })
         #expect(week.recentRounds == [
             RecentRound(id: f, started: at(0, 15, 50), durationMs: 600_000, mode: "sprint", input: "buttons", naming: "letters",
@@ -188,8 +190,10 @@ private struct Log {
         #expect(week.days.map(\.day) == ["2026-10-23T22:00:00.000Z", "2026-10-24T22:00:00.000Z", "2026-10-25T23:00:00.000Z",
                                          "2026-10-26T23:00:00.000Z", "2026-10-27T23:00:00.000Z", "2026-10-28T23:00:00.000Z",
                                          "2026-10-29T23:00:00.000Z"].map(usageTestTime))
-        #expect(week.days[1] == DayProgress(day: at(5, 0), answers: 1, correct: 1, practiceSeconds: 120, medianResponseMs: 1000))
-        #expect(week.days[2] == DayProgress(day: at(4, 0), answers: 1, correct: 1, practiceSeconds: 0, medianResponseMs: 2000))
+        #expect(week.days[1] == DayProgress(day: at(5, 0), answers: 1, correct: 1, practiceSeconds: 120, medianResponseMs: 1000,
+                                            lowerQuartileMs: 1000, upperQuartileMs: 1000))
+        #expect(week.days[2] == DayProgress(day: at(4, 0), answers: 1, correct: 1, practiceSeconds: 0, medianResponseMs: 2000,
+                                            lowerQuartileMs: 2000, upperQuartileMs: 2000))
         #expect(week.days[0].answers == 1)
         // Saturday, Sunday and Monday in a row, the 25-hour Sunday included.
         #expect(week.longestStreakDays == 3 && week.currentStreakDays == 0)
@@ -284,13 +288,13 @@ private struct Log {
         let week = report(log)
         #expect(week.positions == [
             PositionProgress(clef: .treble, position: 0, natural: Pitch(.e, 4), attempts: 1, correct: 1, medianResponseMs: 900,
-                             attemptsBeforeTracking: 0),
+                             attemptsBeforeTracking: 0, recentMedianResponseMs: 900, recentRightAnswers: 1),
             PositionProgress(clef: .treble, position: 4, natural: Pitch(.b, 4), attempts: 1, correct: 1, medianResponseMs: 1200,
-                             attemptsBeforeTracking: 0),
+                             attemptsBeforeTracking: 0, recentMedianResponseMs: 1200, recentRightAnswers: 1),
             PositionProgress(clef: .treble, position: 8, natural: Pitch(.f, 5), attempts: 4, correct: 3, medianResponseMs: 2000,
-                             attemptsBeforeTracking: 0),
+                             attemptsBeforeTracking: 0, recentMedianResponseMs: 2000, recentRightAnswers: 3),
             PositionProgress(clef: .treble, position: 9, natural: Pitch(.g, 5), attempts: 1, correct: 1, medianResponseMs: 1500,
-                             attemptsBeforeTracking: 0),
+                             attemptsBeforeTracking: 0, recentMedianResponseMs: 1500, recentRightAnswers: 1),
             PositionProgress(clef: .bass, position: 0, natural: Pitch(.g, 2), attempts: 1, correct: 0, medianResponseMs: nil,
                              attemptsBeforeTracking: 0),
         ])
@@ -320,13 +324,14 @@ private struct Log {
         let month = report(log, .month)
         #expect(month.answersBeforeTracking == 0)
         #expect(month.positions == [PositionProgress(clef: .treble, position: 8, natural: Pitch(.f, 5), attempts: 1, correct: 1,
-                                                     medianResponseMs: 1000, attemptsBeforeTracking: 0)])
+                                                     medianResponseMs: 1000, attemptsBeforeTracking: 0,
+                                                     recentMedianResponseMs: 1000, recentRightAnswers: 1)])
         let allTime = report(log, .all)
         #expect(allTime.answersBeforeTracking == 20)
         #expect(allTime.totals.answers == 1)
         #expect(allTime.positions == [
             PositionProgress(clef: .treble, position: 8, natural: Pitch(.f, 5), attempts: 15, correct: 9, medianResponseMs: 1000,
-                             attemptsBeforeTracking: 14),
+                             attemptsBeforeTracking: 14, recentMedianResponseMs: 1000, recentRightAnswers: 1),
             PositionProgress(clef: .bass, position: 0, natural: Pitch(.g, 2), attempts: 6, correct: 6, medianResponseMs: nil,
                              attemptsBeforeTracking: 6),
         ])

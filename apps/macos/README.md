@@ -125,12 +125,18 @@ everything on the page follows that choice.
 
 - **Overview**: practice time, notes answered, accuracy, typical response time (median to a
   right answer) against the previous period, and your day streak.
-- **Over time**: accuracy and response time per day (per week past six weeks).
+- **Over time**: accuracy, response time, and how much your times vary (the spread of the middle
+  half of right answers), per day (per week past six weeks).
+- **Becoming automatic**: the signs that naming a note no longer takes working out, each with a
+  plain-language reading: how long your answers take (this period against the one before), mistakes
+  by speed (are they the rushed ones?), and how the distance from the note before changes your time.
 - **Note map**: every line and space per clef, laid out like the staff, darker for better known;
   hollow where there are fewer than 5 answers yet.
 - **Practice map**, beside it and laid out the same: how often each line and space has come up,
   in orange, darker for more; hollow where it never has. Its table ranks them from most to least
   practised.
+- **Speed map**, laid out the same: each line and space's median time over its last 20 right
+  answers, so the notes that are still slow stand out; hollow until a place has 5 right answers.
 - **Notes to work on**: your most-missed and slowest notes, sharps and flats included.
 - **Practice calendar**, **how you answer** (by answer method and naming system), **pieces** bar by
   bar, and **recent rounds**.

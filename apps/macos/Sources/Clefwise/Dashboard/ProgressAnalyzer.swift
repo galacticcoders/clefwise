@@ -43,6 +43,21 @@ enum ProgressAnalyzer {
         return Int((Double(sorted[middle - 1] + sorted[middle]) / 2).rounded())
     }
 
+    /// The `p` quantile (0…1) of `values`, between the two nearest ranks as spreadsheets'
+    /// PERCENTILE does, rounded; nil when there are none. `quantile(values, 0.5)` is `median`.
+    static func quantile(_ values: [Int], _ p: Double) -> Int? {
+        quantile(sorted: values.sorted(), p)
+    }
+
+    /// `quantile` of values already sorted, so several quantiles of a long list sort it only once.
+    fileprivate static func quantile(sorted: [Int], _ p: Double) -> Int? {
+        guard !sorted.isEmpty else { return nil }
+        let rank = min(max(p, 0), 1) * Double(sorted.count - 1)
+        let below = Int(rank.rounded(.down)), above = Int(rank.rounded(.up))
+        let value = Double(sorted[below]) + (Double(sorted[above]) - Double(sorted[below])) * (rank - Double(below))
+        return Int(value.rounded())
+    }
+
     fileprivate static func pitch(_ logged: LoggedPitch) -> Pitch? {
         guard logged.letter.count == 1, let letter = logged.letter.first.flatMap(NoteLetter.init(character:)),
               let accidental = Accidental(rawValue: logged.accidental) else { return nil }
@@ -63,7 +78,9 @@ private struct Analysis {
     private var days: LocalDays
 
     /// Questions waiting for their answer.
-    private var questions: [UUID: QuestionShown] = [:]
+    private var questions: [UUID: WaitingQuestion] = [:]
+    /// The latest question shown in each round, for `ResponseTimes.byPreviousNote`.
+    private var lastShown: [UUID: ShownNote] = [:]
     private var rounds: [RoundRecord] = []
     private var roundIndex: [UUID: Int] = [:]
     /// Staves in each part of each piece as last opened, so single-staff parts don't name a hand.
@@ -80,6 +97,10 @@ private struct Analysis {
     private var pitches: [ClefKey<Pitch>: Tally] = [:]
     private var inputs: [String: Tally] = [:], namings: [String: Tally] = [:]
     private var pieces: [String: PieceTally] = [:]
+    /// Right answers to single notes in the window and in the one before, and the window's answers
+    /// by speed and by the previous note: for `ResponseTimes`.
+    private var times = TimesTally()
+    private var previousTimes = SpreadTally()
 
     init(filter: ProgressFilter, now: Date, calendar: Calendar) {
         self.filter = filter
@@ -128,7 +149,7 @@ private struct Analysis {
                 rounds[index].singleStaff = staves[piece.partIndex] == 1
             }
         case .questionShown(let question):
-            questions[question.question] = question
+            questions[question.question] = WaitingQuestion(shown: question, stepsFromPrevious: stepsFromPrevious(to: question))
         case .answerGiven(let answer):
             add(answer, at: logged.time)
         case .roundEnded(let end):
@@ -142,6 +163,16 @@ private struct Analysis {
         }
     }
 
+    /// Staff steps from the question shown just before `question` in its round, when both are single
+    /// notes on the same staff; nil otherwise. Makes `question` the round's latest.
+    private mutating func stepsFromPrevious(to question: QuestionShown) -> Int? {
+        let shown = ShownNote(question)
+        let before = lastShown.updateValue(shown, forKey: question.round)
+        guard shown.isSingleNote, let before, before.index == shown.index - 1, before.isSingleNote,
+              before.clef == shown.clef, before.staff == shown.staff else { return nil }
+        return shown.position - before.position
+    }
+
     private mutating func add(_ answer: AnswerGiven, at time: Date) {
         let index = round(answer.round)
         rounds[index].answers += 1
@@ -149,22 +180,29 @@ private struct Analysis {
         rounds[index].lastAnswer = max(rounds[index].lastAnswer ?? time, time)
 
         // A question has one answer, so it can go.
-        guard let question = questions.removeValue(forKey: answer.question) else { return }
+        guard let waiting = questions.removeValue(forKey: answer.question) else { return }
+        let question = waiting.shown
         let day = days.day(of: time)
         practised[day.start] = day.end
         guard inClef(question.clef) else { return }
         rounds[index].hasAnswerInClef = true
-        if inPreviousWindow(time) { previous.add(answer, on: day.start) }
+        // Notes named together share one time, so the time statistics leave them out.
+        let isSingleNote = question.isSingleNote
+        if inPreviousWindow(time) {
+            previous.add(answer, on: day.start)
+            if isSingleNote, answer.correct { previousTimes.add(answer.responseMs) }
+        }
         guard inWindow(time) else { return }
 
         current.add(answer, on: day.start)
-        dayTallies[day.start, default: DayTally()].tally.add(answer)
+        dayTallies[day.start, default: DayTally()].add(answer, singleNote: isSingleNote)
+        if isSingleNote { times.add(answer, stepsFromPrevious: waiting.stepsFromPrevious) }
         firstDay = min(firstDay ?? day.start, day.start)
         lastDay = max(lastDay ?? day.start, day.start)
         inputs[question.input, default: Tally()].add(answer)
         namings[question.naming, default: Tally()].add(answer)
         if let clef = Clef(rawValue: question.clef) {
-            positions[ClefKey(clef: clef, value: question.position), default: PositionTally()].tally.add(answer)
+            positions[ClefKey(clef: clef, value: question.position), default: PositionTally()].add(answer, singleNote: isSingleNote)
             if let pitch = ProgressAnalyzer.pitch(question.written) {
                 pitches[ClefKey(clef: clef, value: pitch), default: Tally()].add(answer)
             }
@@ -208,9 +246,12 @@ private struct Analysis {
             days: dayList(),
             positions: positions
                 .map { key, tally in
-                    PositionProgress(clef: key.clef, position: key.value, natural: key.clef.pitch(atPosition: key.value),
-                                     attempts: tally.tally.answers, correct: tally.tally.correct,
-                                     medianResponseMs: tally.tally.medianMs, attemptsBeforeTracking: tally.beforeTracking)
+                    let recent = Array(tally.singleNoteMs.suffix(PositionProgress.recentWindow))
+                    return PositionProgress(clef: key.clef, position: key.value, natural: key.clef.pitch(atPosition: key.value),
+                                            attempts: tally.tally.answers, correct: tally.tally.correct,
+                                            medianResponseMs: tally.tally.medianMs, attemptsBeforeTracking: tally.beforeTracking,
+                                            recentMedianResponseMs: ProgressAnalyzer.median(recent),
+                                            recentRightAnswers: recent.count)
                 }
                 .sorted { ($0.clef.order, $0.position) < ($1.clef.order, $1.position) },
             pitches: pitches
@@ -224,6 +265,7 @@ private struct Analysis {
                 .compactMap { path, piece in piece.summary(path: path) }
                 .sorted { ($0.lastPractised, $1.path) > ($1.lastPractised, $0.path) },
             recentRounds: recent.prefix(50).map { Self.recentRound(rounds[$0]) },
+            responseTimes: times.responseTimes(previous: periodStart == nil ? nil : previousTimes),
             answersBeforeTracking: answersBeforeTracking, unreadableLines: 0)
     }
 
@@ -274,8 +316,10 @@ private struct Analysis {
         var day = first
         while day <= last {
             let tally = dayTallies[day]
+            let spread = TimeSpread(times: tally?.singleNoteMs ?? [])
             list.append(DayProgress(day: day, answers: tally?.tally.answers ?? 0, correct: tally?.tally.correct ?? 0,
-                                    practiceSeconds: tally?.practiceSeconds ?? 0, medianResponseMs: tally?.tally.medianMs))
+                                    practiceSeconds: tally?.practiceSeconds ?? 0, medianResponseMs: tally?.tally.medianMs,
+                                    lowerQuartileMs: spread.lowerQuartileMs, upperQuartileMs: spread.upperQuartileMs))
             guard let next = calendar.dateInterval(of: .day, for: day)?.end, next > day else { break }
             day = next
         }
@@ -371,15 +415,132 @@ private struct TotalsTally {
 private struct DayTally {
     var tally = Tally()
     var practiceSeconds = 0.0
+    /// Times of the right answers to single notes, for the quartiles.
+    var singleNoteMs: [Int] = []
+
+    mutating func add(_ answer: AnswerGiven, singleNote: Bool) {
+        tally.add(answer)
+        if singleNote, answer.correct { singleNoteMs.append(answer.responseMs) }
+    }
 }
 
 private struct PositionTally {
     var tally = Tally()
     var beforeTracking = 0
+    /// Times of the right answers to single notes, in log order, for how fast it's named now.
+    var singleNoteMs: [Int] = []
+
+    mutating func add(_ answer: AnswerGiven, singleNote: Bool) {
+        tally.add(answer)
+        if singleNote, answer.correct { singleNoteMs.append(answer.responseMs) }
+    }
 
     mutating func addBeforeTracking(attempts: Int, correct: Int) {
         tally.addBeforeTracking(attempts: attempts, correct: correct)
         beforeTracking += attempts
+    }
+}
+
+/// Right answers' times, for their quartiles and histogram.
+private struct SpreadTally {
+    var rightMs: [Int] = []
+    var histogram = [Int](repeating: 0, count: ResponseTimes.histogramBins + 1)
+    private let binMs = ResponseTimes.histogramBinMs, lastBin = ResponseTimes.histogramBins
+
+    mutating func add(_ ms: Int) {
+        rightMs.append(ms)
+        histogram[min(max(ms, 0) / binMs, lastBin)] += 1
+    }
+}
+
+/// The window's answers to single notes, for `ResponseTimes`.
+private struct TimesTally {
+    var right = SpreadTally()
+    /// Answers, and wrong ones, per `bySpeed` bin.
+    private var speedAnswers = [Int](repeating: 0, count: ResponseTimes.speedEdgesMs.count + 1)
+    private var speedWrong = [Int](repeating: 0, count: ResponseTimes.speedEdgesMs.count + 1)
+    private let speedEdges = ResponseTimes.speedEdgesMs
+    /// One per `PreviousNoteDistance`, in its order.
+    private var byPreviousNote = [Tally](repeating: Tally(), count: PreviousNoteDistance.allCases.count)
+
+    mutating func add(_ answer: AnswerGiven, stepsFromPrevious steps: Int?) {
+        let ms = answer.responseMs
+        if answer.correct { right.add(ms) }
+        var bin = 0
+        while bin < speedEdges.count, ms >= speedEdges[bin] { bin += 1 }
+        speedAnswers[bin] += 1
+        if !answer.correct { speedWrong[bin] += 1 }
+        if let steps { byPreviousNote[PreviousNoteDistance(steps: steps).order].add(answer) }
+    }
+
+    /// `previous`: the right answers of the window before; nil for all time.
+    func responseTimes(previous: SpreadTally?) -> ResponseTimes {
+        var times = ResponseTimes()
+        times.current = TimeSpread(times: right.rightMs)
+        times.histogram = right.histogram
+        times.previous = previous.map { TimeSpread(times: $0.rightMs) }
+        times.previousHistogram = previous?.histogram
+        let edges = [0] + ResponseTimes.speedEdgesMs
+        times.bySpeed = edges.indices.map { index in
+            SpeedBin(lowerMs: edges[index], upperMs: index + 1 < edges.count ? edges[index + 1] : nil,
+                     answers: speedAnswers[index], wrong: speedWrong[index])
+        }
+        times.byPreviousNote = PreviousNoteDistance.allCases.map { distance in
+            let tally = byPreviousNote[distance.order]
+            return PreviousNoteRow(distance: distance, answers: tally.answers, correct: tally.correct, medianMs: tally.medianMs)
+        }
+        return times
+    }
+}
+
+private extension PreviousNoteDistance {
+    /// Its index in `allCases`, without searching for it.
+    var order: Int {
+        switch self {
+        case .samePlace: 0
+        case .oneStep: 1
+        case .twoOrThreeSteps: 2
+        case .fourOrMoreSteps: 3
+        }
+    }
+}
+
+private extension TimeSpread {
+    /// The quartiles of `times` (`ProgressAnalyzer.quantile`), sorting them once.
+    init(times: [Int]) {
+        let sorted = times.sorted()
+        self.init(rightAnswers: sorted.count, lowerQuartileMs: ProgressAnalyzer.quantile(sorted: sorted, 0.25),
+                  medianMs: ProgressAnalyzer.quantile(sorted: sorted, 0.5),
+                  upperQuartileMs: ProgressAnalyzer.quantile(sorted: sorted, 0.75))
+    }
+}
+
+private extension QuestionShown {
+    /// Asked on its own, not with others as one chord.
+    var isSingleNote: Bool { group == nil && groupSize == nil }
+}
+
+/// A question waiting for its answer, and how far it is from the one before (`stepsFromPrevious(to:)`).
+private struct WaitingQuestion {
+    let shown: QuestionShown
+    let stepsFromPrevious: Int?
+}
+
+/// What the previous-note statistics need of a question once the next one is shown.
+private struct ShownNote {
+    let index: Int
+    let clef: String
+    /// A piece's staff (nil for random notes), so two treble staves of a grand staff stay apart.
+    let staff: Int?
+    let position: Int
+    let isSingleNote: Bool
+
+    init(_ question: QuestionShown) {
+        index = question.index
+        clef = question.clef
+        staff = question.pieceNote?.staff
+        position = question.position
+        isSingleNote = question.isSingleNote
     }
 }
 
