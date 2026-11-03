@@ -69,7 +69,6 @@ struct ContentView: View {
         .sheet(isPresented: Bindable(PieceListSheet.shared).isShown) {
             PieceListView(game: game)
                 .tint(Theme.accent)
-                .preferredColorScheme(.light)
         }
         .alert("Couldn't open the piece", isPresented: isShowingPieceError, presenting: game.pieceError) { _ in
             Button("OK") {}

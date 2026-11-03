@@ -18,6 +18,7 @@ extension UsageExport {
         | `settings.json` | The settings as saved when exporting. |
         | `note-stats.json` | The per-note history used to bring up notes you struggle with, as saved when exporting. |
         | `best-scores.json` | Best sprint scores, as saved when exporting. |
+        | `piece-library.json` | The pieces kept to practise again, as saved when exporting (see below). |
         | `SCHEMA.md` | This file. |
 
         ## Conventions
@@ -310,6 +311,15 @@ extension UsageExport {
         | `piecePath` | The open piece, by where it was first opened from (as `pieceOpened.path`); absent with random notes. Before the piece library, the piece reopened at launch. |
         | `pieceID` | The open piece, by its entry in the piece library (as `pieceOpened.libraryID`), reopened at launch; absent with random notes. |
         | `appearance` | View ▸ Appearance: `system` (as macOS is set, the default), `light` or `dark`. |
+
+        ### `piece-library.json`
+
+        Every piece opened, most recently opened first: `id` (the `libraryID` in the log),
+        `title`, `originalPath` (where it was first opened from, the `path` in the log),
+        `fileName` (Clefwise's own copy, in Application Support/Clefwise/Pieces), `contentHash`
+        (SHA-256 of the copy), `addedAt`, `lastOpenedAt`, and `settings`, the piece's own practice
+        settings as under `piece` in Settings (absent until first saved). A piece removed from the
+        list is gone from here, but its events stay in the log.
 
         ### `note-stats.json` and `best-scores.json`
 

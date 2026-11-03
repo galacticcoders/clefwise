@@ -102,6 +102,14 @@ extension PieceLibrary {
         #expect(kept.contains { $0.hasPrefix("index-unreadable-") })
     }
 
+    @Test func aSpoiltCopyIsWrittenBack() throws {
+        let url = try original("a.musicxml", "a")
+        let entry = try library.add(url, title: "A")
+        try Data("spoilt".utf8).write(to: library.fileURL(for: entry))
+        try library.add(url, title: "A")
+        #expect(try Data(contentsOf: library.fileURL(for: entry)) == Data("a".utf8))
+    }
+
     @Test func aMissingCopyIsWrittenBack() throws {
         let url = try original("a.musicxml", "a")
         let entry = try library.add(url, title: "A")

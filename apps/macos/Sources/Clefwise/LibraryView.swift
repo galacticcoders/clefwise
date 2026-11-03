@@ -42,11 +42,10 @@ extension PieceLibrary.Entry {
     /// Whether the file it was first opened from is still there (Clefwise's copy works either way).
     var originalExists: Bool { FileManager.default.fileExists(atPath: originalPath) }
 
-    /// Whether `game` has this piece open, from its copy or from the original file.
+    /// Whether `game` has this piece open.
     @MainActor
     func isOpen(in game: Game) -> Bool {
-        guard game.isPractisingPiece, let url = game.pieceURL else { return false }
-        return url.standardizedFileURL == game.library.fileURL(for: self).standardizedFileURL || url.path == originalPath
+        game.isPractisingPiece && game.pieceEntryID == id
     }
 }
 
@@ -250,7 +249,7 @@ struct PieceListView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
                 .frame(width: 220)
-                .background(.white, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .background(Theme.keyFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .strokeBorder(Theme.keyBorder)

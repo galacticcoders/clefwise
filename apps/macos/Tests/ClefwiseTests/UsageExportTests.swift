@@ -196,7 +196,9 @@ import Testing
         #expect(top.lastPathComponent.hasPrefix("Clefwise usage 20"))
         let files = try FileManager.default.subpathsOfDirectory(atPath: top.path).sorted()
         #expect(files == ["SCHEMA.md", "answers.csv", "best-scores.json", "events", "events/usage-2026-10-30.jsonl",
-                          "note-stats.json", "rounds.csv", "sessions.csv", "settings.json"])
+                          "note-stats.json", "piece-library.json", "rounds.csv", "sessions.csv", "settings.json"])
+        // No library folder given: an empty list.
+        #expect(try String(contentsOf: top.appendingPathComponent("piece-library.json"), encoding: .utf8) == "[]\n")
         // Nothing Mac-only (resource forks, ._ files) in the archive itself.
         let entries = try run("/usr/bin/zipinfo", ["-1", destination.path])
         #expect(!entries.contains("__MACOSX") && !entries.contains("/._"))
@@ -355,6 +357,22 @@ import Testing
         let top = try unzip(destination)
         #expect(try table(top.appendingPathComponent("answers.csv")).rows.isEmpty)
         #expect(try table(top.appendingPathComponent("sessions.csv")).rows.count == 1)
+    }
+
+    @Test @MainActor func holdsThePieceLibrarysIndex() throws {
+        try FileManager.default.createDirectory(at: temporary.url, withIntermediateDirectories: true)
+        let library = PieceLibrary(folder: temporary.url.appendingPathComponent("Pieces", isDirectory: true))
+        let score = temporary.url.appendingPathComponent("tune.musicxml")
+        try Data("<score-partwise/>".utf8).write(to: score)
+        let entry = try library.add(score, title: "Tune")
+        try UsageExport.export(UsageLog(folder: logFolder), to: destination, defaults: InMemoryDefaults(),
+                               libraryFolder: library.folder)
+        let top = try unzip(destination)
+        let exported = try Data(contentsOf: top.appendingPathComponent("piece-library.json"))
+        #expect(exported == (try Data(contentsOf: PieceLibrary.indexURL(in: library.folder))))
+        let pieces = try #require(try JSONSerialization.jsonObject(with: exported) as? [[String: Any]])
+        #expect(pieces.count == 1 && pieces[0]["id"] as? String == entry.id.uuidString)
+        #expect(pieces[0]["originalPath"] as? String == score.path)
     }
 
     @Test func emptyLogStillExports() throws {

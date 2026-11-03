@@ -70,8 +70,8 @@ final class PieceLibrary {
         let index: Int
         if let same = entries.firstIndex(where: { $0.contentHash == hash }) {
             index = same
-            // The copy may have gone from disk meanwhile; put it back.
-            if !FileManager.default.fileExists(atPath: fileURL(for: entries[index]).path) {
+            // The copy may have gone from disk meanwhile, or been spoilt; put it back.
+            if (try? Data(contentsOf: fileURL(for: entries[index]))) != data {
                 try write(data, as: entries[index].fileName)
             }
         } else if !isInLibrary(url), let updated = entries.firstIndex(where: { $0.originalPath == url.path }) {
@@ -113,7 +113,12 @@ final class PieceLibrary {
 
     // MARK: - Storage
 
-    private var indexURL: URL { folder.appendingPathComponent("index.json") }
+    private var indexURL: URL { Self.indexURL(in: folder) }
+
+    /// Where a library in `folder` keeps its index (the export copies it).
+    nonisolated static func indexURL(in folder: URL) -> URL {
+        folder.appendingPathComponent("index.json")
+    }
 
     private func isInLibrary(_ url: URL) -> Bool {
         url.standardizedFileURL.deletingLastPathComponent().path == folder.standardizedFileURL.path
@@ -136,7 +141,7 @@ final class PieceLibrary {
     /// An unreadable index is set aside (renamed with the time) rather than lost, and the library
     /// starts empty; the copies stay where they are.
     private static func loadIndex(in folder: URL) -> [Entry] {
-        let url = folder.appendingPathComponent("index.json")
+        let url = indexURL(in: folder)
         guard let data = try? Data(contentsOf: url) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

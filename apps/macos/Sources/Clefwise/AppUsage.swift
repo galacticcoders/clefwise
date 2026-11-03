@@ -89,8 +89,9 @@ enum UsageData {
         isExporting = true
         // Reading years of log takes seconds: do it off the main thread so practice carries on.
         // (The export flushes events still on their way to disk first.)
+        let libraryFolder = PieceLibrary.shared.folder
         Task.detached(priority: .userInitiated) {
-            let result = Result { try UsageExport.export(UsageLog.shared, to: destination) }
+            let result = Result { try UsageExport.export(UsageLog.shared, to: destination, libraryFolder: libraryFolder) }
             await MainActor.run {
                 isExporting = false
                 switch result {
