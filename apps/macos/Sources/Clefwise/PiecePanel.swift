@@ -41,8 +41,7 @@ struct PiecePanel: View {
                 }
 
                 HStack(spacing: 20) {
-                    Button("Open another…", systemImage: "folder") { PieceFile.choose(for: game, via: .openAnother) }
-                        .help("Practise a different MusicXML file (⌘O)")
+                    openAnother
                     Button("Back to random notes", systemImage: "shuffle") {
                         game.recorder.recordUIAction("backToRandomNotes")
                         game.closePiece()
@@ -52,6 +51,45 @@ struct PiecePanel: View {
                 .buttonStyle(.borderless)
             }
             .panel()
+        }
+    }
+
+    /// How many other pieces the Open another… menu lists before its file and library items.
+    static let menuPieceCount = 5
+
+    /// Open another…: with other pieces kept, a menu of the latest of them, then a file, then the
+    /// whole list; without, the open panel straight away, as before there was a library.
+    @ViewBuilder
+    private var openAnother: some View {
+        let others = game.library.entries.filter { !$0.isOpen(in: game) }
+        if others.isEmpty {
+            Button("Open another…", systemImage: "folder") { PieceFile.choose(for: game, via: .openAnother) }
+                .help("Practise a different MusicXML file (⌘O)")
+        } else {
+            let recent = Array(others.prefix(Self.menuPieceCount))
+            let titles = recent.distinctTitles()
+            Menu {
+                Section("Your pieces") {
+                    ForEach(recent) { entry in
+                        Button(titles[entry.id] ?? entry.displayTitle) { PieceFile.open(entry, in: game, from: "pieceMenu") }
+                    }
+                }
+                Divider()
+                Button("Choose a File…") { PieceFile.choose(for: game, via: .openAnother) }
+                Button("All Pieces…") { PieceListSheet.shared.show(from: "pieceMenu", game: game) }
+            } label: {
+                Label("Open another…", systemImage: "folder")
+            }
+            .menuStyle(.button)
+            .menuIndicator(.visible)
+            .fixedSize()
+            .help("Practise one of your other pieces, or a different MusicXML file (⌘O)")
+            // SwiftUI doesn't say when a menu opens, so this one is told apart by its items.
+            .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { notification in
+                guard let menu = notification.object as? NSMenu,
+                      menu.items.contains(where: { $0.title == "Choose a File…" }) else { return }
+                game.recorder.recordUIAction("openAnotherMenu")
+            }
         }
     }
 
@@ -265,6 +303,20 @@ enum PieceFile {
             return
         }
         game.openPiece(at: url, via: source)
+        if game.pieceError == nil, game.phase == .finished { game.dismissSummary() }
+    }
+
+    /// Opens a piece kept in the library, closing the "Your pieces" sheet if it's up; errors land in
+    /// `game.pieceError`. `list` says which list or menu it was picked from, for the usage log.
+    static func open(_ entry: PieceLibrary.Entry, in game: Game, from list: String) {
+        // Like Open Piece…, a new piece waits for the round to end.
+        guard game.phase != .playing else {
+            NSSound.beep()
+            return
+        }
+        game.recorder.recordUIAction("openLibraryPiece", detail: list)
+        PieceListSheet.shared.isShown = false
+        game.open(entry, via: .library)
         if game.pieceError == nil, game.phase == .finished { game.dismissSummary() }
     }
 }

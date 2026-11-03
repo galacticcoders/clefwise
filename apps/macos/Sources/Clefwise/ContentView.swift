@@ -65,6 +65,12 @@ struct ContentView: View {
         } isTargeted: {
             isDropTargeted = $0 && game.phase != .playing
         }
+        // Every piece kept, from the start panel, the piece panel's menu or the File menu.
+        .sheet(isPresented: Bindable(PieceListSheet.shared).isShown) {
+            PieceListView(game: game)
+                .tint(Theme.accent)
+                .preferredColorScheme(.light)
+        }
         .alert("Couldn't open the piece", isPresented: isShowingPieceError, presenting: game.pieceError) { _ in
             Button("OK") {}
         } message: {
@@ -566,6 +572,22 @@ private struct StartPanel: View {
     let game: Game
 
     var body: some View {
+        if game.library.isEmpty {
+            panel(recentPieces: 0)
+        } else {
+            // As many of the latest pieces as the card has room for, so the panel never outgrows
+            // it: four in a roomy window, fewer down to none (still with All pieces…) in a short one.
+            ViewThatFits(in: .vertical) {
+                ForEach((0...4).reversed(), id: \.self) { count in
+                    panel(recentPieces: count)
+                        .padding(.vertical, 8)
+                }
+            }
+        }
+    }
+
+    /// Without kept pieces, the panel as it was before there was a library.
+    private func panel(recentPieces: Int) -> some View {
         VStack(spacing: 10) {
             Text(game.settings.mode == .sprint ? "How many notes can you name in 60 seconds?" : "Practice at your own pace")
                 .font(.title2.weight(.semibold))
@@ -595,6 +617,10 @@ private struct StartPanel: View {
                 Text("MusicXML file, or drop one here")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            if !game.library.isEmpty {
+                RecentPiecesSection(game: game, count: recentPieces)
+                    .padding(.top, 4)
             }
         }
         .panel()
