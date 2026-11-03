@@ -6,6 +6,10 @@ enum NoteMapMeasure {
     case accuracy
     /// How often it came up: darker orange for more answers, hollow where there are none.
     case practice
+    /// How fast it's named now (`PositionProgress.recentMedianResponseMs`): darker for faster,
+    /// hollow where there are too few right answers yet. Contract placeholder: the speed map's agent
+    /// fills in its scale (`SpeedScale`), key, tip and table.
+    case speed
 }
 
 /// A note map: every staff line and space per clef, drawn like a staff and coloured by `measure`.
@@ -17,9 +21,19 @@ struct NoteMapSection: View {
 
     @State private var hovered: String?
 
-    private var title: String { measure == .accuracy ? "Note map" : "Practice map" }
+    private var title: String {
+        switch measure {
+        case .accuracy: "Note map"
+        case .practice: "Practice map"
+        case .speed: "Speed map"
+        }
+    }
     private var subtitle: String {
-        measure == .accuracy ? "How well you know each line and space" : "How often each line and space comes up"
+        switch measure {
+        case .accuracy: "How well you know each line and space"
+        case .practice: "How often each line and space comes up"
+        case .speed: "How fast you name each line and space now"
+        }
     }
 
     var body: some View {
@@ -93,6 +107,8 @@ struct NoteMapSection: View {
             return NoteMapCellStyle(
                 fill: level.map(PracticeScale.fill), label: PracticeScale.labelColor(level: level),
                 accessibilityValue: place.attempts == 0 ? "Not practised yet" : answers(place.attempts))
+        case .speed:
+            return NoteMapCellStyle(fill: nil, label: DashboardTheme.textSecondary, accessibilityValue: "")
         }
     }
 
@@ -131,6 +147,8 @@ struct NoteMapSection: View {
                 let scale = practiceScale
                 ScaleLegend(title: "Answers", classLabels: scale.classLabels, fill: PracticeScale.fill,
                             hollowMeaning: "Not practised yet", axis: axis)
+            case .speed:
+                EmptyView()
             }
             note("Lines on the left, spaces on the right. Long rules are the staff, short ones ledger lines.")
             if report.answersBeforeTracking > 0 {
@@ -151,6 +169,7 @@ struct NoteMapSection: View {
         switch measure {
         case .accuracy: accuracyTip
         case .practice: practiceTip
+        case .speed: EmptyView()
         }
     }
 
@@ -205,6 +224,7 @@ struct NoteMapSection: View {
         switch measure {
         case .accuracy: accuracyTable
         case .practice: practiceTable
+        case .speed: EmptyView()
         }
     }
 

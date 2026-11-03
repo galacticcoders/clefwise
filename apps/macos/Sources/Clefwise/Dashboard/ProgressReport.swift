@@ -71,6 +71,8 @@ struct ProgressReport: Equatable {
     var pieces: [PieceProgressSummary]
     /// Rounds in the window, newest first, at most 50.
     var recentRounds: [RecentRound]
+    /// Response times beyond the median: spread, shape, mistakes by speed, the previous note's pull.
+    var responseTimes = ResponseTimes()
     /// Answers from before detailed tracking began (the one-off stats snapshot): counted in the
     /// all-time note map and pitch lists only, as they have no dates or times.
     var answersBeforeTracking: Int
@@ -107,9 +109,15 @@ struct DayProgress: Equatable, Identifiable {
     var correct: Int
     var practiceSeconds: Double
     var medianResponseMs: Int?
+    /// The lower and upper quartiles of the day's right answers to single notes (`ResponseTimes`
+    /// says which answers): the middle half of its times lies between them. Nil without any.
+    var lowerQuartileMs: Int? = nil
+    var upperQuartileMs: Int? = nil
 
     var id: Date { day }
     var accuracy: Double? { answers > 0 ? Double(correct) / Double(answers) : nil }
+    /// How far apart the middle half of the day's times are: upper minus lower quartile.
+    var spreadMs: Int? { lowerQuartileMs.flatMap { lower in upperQuartileMs.map { $0 - lower } } }
 }
 
 struct PositionProgress: Equatable, Identifiable {
@@ -124,6 +132,14 @@ struct PositionProgress: Equatable, Identifiable {
     var medianResponseMs: Int?
     /// Of `attempts`, how many come from before detailed tracking (no times, all-time only).
     var attemptsBeforeTracking: Int
+    /// How fast it's named now: the median time of its last `recentWindow` right answers to single
+    /// notes in the window (fewer when there aren't that many), and how many that is. Nil and 0
+    /// without any.
+    var recentMedianResponseMs: Int? = nil
+    var recentRightAnswers = 0
+
+    /// How many of the latest right answers make "now" for a place.
+    static let recentWindow = 20
 
     var id: String { "\(clef.rawValue)\(position)" }
     var accuracy: Double? { attempts > 0 ? Double(correct) / Double(attempts) : nil }
@@ -208,9 +224,12 @@ extension ProgressReport {
             let progress = Double(60 - back) / 60
             let answers = 20 + Int(random.next() * 120)
             let accuracy = min(0.98, 0.62 + 0.3 * progress + (random.next() - 0.5) * 0.08)
+            // The spread draws together faster than the median falls.
+            let median = Int(2400 - 1300 * progress + (random.next() - 0.5) * 300)
+            let halfSpread = Int(900 - 700 * progress + (random.next() - 0.5) * 120)
             return DayProgress(day: day, answers: answers, correct: Int(Double(answers) * accuracy),
-                               practiceSeconds: Double(answers) * (2.4 - progress),
-                               medianResponseMs: Int(2400 - 1300 * progress + (random.next() - 0.5) * 300))
+                               practiceSeconds: Double(answers) * (2.4 - progress), medianResponseMs: median,
+                               lowerQuartileMs: max(250, median - halfSpread * 2 / 3), upperQuartileMs: median + halfSpread)
         }
         let window = Array(days.suffix(30))
         func totals(_ days: ArraySlice<DayProgress>) -> ProgressTotals {
@@ -227,10 +246,14 @@ extension ProgressReport {
                 guard !ledger || random.next() > 0.3 else { return nil }
                 let attempts = ledger ? 3 + Int(random.next() * 20) : 30 + Int(random.next() * 90)
                 let accuracy = ledger ? 0.45 + random.next() * 0.35 : 0.75 + random.next() * 0.23
+                let median = Int(ledger ? 1800 + random.next() * 1500 : 700 + random.next() * 900)
+                let correct = Int(Double(attempts) * accuracy)
                 return PositionProgress(clef: clef, position: position, natural: clef.pitch(atPosition: position),
-                                        attempts: attempts, correct: Int(Double(attempts) * accuracy),
-                                        medianResponseMs: Int(ledger ? 1800 + random.next() * 1500 : 700 + random.next() * 900),
-                                        attemptsBeforeTracking: 0)
+                                        attempts: attempts, correct: correct, medianResponseMs: median,
+                                        attemptsBeforeTracking: 0,
+                                        // Faster now than over the whole window.
+                                        recentMedianResponseMs: correct > 0 ? Int(Double(median) * (0.6 + random.next() * 0.3)) : nil,
+                                        recentRightAnswers: min(correct, PositionProgress.recentWindow))
             }
         }
         let pitches: [PitchProgress] = positions.flatMap { position -> [PitchProgress] in
@@ -265,8 +288,140 @@ extension ProgressReport {
             pieces: [PieceProgressSummary(title: "Minuet in G", path: "/tmp/minuet.mxl", lastPractised: now.addingTimeInterval(-7200),
                                           rounds: 6, answers: bars.map(\.attempts).reduce(0, +),
                                           correct: bars.map(\.correct).reduce(0, +), measureCount: 16, bars: bars)],
-            recentRounds: rounds, answersBeforeTracking: 0, unreadableLines: 0)
+            recentRounds: rounds, responseTimes: sampleResponseTimes(), answersBeforeTracking: 0, unreadableLines: 0)
     }
+
+    /// Times bunched around 1.1 s now, spread out around 1.8 s the window before; mistakes rising
+    /// with slow answers; notes a step from the last named faster than far jumps.
+    private static func sampleResponseTimes() -> ResponseTimes {
+        func histogram(peak: Double, width: Double, total: Double) -> [Int] {
+            (0...ResponseTimes.histogramBins).map { bin in
+                let seconds = (Double(bin) + 0.5) * Double(ResponseTimes.histogramBinMs) / 1000
+                // Log-normal-ish: a quick rise, a long tail.
+                let z = log(seconds / peak) / width
+                return Int(total * exp(-z * z / 2) / 10)
+            }
+        }
+        var times = ResponseTimes()
+        times.current = TimeSpread(rightAnswers: 1960, lowerQuartileMs: 860, medianMs: 1120, upperQuartileMs: 1480)
+        times.previous = TimeSpread(rightAnswers: 1410, lowerQuartileMs: 1150, medianMs: 1790, upperQuartileMs: 2760)
+        times.histogram = histogram(peak: 1.05, width: 0.35, total: 1960)
+        times.previousHistogram = histogram(peak: 1.6, width: 0.6, total: 1410)
+        let edges = [0] + ResponseTimes.speedEdgesMs
+        let answers = [180, 310, 620, 420, 260, 120, 60]
+        let wrong = [3, 6, 14, 12, 11, 8, 7]
+        times.bySpeed = edges.indices.map { index in
+            SpeedBin(lowerMs: edges[index], upperMs: index + 1 < edges.count ? edges[index + 1] : nil,
+                     answers: answers[index], wrong: wrong[index])
+        }
+        times.byPreviousNote = [
+            PreviousNoteRow(distance: .samePlace, answers: 3, correct: 3, medianMs: 1300),
+            PreviousNoteRow(distance: .oneStep, answers: 480, correct: 470, medianMs: 980),
+            PreviousNoteRow(distance: .twoOrThreeSteps, answers: 760, correct: 735, medianMs: 1150),
+            PreviousNoteRow(distance: .fourOrMoreSteps, answers: 920, correct: 880, medianMs: 1290),
+        ]
+        return times
+    }
+}
+
+/// Response times beyond the median: the signs that naming a note is becoming automatic rather
+/// than worked out.
+/// - **Spread:** the middle half of the times draws together, often before the median falls much.
+/// - **Shape:** the times bunch up instead of trailing off into slow ones.
+/// - **Speed and mistakes come apart:** mistakes no longer come with the fastest answers.
+/// - **The previous note stops mattering:** a note is named as fast after a far jump as after a
+///   step, so it's read on its own, not worked out from the one before.
+///
+/// **Which answers:** single notes only, in the filter's window and clef. Chords named together are
+/// left out everywhere here (their one time covers several notes), and so are answers without a
+/// time (from before detailed tracking). Times leave out pauses, as everywhere.
+struct ResponseTimes: Equatable {
+    /// `histogram` has `histogramBins` bins of `histogramBinMs` from 0 (0–0.25 s … 5.75–6 s), then
+    /// one more for 6 s or longer.
+    static let histogramBinMs = 250
+    static let histogramBins = 24
+    /// Upper edges of `bySpeed`'s bins: under 0.75 s, 0.75–1 s, 1–1.5 s, 1.5–2 s, 2–3 s, 3–5 s, then
+    /// 5 s or longer.
+    static let speedEdgesMs = [750, 1000, 1500, 2000, 3000, 5000]
+
+    /// The window's right answers.
+    var current = TimeSpread()
+    /// The same-length window before; nil for all time.
+    var previous: TimeSpread?
+    /// The window's right answers by time: `histogramBins + 1` counts (see `histogramBinMs`).
+    var histogram = [Int](repeating: 0, count: histogramBins + 1)
+    /// The same for the window before; nil for all time.
+    var previousHistogram: [Int]?
+    /// Every answer in the window, right or wrong, by its time: one bin per `speedEdgesMs` gap,
+    /// seven in all, empty ones included.
+    var bySpeed: [SpeedBin] = []
+    /// Answers in the window by how far the note is from the one asked just before it in the same
+    /// round: one row per `PreviousNoteDistance`, empty ones included. Counted only when that
+    /// question (index − 1) was a single note on the same clef; a round's first note, a note after
+    /// a chord, and one after a note on the other staff are left out.
+    var byPreviousNote: [PreviousNoteRow] = []
+}
+
+/// The quartiles of a set of right answers' times (`ProgressAnalyzer.quantile`).
+struct TimeSpread: Equatable {
+    var rightAnswers = 0
+    var lowerQuartileMs: Int?
+    var medianMs: Int?
+    var upperQuartileMs: Int?
+
+    /// How far apart the middle half is: upper minus lower quartile.
+    var spreadMs: Int? { lowerQuartileMs.flatMap { lower in upperQuartileMs.map { $0 - lower } } }
+}
+
+/// Answers whose time falls in `lowerMs..<upperMs` (no upper edge for the last bin).
+struct SpeedBin: Equatable, Identifiable {
+    var lowerMs: Int
+    var upperMs: Int?
+    var answers: Int
+    var wrong: Int
+
+    var id: Int { lowerMs }
+    var mistakeRate: Double? { answers > 0 ? Double(wrong) / Double(answers) : nil }
+}
+
+/// How far a note is from the one before it, in staff steps (a line to the next space is one).
+enum PreviousNoteDistance: String, CaseIterable, Identifiable {
+    /// The same line or space: a repeated note, or its sharp or flat. Random rounds never repeat a
+    /// note, so this comes almost only from pieces.
+    case samePlace
+    case oneStep
+    case twoOrThreeSteps
+    case fourOrMoreSteps
+
+    var id: Self { self }
+    var label: String {
+        switch self {
+        case .samePlace: "Same line or space"
+        case .oneStep: "One step"
+        case .twoOrThreeSteps: "2–3 steps"
+        case .fourOrMoreSteps: "4 or more steps"
+        }
+    }
+
+    init(steps: Int) {
+        switch abs(steps) {
+        case 0: self = .samePlace
+        case 1: self = .oneStep
+        case 2...3: self = .twoOrThreeSteps
+        default: self = .fourOrMoreSteps
+        }
+    }
+}
+
+struct PreviousNoteRow: Equatable, Identifiable {
+    var distance: PreviousNoteDistance
+    var answers: Int
+    var correct: Int
+    /// Median time of the right ones.
+    var medianMs: Int?
+
+    var id: PreviousNoteDistance { distance }
+    var accuracy: Double? { answers > 0 ? Double(correct) / Double(answers) : nil }
 }
 
 /// A small deterministic generator (SplitMix64), so sample data is the same every run.

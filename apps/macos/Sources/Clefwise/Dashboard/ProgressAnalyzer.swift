@@ -43,6 +43,17 @@ enum ProgressAnalyzer {
         return Int((Double(sorted[middle - 1] + sorted[middle]) / 2).rounded())
     }
 
+    /// The `p` quantile (0…1) of `values`, between the two nearest ranks as spreadsheets'
+    /// PERCENTILE does, rounded; nil when there are none. `quantile(values, 0.5)` is `median`.
+    static func quantile(_ values: [Int], _ p: Double) -> Int? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        let rank = min(max(p, 0), 1) * Double(sorted.count - 1)
+        let below = Int(rank.rounded(.down)), above = Int(rank.rounded(.up))
+        let value = Double(sorted[below]) + (Double(sorted[above]) - Double(sorted[below])) * (rank - Double(below))
+        return Int(value.rounded())
+    }
+
     fileprivate static func pitch(_ logged: LoggedPitch) -> Pitch? {
         guard logged.letter.count == 1, let letter = logged.letter.first.flatMap(NoteLetter.init(character:)),
               let accidental = Accidental(rawValue: logged.accidental) else { return nil }
