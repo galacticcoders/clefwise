@@ -128,6 +128,9 @@ everything on the page follows that choice.
 - **Over time**: accuracy and response time per day (per week past six weeks).
 - **Note map**: every line and space per clef, laid out like the staff, darker for better known;
   hollow where there are fewer than 5 answers yet.
+- **Practice map**, beside it and laid out the same: how often each line and space has come up,
+  in orange, darker for more; hollow where it never has. Its table ranks them from most to least
+  practised.
 - **Notes to work on**: your most-missed and slowest notes, sharps and flats included.
 - **Practice calendar**, **how you answer** (by answer method and naming system), **pieces** bar by
   bar, and **recent rounds**.

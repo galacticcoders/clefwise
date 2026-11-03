@@ -1,15 +1,29 @@
 import SwiftUI
 
-/// The note map: every staff line and space per clef, darker for better known, hollow where there's too little data yet.
+/// What a note map shows for each line and space.
+enum NoteMapMeasure {
+    /// How well it's known: darker blue for better, hollow where there's too little data yet.
+    case accuracy
+    /// How often it came up: darker orange for more answers, hollow where there are none.
+    case practice
+}
+
+/// A note map: every staff line and space per clef, drawn like a staff and coloured by `measure`.
 struct NoteMapSection: View {
     let report: ProgressReport
     /// Note names on the dashboard follow the naming system in use.
     let naming: NamingSystem
+    var measure = NoteMapMeasure.accuracy
 
     @State private var hovered: String?
 
+    private var title: String { measure == .accuracy ? "Note map" : "Practice map" }
+    private var subtitle: String {
+        measure == .accuracy ? "How well you know each line and space" : "How often each line and space comes up"
+    }
+
     var body: some View {
-        DashboardCard(title: "Note map", subtitle: "How well you know each line and space") {
+        DashboardCard(title: title, subtitle: subtitle) {
             // Bigger cells with the key beside them on a wide card; the key under the staves on a narrow one.
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .top, spacing: 48) {
@@ -61,19 +75,47 @@ struct NoteMapSection: View {
         columns.lazy.flatMap(\.places).first { $0.id == id }
     }
 
+    /// The practice classes, from the busiest place shown.
+    private var practiceScale: PracticeScale {
+        PracticeScale(maximum: columns.flatMap(\.places).map(\.attempts).max() ?? 0)
+    }
+
+    /// How a place's cell looks under `measure`.
+    private func style(_ place: NoteMapPlace, scale: PracticeScale) -> NoteMapCellStyle {
+        switch measure {
+        case .accuracy:
+            return NoteMapCellStyle(
+                fill: place.level.map(AccuracyScale.fill), label: AccuracyScale.labelColor(level: place.level),
+                accessibilityValue: place.attempts == 0 ? "No answers yet"
+                    : "\(ReportFormat.percent(place.correct, of: place.attempts)) of \(place.attempts) answers right")
+        case .practice:
+            let level = scale.level(answers: place.attempts)
+            return NoteMapCellStyle(
+                fill: level.map(PracticeScale.fill), label: PracticeScale.labelColor(level: level),
+                accessibilityValue: place.attempts == 0 ? "Not practised yet" : answers(place.attempts))
+        }
+    }
+
+    /// "1 answer", "647 answers".
+    private func answers(_ count: Int) -> String {
+        count == 1 ? "1 answer" : "\(ReportFormat.count(count)) answers"
+    }
+
     // MARK: Chart
 
     private func staves(_ size: NoteMapStaff.Size) -> some View {
         let columns = columns
         // The staves share one vertical scale, so their five lines line up side by side.
         let top = columns.compactMap { $0.places.first?.position }.max() ?? 8
+        let scale = practiceScale
         return HStack(alignment: .top, spacing: 28) {
             ForEach(columns, id: \.clef) { column in
                 VStack(spacing: 6) {
                     Text(column.clef.name)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(DashboardTheme.textSecondary)
-                    NoteMapStaff(places: column.places, top: top, size: size, naming: naming, hovered: $hovered)
+                    NoteMapStaff(places: column.places, top: top, size: size, naming: naming, hovered: $hovered,
+                                 style: { style($0, scale: scale) })
                 }
             }
         }
@@ -82,7 +124,14 @@ struct NoteMapSection: View {
 
     private func key(_ axis: Axis) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            AccuracyLegend(axis: axis)
+            switch measure {
+            case .accuracy:
+                AccuracyLegend(axis: axis)
+            case .practice:
+                let scale = practiceScale
+                ScaleLegend(title: "Answers", classLabels: scale.classLabels, fill: PracticeScale.fill,
+                            hollowMeaning: "Not practised yet", axis: axis)
+            }
             note("Lines on the left, spaces on the right. Long rules are the staff, short ones ledger lines.")
             if report.answersBeforeTracking > 0 {
                 note("Includes \(ReportFormat.count(report.answersBeforeTracking)) answers from before detailed tracking, which have no times.")
@@ -99,6 +148,36 @@ struct NoteMapSection: View {
     }
 
     @ViewBuilder private var tip: some View {
+        switch measure {
+        case .accuracy: accuracyTip
+        case .practice: practiceTip
+        }
+    }
+
+    @ViewBuilder private var practiceTip: some View {
+        if let hovered, let place = place(withID: hovered) {
+            let name = ReportFormat.noteName(place.natural, naming)
+            let label = "\(name) · \(place.clef.name) \(ReportFormat.staffPlace(place.position))"
+            if place.attempts == 0 {
+                HoverTipText(value: "Not practised yet", label: label)
+            } else {
+                let places = columns.flatMap(\.places)
+                let total = places.map(\.attempts).reduce(0, +)
+                let practised = places.filter { $0.attempts > 0 }.count
+                HoverTipText(value: answers(place.attempts), label: label, details: [
+                    "\(ReportFormat.percent(place.attempts, of: total)) of the answers on this map",
+                    "Number \(rank(of: place, in: places)) of \(practised) by practice",
+                ])
+            }
+        }
+    }
+
+    /// 1 for the most answered place; places with as many answers share a rank.
+    private func rank(of place: NoteMapPlace, in places: [NoteMapPlace]) -> Int {
+        places.filter { $0.attempts > place.attempts }.count + 1
+    }
+
+    @ViewBuilder private var accuracyTip: some View {
         if let hovered, let place = place(withID: hovered) {
             let name = ReportFormat.noteName(place.natural, naming)
             let label = "\(name) · \(place.clef.name) \(ReportFormat.staffPlace(place.position))"
@@ -122,7 +201,43 @@ struct NoteMapSection: View {
 
     // MARK: Table
 
-    private var table: some View {
+    @ViewBuilder private var table: some View {
+        switch measure {
+        case .accuracy: accuracyTable
+        case .practice: practiceTable
+        }
+    }
+
+    /// Most answered first, so the most and least practised are at either end; ties keep staff order.
+    private var practiceTable: some View {
+        let places = columns.flatMap(\.places)
+        let total = places.map(\.attempts).reduce(0, +)
+        let ranked = places.enumerated().sorted { ($1.element.attempts, $0.offset) < ($0.element.attempts, $1.offset) }.map(\.element)
+        return Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 5) {
+            GridRow {
+                ReportTable.heading("Rank").gridColumnAlignment(.trailing)
+                ReportTable.heading("Clef")
+                ReportTable.heading("Place")
+                ReportTable.heading("Note")
+                ReportTable.heading("Answers").gridColumnAlignment(.trailing)
+                ReportTable.heading("Share").gridColumnAlignment(.trailing)
+            }
+            ReportTable.rule()
+            ForEach(ranked) { place in
+                let none = place.attempts == 0
+                GridRow {
+                    ReportTable.cell(none ? "—" : ReportFormat.count(rank(of: place, in: places)), muted: none)
+                    ReportTable.cell(place.clef.name)
+                    ReportTable.cell(capitalized(ReportFormat.staffPlace(place.position)))
+                    ReportTable.cell(ReportFormat.noteName(place.natural, naming))
+                    ReportTable.cell(ReportFormat.count(place.attempts), muted: none)
+                    ReportTable.cell(none ? "—" : ReportFormat.percent(place.attempts, of: total), muted: none)
+                }
+            }
+        }
+    }
+
+    private var accuracyTable: some View {
         let columns = columns
         let showsBefore = report.positions.contains { $0.attemptsBeforeTracking > 0 }
         return Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 5) {
@@ -173,6 +288,8 @@ private struct NoteMapStaff: View {
     var size = Size.regular
     let naming: NamingSystem
     @Binding var hovered: String?
+    /// How each place's cell looks: the section's measure decides.
+    let style: (NoteMapPlace) -> NoteMapCellStyle
 
     enum Size {
         case regular, large
@@ -200,11 +317,12 @@ private struct NoteMapStaff: View {
             rules(lowest: lowest)
             ForEach(places) { place in
                 let name = ReportFormat.noteName(place.natural, naming)
-                AccuracyCell(level: place.level, isHighlighted: hovered == place.id)
+                let style = style(place)
+                ScaleCell(fill: style.fill, isHighlighted: hovered == place.id)
                     .overlay {
                         Text(name)
                             .font(.system(size: fontSize, weight: .semibold))
-                            .foregroundStyle(AccuracyScale.labelColor(level: place.level))
+                            .foregroundStyle(style.label)
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
                             .padding(.horizontal, 3)
@@ -217,8 +335,7 @@ private struct NoteMapStaff: View {
                     .position(x: x(place.position), y: y(place.position))
                     .accessibilityElement()
                     .accessibilityLabel("\(name), \(place.clef.name) \(ReportFormat.staffPlace(place.position))")
-                    .accessibilityValue(place.attempts == 0 ? "No answers yet"
-                        : "\(ReportFormat.percent(place.correct, of: place.attempts)) of \(place.attempts) answers right")
+                    .accessibilityValue(style.accessibilityValue)
             }
         }
         .frame(width: width, height: y(lowest) + step, alignment: .topLeading)
@@ -244,6 +361,13 @@ private struct NoteMapStaff: View {
             context.stroke(ledgers, with: .color(DashboardTheme.baseline), lineWidth: 1)
         }
     }
+}
+
+/// A cell's fill (nil: hollow), its label's colour, and what it says to VoiceOver.
+private struct NoteMapCellStyle {
+    let fill: Color?
+    let label: Color
+    let accessibilityValue: String
 }
 
 /// One line or space of one clef, answered or not.

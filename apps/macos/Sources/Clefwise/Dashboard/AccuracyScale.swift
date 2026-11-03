@@ -39,10 +39,22 @@ struct AccuracyCell: View {
     var isHighlighted = false
 
     var body: some View {
+        ScaleCell(fill: level.map(AccuracyScale.fill), cornerRadius: cornerRadius, isHighlighted: isHighlighted)
+    }
+}
+
+/// A cell filled from a scale, or a hollow outline when it has no class (nil `fill`).
+struct ScaleCell: View {
+    let fill: Color?
+    var cornerRadius: CGFloat = 4
+    /// The hovered cell gets an ink outline, so it's clear which one the tip describes.
+    var isHighlighted = false
+
+    var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         ZStack {
-            if let level {
-                shape.fill(AccuracyScale.fill(level: level))
+            if let fill {
+                shape.fill(fill)
             } else {
                 shape.fill(DashboardTheme.surface)
                 shape.strokeBorder(DashboardTheme.baseline, lineWidth: 1)
@@ -54,23 +66,38 @@ struct AccuracyCell: View {
     }
 }
 
-/// The scale's key: the five classes in order, then what a hollow mark means. In a row under a
-/// chart, or as a column beside one with the best class at the top.
+/// The accuracy scale's key: the five classes in order, then what a hollow mark means.
 struct AccuracyLegend: View {
     var axis = Axis.horizontal
     var hollowMeaning = "Fewer than \(AccuracyScale.minimumAnswers) answers"
 
     var body: some View {
+        ScaleLegend(title: "Accuracy", classLabels: AccuracyScale.classLabels, fill: AccuracyScale.fill,
+                    hollowMeaning: hollowMeaning, axis: axis)
+    }
+}
+
+/// A scale's key: its classes in order, then what a hollow mark means. In a row under a chart, or
+/// as a column beside one with the top class at the top.
+struct ScaleLegend: View {
+    let title: String
+    /// Lowest class first.
+    let classLabels: [String]
+    let fill: (Int) -> Color
+    let hollowMeaning: String
+    var axis = Axis.horizontal
+
+    var body: some View {
         Group {
             if axis == .horizontal {
                 HStack(alignment: .top, spacing: 10) {
-                    title
+                    titleText
                     HStack(alignment: .top, spacing: 2) {
-                        ForEach(AccuracyScale.classLabels.indices, id: \.self) { level in
+                        ForEach(classLabels.indices, id: \.self) { level in
                             VStack(spacing: 3) {
                                 swatch(level)
                                     .frame(width: 52, height: 12)
-                                label(AccuracyScale.classLabels[level])
+                                label(classLabels[level])
                             }
                         }
                     }
@@ -79,13 +106,13 @@ struct AccuracyLegend: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 4) {
-                    title
+                    titleText
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(AccuracyScale.classLabels.indices.reversed(), id: \.self) { level in
+                        ForEach(classLabels.indices.reversed(), id: \.self) { level in
                             HStack(spacing: 6) {
                                 swatch(level)
                                     .frame(width: 18, height: 14)
-                                label(AccuracyScale.classLabels[level])
+                                label(classLabels[level])
                             }
                         }
                     }
@@ -98,15 +125,15 @@ struct AccuracyLegend: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var title: some View {
-        Text("Accuracy")
+    private var titleText: some View {
+        Text(title)
             .font(.caption)
             .foregroundStyle(DashboardTheme.textSecondary)
     }
 
     private func swatch(_ level: Int) -> some View {
         RoundedRectangle(cornerRadius: 2, style: .continuous)
-            .fill(AccuracyScale.fill(level: level))
+            .fill(fill(level))
     }
 
     private func label(_ text: String) -> some View {
@@ -118,7 +145,7 @@ struct AccuracyLegend: View {
 
     private var hollowKey: some View {
         HStack(spacing: 6) {
-            AccuracyCell(level: nil, cornerRadius: 2)
+            ScaleCell(fill: nil, cornerRadius: 2)
                 .frame(width: 18, height: 14)
             Text(hollowMeaning)
                 .font(.caption)

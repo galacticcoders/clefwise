@@ -9,6 +9,11 @@ import SwiftUI
 ///   on all pairs, all over 3:1. The ramp runs the other way (amounts get lighter, away from the
 ///   dark card) and starts no darker than step 550; the accuracy classes (steps 550, 450, 300,
 ///   200, 100) pass as an ordered scale, the darkest at 2.6:1.
+/// - **Orange ramp** (the practice map, beside the blue accuracy map): the skill's rule for a second
+///   sequential scale on screen at once is the next categorical hue, as its own one-hue ramp. Its
+///   steps are orange (OKLCH hue 41°, from `#eb6834`) at the blue ramp's lightness, step for step.
+///   The five classes pass the ordinal checks: light 250…700 on white (palest 2.19:1), dark 550…100
+///   on `#1a1a19` (darkest 2.49:1).
 enum DashboardTheme {
     /// Cards (the chart surface) and the window behind them.
     static let surface = Color(light: .white, dark: NSColor(hex: 0x1A1A19))
@@ -36,10 +41,23 @@ enum DashboardTheme {
     private static let ramp: [Int] = [0xCDE2FB, 0xB7D3F6, 0x9EC5F4, 0x86B6EF, 0x6DA7EC, 0x5598E7, 0x3987E5,
                                       0x2A78D6, 0x256ABF, 0x1C5CAB, 0x184F95, 0x104281, 0x0D366B]
 
+    /// The orange scale, light to dark (steps 100…700), for a second amount beside the blue one.
+    private static let orangeRamp: [Int] = [0xFBD7CA, 0xF5C4B2, 0xF2B098, 0xEB9C7F, 0xE68764, 0xDF7249, 0xD95923,
+                                            0xC94908, 0xB44005, 0x9F3600, 0x8A2E00, 0x752600, 0x611E00]
+
     /// `fraction` (0…1) on the blue scale: darker for more in light mode, lighter for more in dark.
     /// `fromStep` skips the steps nearest the card, where a cell must still stand out from it (an
     /// ordered scale starts no lighter than step 250 = 3 on white, no darker than step 550 on dark).
     static func rampColor(_ fraction: Double, fromStep: Int = 0) -> Color {
+        color(fraction, on: ramp, fromStep: fromStep)
+    }
+
+    /// `fraction` on the orange scale, as `rampColor` does on the blue one.
+    static func orangeRampColor(_ fraction: Double, fromStep: Int = 0) -> Color {
+        color(fraction, on: orangeRamp, fromStep: fromStep)
+    }
+
+    private static func color(_ fraction: Double, on ramp: [Int], fromStep: Int) -> Color {
         func step(_ ramp: [Int]) -> NSColor {
             let steps = ramp[fromStep...]
             let index = Int((min(max(fraction, 0), 1) * Double(steps.count - 1)).rounded())
