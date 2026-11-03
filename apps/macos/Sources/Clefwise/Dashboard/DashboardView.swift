@@ -378,6 +378,29 @@ enum NiceScale {
         return nice * magnitude
     }
 
+    /// Ticks for a line that needn't start at zero (a bar always does): whole-number steps of 1,
+    /// 2, 5, 10, 20, 25, 50… from the tick at or below the lowest value to the one at or above the
+    /// highest. The span is at least `minimumSpan`, so small wobbles aren't blown up, grown
+    /// around the values and kept within `bounds`.
+    static func ticks(covering values: [Double], minimumSpan: Double, within bounds: ClosedRange<Double>,
+                      count: Int = 4) -> [Double] {
+        guard var low = values.min(), var high = values.max() else { return [bounds.lowerBound, bounds.upperBound] }
+        if high - low < minimumSpan {
+            let middle = (low + high) / 2
+            low = middle - minimumSpan / 2
+            high = middle + minimumSpan / 2
+            if high > bounds.upperBound { (low, high) = (low - (high - bounds.upperBound), bounds.upperBound) }
+            if low < bounds.lowerBound { (low, high) = (bounds.lowerBound, min(bounds.upperBound, high + bounds.lowerBound - low)) }
+        }
+        let raw = (high - low) / Double(count)
+        let magnitude = pow(10, floor(log10(max(raw, 1))))
+        let normalized = raw / magnitude
+        let step = (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 2.5 && magnitude >= 10 ? 2.5 : normalized <= 5 ? 5 : 10) * magnitude
+        let start = max(bounds.lowerBound, (low / step).rounded(.down) * step)
+        let end = min(bounds.upperBound, (high / step).rounded(.up) * step)
+        return stride(from: start, through: end + step / 2, by: step).map { min($0, bounds.upperBound) }
+    }
+
     /// 0, step, 2·step… up to the first tick at or above `maximum`.
     static func ticks(for maximum: Double, count: Int = 4) -> [Double] {
         let step = step(for: maximum, ticks: count)
