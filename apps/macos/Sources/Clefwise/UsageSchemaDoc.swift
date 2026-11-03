@@ -111,7 +111,8 @@ extension UsageExport {
         | `keyFifths` | The key signature the round is in, a random key resolved; for a piece, its first note's. |
         | `piece` | When practising a piece (absent otherwise): |
         | `piece.title` | The piece's title. |
-        | `piece.path` | Its file. |
+        | `piece.path` | Its file: where it was first opened from, as in `pieceOpened`. |
+        | `piece.libraryID` | Its entry in the piece library (see `pieceOpened`). Absent for a piece that couldn't be kept there, and in rounds logged before the library. |
         | `piece.part`, `piece.partIndex` | The part's name, and its index (from 0) in the score. |
         | `piece.hand` | `right` (upper staff), `left` (lower staff) or `both`. |
         | `piece.order` | `inOrder` or `shuffled`. |
@@ -238,12 +239,23 @@ extension UsageExport {
 
         ### `pieceOpened`: a MusicXML file was opened
 
+        Every piece opened is kept in Clefwise's piece library: the file is copied into the app's
+        own folder, so it can be opened again later (`via` `library`) even if the original has
+        moved or gone. The same file opened again (the same bytes, from wherever) is the same
+        piece, and so is a score exported again to the path it was first opened from. Each piece
+        keeps its own practice settings (`piece` in Settings), which come back when it's opened
+        again; the other settings are shared.
+
         | Field | Meaning |
         |---|---|
-        | `path` | The file. |
+        | `path` | The file, as first opened: a piece opened from the library, or from another copy of the same file, keeps the path it was first opened from, so its rounds and its progress stay together. |
         | `title` | The piece's title. |
-        | `via` | `menu`, `button`, `drop` (dropped on the window), `openAnother`, `launch` (reopened at launch). |
+        | `via` | `menu`, `button`, `drop` (dropped on the window), `openAnother`, `launch` (reopened at launch), `library` (picked from the pieces opened before). |
         | `parts` | Each part's `name`, `notes`, `measures` (bars), `staves`, and `skipped`: notes left out because they can't be shown (other clefs, double sharps, microtones…). |
+        | `libraryID` | The piece's entry in the piece library, the same each time it's opened. Absent when it couldn't be kept there (see `libraryError`), and in events logged before the library. |
+        | `restoredSettings` | `true` when the piece came back with the settings it was last practised with; `false` when it took the settings in use (a piece opened for the first time, from bar 1 unless it was already the open piece). Absent in events logged before the library. |
+        | `pieceSettings` | The piece settings it opened with, as saved under `piece` (see Settings), fitted to the score. Restored settings are logged only here, not as `settingChanged`. Absent in events logged before the library. |
+        | `libraryError` | Why the piece couldn't be kept in the library, e.g. a disk error; it was opened all the same. Absent otherwise. |
 
         ### `pieceOpenFailed`
 
@@ -251,12 +263,14 @@ extension UsageExport {
         |---|---|
         | `path`, `via` | As for `pieceOpened`. |
         | `error` | What went wrong. |
+        | `libraryID` | For a piece from the library: its entry, which stays in the library. Absent otherwise. |
 
         ### `pieceClosed`
 
         | Field | Meaning |
         |---|---|
         | `path` | The piece that was closed. |
+        | `libraryID` | Its entry in the piece library, when it had one. |
 
         ### `uiAction`: a button or menu item used
 
@@ -292,8 +306,9 @@ extension UsageExport {
         | `isMuted` | Sound off. |
         | `key` | `{"fixed":{"_0":{"fifths":N}}}` for a fixed key signature, `{"random":{}}` for a new random one each round. |
         | `addsAccidentals` | Now and then print a ♯, ♭ or ♮ in front of a note, on top of the key signature. |
-        | `piece` | `part` (index from 0), `hand`, `order`, `startBar`, `chords`, as in `roundStarted.piece` (settings saved before `chords` existed have `oneNotePerChord` instead); and `showsWholeBar`, the "Show the whole bar" checkbox (true unless switched off; with `chords` `together` the whole bar is shown whatever it says). |
-        | `piecePath` | The last piece opened, reopened at launch. |
+        | `piece` | `part` (index from 0), `hand`, `order`, `startBar`, `chords`, as in `roundStarted.piece` (settings saved before `chords` existed have `oneNotePerChord` instead); and `showsWholeBar`, the "Show the whole bar" checkbox (true unless switched off; with `chords` `together` the whole bar is shown whatever it says). These are the open piece's own settings: each piece in the library keeps its own, and they come back when it's opened again (see `pieceOpened`). |
+        | `piecePath` | The open piece, by where it was first opened from (as `pieceOpened.path`); absent with random notes. Before the piece library, the piece reopened at launch. |
+        | `pieceID` | The open piece, by its entry in the piece library (as `pieceOpened.libraryID`), reopened at launch; absent with random notes. |
         | `appearance` | View ▸ Appearance: `system` (as macOS is set, the default), `light` or `dark`. |
 
         ### `note-stats.json` and `best-scores.json`
@@ -365,6 +380,7 @@ extension UsageExport {
         | `keyFifths` | The key the round was in (a random key resolved). |
         | `pieceTitle`, `piecePart`, `pieceHand`, `pieceOrder`, `pieceStartBar`, `pieceOneNotePerChord`, `pieceNotes` | Piece rounds only: as in `roundStarted.piece` (`pieceNotes` is `noteCount`). |
         | `pieceChords` | Piece rounds only: `piece.chords`, or for rounds logged before it existed `topOrBottom` or `eachNote` from `oneNotePerChord`. |
+        | `pieceLibraryID` | Piece rounds only: `piece.libraryID`, the piece's entry in the piece library, which tells pieces with the same title apart; empty for rounds logged before the library. |
         | `endReason`, `durationMs`, `pausedMs`, `score`, `attempts`, `bestStreak`, `averageResponseMs`, `bestScore`, `isNewBest` | From `roundEnded`. |
         | `accuracy` | `score / attempts`, 0–1. |
         | `notesToReview` | Space-separated. |

@@ -195,6 +195,7 @@ enum UsageExport {
         // Rounds logged before the setting existed had only the checkbox, so it says which.
         Column("pieceChords") { $0.start?.piece.map { $0.chords ?? ($0.oneNotePerChord ? "topOrBottom" : "eachNote") } },
         Column("pieceNotes") { $0.start?.piece?.noteCount },
+        Column("pieceLibraryID") { $0.start?.piece?.libraryID?.uuidString },
         Column("endReason") { $0.end?.reason.rawValue },
         Column("durationMs") { $0.end?.durationMs },
         Column("pausedMs") { $0.end?.pausedMs },

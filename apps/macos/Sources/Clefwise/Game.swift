@@ -102,11 +102,17 @@ final class Game {
         var key = KeyChoice.fixed(.cMajor)
         /// Now and then print a ♯, ♭ or ♮ in front of a note, on top of the key signature.
         var addsAccidentals = false
+        /// How the open piece is practised. Each piece in the library keeps its own copy, which
+        /// comes back when it's opened again; with no piece open, the last piece's.
         var piece = PieceSettings()
-        /// The last piece opened, reopened at launch.
+        /// Where the open piece was first opened from (its library entry's `originalPath`), the
+        /// path the log knows it by. Versions before the library reopened it at launch; this one
+        /// does when `pieceID` isn't set.
         var piecePath: String?
         /// Light or dark, or as macOS is set (View ▸ Appearance).
         var appearance = Appearance.system
+        /// The library entry of the open piece, reopened at launch from its copy.
+        var pieceID: UUID?
 
         init() {}
 
@@ -126,6 +132,8 @@ final class Game {
             piece = try container.decodeIfPresent(PieceSettings.self, forKey: .piece) ?? piece
             piecePath = try container.decodeIfPresent(String.self, forKey: .piecePath) ?? piecePath
             appearance = try container.decodeIfPresent(Appearance.self, forKey: .appearance) ?? appearance
+            // An id that doesn't read only loses the piece to reopen, not every setting.
+            pieceID = (try? container.decodeIfPresent(UUID.self, forKey: .pieceID)) ?? nil
         }
     }
 
@@ -323,6 +331,8 @@ final class Game {
                     if fitted != settings.piece { settings.piece = fitted }
                 }
                 updateSelection()
+                // The open piece keeps its own settings, as fitted, for the next time it's opened.
+                if let pieceEntryID { library.save(settings: settings.piece, for: pieceEntryID) }
             }
             save(settings, as: Keys.settings)
             recordSettingChanges()
@@ -364,7 +374,11 @@ final class Game {
     private var roundKey: KeySignature?
     /// The piece being practised; nil means random notes from the toolbar settings.
     private(set) var piece: Score?
+    /// Where the piece was first opened from: for one opened from the library, its original file,
+    /// which may have moved or gone since (the piece itself is read from the library's copy).
     private(set) var pieceURL: URL?
+    /// The piece's entry in `library`; nil without a piece, and for one that couldn't be kept there.
+    private(set) var pieceEntryID: UUID?
     /// Why the last file couldn't be opened, or a piece round couldn't start, for the UI to show (and clear).
     var pieceError: String?
     /// The notes of the loaded piece the next round asks, kept up to date with the piece settings.
@@ -736,80 +750,186 @@ final class Game {
         abandonRound(as: .appQuit)
     }
 
-    /// Reads a MusicXML file and switches to practising it, or sets `pieceError`. `source` says
-    /// how the file was picked, for the usage log.
+    /// Reads a MusicXML file and switches to practising it, or sets `pieceError`. Every piece
+    /// opened is kept in `library`, so it can be opened again from there (the same file again is
+    /// the same piece); one that can't be kept there (a disk error) is opened all the same.
+    /// `source` says how the file was picked, for the usage log.
     func openPiece(at url: URL, via source: PieceOpenSource = .menu) {
-        do {
-            open(try MusicXMLImporter.load(from: url), from: url, via: source)
-        } catch {
-            pieceError = error.localizedDescription
-            recordPieceOpenFailed(url.path, via: source, error.localizedDescription)
-        }
+        if let failure = openFile(at: url, via: source) { pieceError = failure }
     }
 
-    /// Switches to practising `score` (also how tests and previews load one without a file).
-    /// A round in progress is dropped without a summary. Reopening the same file keeps its
-    /// piece settings; another file starts from bar 1.
+    /// Switches to practising `score` (also how tests and previews load one without a file),
+    /// outside the library. A round in progress is dropped without a summary. Reopening the same
+    /// file keeps the piece settings; another file starts from bar 1.
     func open(_ score: Score, from url: URL, via source: PieceOpenSource = .menu) {
         guard !score.parts.isEmpty else {
             pieceError = Self.noNotesMessage
             recordPieceOpenFailed(url.path, via: source, Self.noNotesMessage)
             return
         }
-        abandonRound()
-        recordPieceOpened(score, from: url, via: source)
-        piece = score
-        pieceURL = url
-        pieceError = nil
-        var newSettings = settings
-        if url.path != settings.piecePath { newSettings.piece.startBar = 1 }
-        newSettings.piece = Self.fitting(newSettings.piece, to: score)
-        newSettings.piecePath = url.path
-        settings = newSettings
-        updateSelection()
+        switchTo(score, from: url, entry: nil, via: source)
     }
 
-    /// Opens a piece from the library. (Contract stub: opens its copy like any file; the library
-    /// integration fills this in.)
+    /// Opens a piece from the library: its copy, with the settings it was last practised with.
+    /// When the copy can no longer be read, sets `pieceError` and leaves the entry where it is.
     func open(_ entry: PieceLibrary.Entry, via source: PieceOpenSource = .library) {
-        openPiece(at: library.fileURL(for: entry), via: source)
+        if let failure = openCopy(of: entry, via: source) { pieceError = failure }
     }
 
-    /// Back to random notes; a round in progress is dropped without a summary.
+    /// Back to random notes; a round in progress is dropped without a summary. The piece stays in
+    /// the library, with its settings.
     func closePiece() {
         abandonRound()
-        recorder.record(.pieceClosed(PieceClosed(path: pieceURL?.path)))
+        recorder.record(.pieceClosed(PieceClosed(path: pieceURL?.path, libraryID: pieceEntryID)))
         piece = nil
         pieceURL = nil
+        pieceEntryID = nil
         pieceError = nil
-        settings.piecePath = nil
+        forgetLastPiece()
         updateSelection()
     }
 
     private static let noNotesMessage = "There are no notes to practise in this file."
 
-    /// At launch, picks up last session's piece. One that's gone or no longer reads is quietly
-    /// forgotten (only the log hears why): nobody just asked to open it.
-    private func reopenLastPiece() {
-        guard let path = settings.piecePath else { return }
-        let url = URL(fileURLWithPath: path)
-        let failure: String
-        if !FileManager.default.isReadableFile(atPath: path) {
-            failure = "The file is gone or can't be read."
-        } else {
-            do {
-                let score = try MusicXMLImporter.load(from: url)
-                if !score.parts.isEmpty {
-                    open(score, from: url, via: .launch)
-                    return
-                }
-                failure = Self.noNotesMessage
-            } catch {
-                failure = error.localizedDescription
-            }
+    /// Imports the file at `url`, keeps it in the library and switches to it; or logs why it
+    /// can't and returns that.
+    private func openFile(at url: URL, via source: PieceOpenSource) -> String? {
+        // The library's own copy, picked in Finder, is that entry (and has its id for a name).
+        if let entry = library.entries.first(where: {
+            library.fileURL(for: $0).standardizedFileURL.path == url.standardizedFileURL.path
+        }) {
+            return openCopy(of: entry, via: source)
         }
-        recordPieceOpenFailed(path, via: .launch, failure)
-        settings.piecePath = nil
+        let score: Score
+        do {
+            score = try MusicXMLImporter.load(from: url)
+        } catch {
+            recordPieceOpenFailed(url.path, via: source, error.localizedDescription)
+            return error.localizedDescription
+        }
+        guard !score.parts.isEmpty else {
+            recordPieceOpenFailed(url.path, via: source, Self.noNotesMessage)
+            return Self.noNotesMessage
+        }
+        do {
+            let entry = try library.add(url, title: score.title)
+            // Known by where it was first opened from, which may be another copy of the same file.
+            switchTo(score, from: URL(fileURLWithPath: entry.originalPath), entry: entry, via: source)
+        } catch {
+            switchTo(score, from: url, entry: nil, libraryError: error.localizedDescription, via: source)
+        }
+        return nil
+    }
+
+    /// Imports the library's copy of `entry` and switches to it, marking it opened; or logs why it
+    /// can't and returns what to tell. The entry stays in the library either way.
+    private func openCopy(of entry: PieceLibrary.Entry, via source: PieceOpenSource) -> String? {
+        let copy = library.fileURL(for: entry)
+        var score: Score
+        do {
+            score = try MusicXMLImporter.load(from: copy)
+        } catch {
+            return copyFailed(entry, via: source, error.localizedDescription)
+        }
+        guard !score.parts.isEmpty else { return copyFailed(entry, via: source, Self.noNotesMessage) }
+        // The copy is named after the entry's id: a score without a title goes by the original's name.
+        if score.title == copy.deletingPathExtension().lastPathComponent {
+            score = Score(title: URL(fileURLWithPath: entry.originalPath).deletingPathExtension().lastPathComponent,
+                          parts: score.parts)
+        }
+        var opened = library.entry(id: entry.id) ?? entry
+        var libraryError: String?
+        do {
+            opened = try library.add(copy, title: score.title)
+        } catch {
+            libraryError = error.localizedDescription
+        }
+        switchTo(score, from: URL(fileURLWithPath: opened.originalPath), entry: opened, libraryError: libraryError,
+                 via: source)
+        return nil
+    }
+
+    /// Logs why the copy of `entry` didn't open, and returns what to tell.
+    private func copyFailed(_ entry: PieceLibrary.Entry, via source: PieceOpenSource, _ error: String) -> String {
+        recordPieceOpenFailed(entry.originalPath, libraryID: entry.id, via: source, error)
+        let original = (entry.originalPath as NSString).abbreviatingWithTildeInPath
+        return "Clefwise's copy of “\(entry.title)” can no longer be read. "
+            + "Open the original file again to practise it (\(original))."
+    }
+
+    /// Switches to practising `score`, known by `url`, where it was first opened from; a round in
+    /// progress is dropped without a summary. A piece from the library comes back with its own
+    /// settings when it has some; otherwise it takes the ones in use, from bar 1 when it's another
+    /// piece than the last, and keeps them from then on. Either way they're fitted to the score.
+    private func switchTo(_ score: Score, from url: URL, entry: PieceLibrary.Entry?, libraryError: String? = nil,
+                          via source: PieceOpenSource) {
+        abandonRound()
+        let saved = entry?.settings
+        var newSettings = settings
+        if let saved {
+            newSettings.piece = saved
+        } else if url.path != settings.piecePath {
+            newSettings.piece.startBar = 1
+        }
+        newSettings.piece = Self.fitting(newSettings.piece, to: score)
+        newSettings.piecePath = url.path
+        newSettings.pieceID = entry?.id
+        recordPieceOpened(score, from: url, libraryID: entry?.id, restoredSettings: saved != nil,
+                          pieceSettings: newSettings.piece, libraryError: libraryError, via: source)
+        piece = score
+        pieceURL = url
+        // Before the settings change, so they're kept for this piece and not the last.
+        pieceEntryID = entry?.id
+        pieceError = nil
+        if saved != nil {
+            // `pieceOpened` holds the restored settings: they aren't changes the user made.
+            var asLogged = settings
+            asLogged.piece = newSettings.piece
+            settingsAsLogged = JSONValue(encoding: asLogged)
+        }
+        settings = newSettings
+        updateSelection()
+        // Also when they didn't change, so a piece new to the library has them from the start.
+        if let id = entry?.id { library.save(settings: settings.piece, for: id) }
+    }
+
+    /// Nothing to reopen at launch: one change, so it's saved and logged once.
+    private func forgetLastPiece() {
+        var newSettings = settings
+        newSettings.piecePath = nil
+        newSettings.pieceID = nil
+        settings = newSettings
+    }
+
+    /// At launch, picks up last session's piece: the library entry last open, from its copy (or,
+    /// should the copy be gone, from the original file). Settings from before the library have
+    /// only the file's path: that file if it still reads, which adds it to the library, otherwise
+    /// the library's copy of it. A piece that can't be reopened, or was taken out of the library,
+    /// is quietly forgotten (only the log hears why): nobody just asked to open it.
+    private func reopenLastPiece() {
+        if let id = settings.pieceID {
+            if let entry = library.entry(id: id) {
+                if openCopy(of: entry, via: .launch) == nil || reopenFile(at: entry.originalPath) { return }
+            } else {
+                recordPieceOpenFailed(settings.piecePath ?? "", libraryID: id, via: .launch,
+                                      "The piece is no longer in the library.")
+            }
+        } else if let path = settings.piecePath {
+            if reopenFile(at: path) { return }
+            if let entry = library.entry(originalPath: path), openCopy(of: entry, via: .launch) == nil { return }
+        } else {
+            return
+        }
+        forgetLastPiece()
+    }
+
+    /// At launch, opens the file at `path` when it's still there and reads, and says whether it did.
+    private func reopenFile(at path: String) -> Bool {
+        guard FileManager.default.isReadableFile(atPath: path) else {
+            recordPieceOpenFailed(path, via: .launch, "The file is gone or can't be read.")
+            return false
+        }
+        return openFile(at: URL(fileURLWithPath: path), via: .launch) == nil
     }
 
     /// `options` with the part and start bar brought within what `score` has.
@@ -1782,7 +1902,7 @@ final class Game {
         return PieceContext(title: piece.title, path: pieceURL?.path ?? "", part: part.name, partIndex: options.part,
                             hand: options.hand.rawValue, order: options.order.rawValue, startBar: options.startBar,
                             oneNotePerChord: options.oneNotePerChord, noteCount: round.notes.count,
-                            measureCount: part.measureCount, chords: options.chords.rawValue)
+                            measureCount: part.measureCount, chords: options.chords.rawValue, libraryID: pieceEntryID)
     }
 
     /// One `questionShown` per note on screen: notes asked together are logged one by one, with
@@ -1905,17 +2025,20 @@ final class Game {
             unansweredQuestion: unanswered)))
     }
 
-    private func recordPieceOpened(_ score: Score, from url: URL, via source: PieceOpenSource) {
+    private func recordPieceOpened(_ score: Score, from url: URL, libraryID: UUID?, restoredSettings: Bool,
+                                   pieceSettings: PieceSettings, libraryError: String?, via source: PieceOpenSource) {
         recorder.record(.pieceOpened(PieceOpened(
             path: url.path, title: score.title, via: source,
             parts: score.parts.map {
                 PartInfo(name: $0.name, notes: $0.notes.count, measures: $0.measureCount, staves: $0.staffCount,
                          skipped: $0.skippedNoteCount)
-            })))
+            },
+            libraryID: libraryID, restoredSettings: restoredSettings, pieceSettings: JSONValue(encoding: pieceSettings),
+            libraryError: libraryError)))
     }
 
-    private func recordPieceOpenFailed(_ path: String, via source: PieceOpenSource, _ error: String) {
-        recorder.record(.pieceOpenFailed(PieceOpenFailed(path: path, via: source, error: error)))
+    private func recordPieceOpenFailed(_ path: String, libraryID: UUID? = nil, via source: PieceOpenSource, _ error: String) {
+        recorder.record(.pieceOpenFailed(PieceOpenFailed(path: path, via: source, error: error, libraryID: libraryID)))
     }
 
     /// How the log writes a key: the character it types, or a name for keys that type none.

@@ -100,6 +100,9 @@ struct PieceContext: Codable, Equatable {
     /// How chords are asked: `eachNote`, `topOrBottom` or `together` (`Game.PieceSettings.Chords`);
     /// nil in rounds logged before the setting existed.
     var chords: String? = nil
+    /// The piece's entry in the piece library; nil for a piece that couldn't be kept there, and in
+    /// rounds logged before the library.
+    var libraryID: UUID? = nil
 }
 
 struct QuestionShown: Codable, Equatable {
@@ -263,10 +266,23 @@ struct UnansweredQuestion: Codable, Equatable {
 }
 
 struct PieceOpened: Codable, Equatable {
+    /// Where the file was first opened from: a piece opened from the library, or another copy of
+    /// the same file, keeps the path it was first opened from.
     var path: String
     var title: String
     var via: PieceOpenSource
     var parts: [PartInfo]
+    /// The piece's entry in the piece library; nil when it couldn't be kept there (`libraryError`),
+    /// and in events logged before the library.
+    var libraryID: UUID? = nil
+    /// The piece came back with the settings it was last practised with (from the library), rather
+    /// than taking the ones in use. Nil in events logged before the library.
+    var restoredSettings: Bool? = nil
+    /// The piece settings it opened with, as saved (`piece` in the settings), fitted to the score.
+    /// Restored settings are logged here only, not as `settingChanged`.
+    var pieceSettings: JSONValue? = nil
+    /// Why the piece couldn't be kept in the library (it was opened all the same).
+    var libraryError: String? = nil
 }
 
 struct PartInfo: Codable, Equatable {
@@ -281,10 +297,14 @@ struct PieceOpenFailed: Codable, Equatable {
     var path: String
     var via: PieceOpenSource
     var error: String
+    /// The library entry that didn't open (its copy can't be read, or it's gone from the library).
+    var libraryID: UUID? = nil
 }
 
 struct PieceClosed: Codable, Equatable {
     var path: String?
+    /// The closed piece's entry in the piece library, when it had one.
+    var libraryID: UUID? = nil
 }
 
 /// A button or menu item used, for questions like "does anyone press Play again?".
