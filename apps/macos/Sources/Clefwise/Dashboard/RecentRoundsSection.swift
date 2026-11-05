@@ -137,7 +137,11 @@ struct RecentRoundsSection: View {
             : date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
     }
 
-    private func mode(_ round: RecentRound) -> String { Game.Mode(rawValue: round.mode)?.label ?? round.mode.capitalized }
+    /// "60s Sprint", "Practice", "Practice · 5 min"
+    private func mode(_ round: RecentRound) -> String {
+        let label = Game.Mode(rawValue: round.mode)?.label ?? round.mode.capitalized
+        return round.practiceLength.map { "\(label) · \($0)" } ?? label
+    }
     private func input(_ round: RecentRound) -> String { Game.AnswerInput(rawValue: round.input)?.label ?? round.input.capitalized }
     private func namingLabel(_ round: RecentRound) -> String { NamingSystem(rawValue: round.naming)?.label ?? round.naming.capitalized }
 
@@ -157,6 +161,7 @@ struct RecentRoundsSection: View {
         case .timeUp: "Time up"
         case .stopped: "Stopped"
         case .pieceComplete: "Piece finished"
+        case .notesDone: "All notes done"
         case .abandoned: "Interrupted"
         case .appQuit: "App quit"
         }

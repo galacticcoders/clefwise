@@ -342,9 +342,10 @@ enum KeystrokeResult: String, Codable, Equatable {
 }
 
 enum RoundEndReason: String, Codable, Equatable {
-    /// Sprint clock ran out; Stop/Esc; the last note of a piece; replaced by opening or closing a
-    /// piece or starting over; the app quit mid-round.
-    case timeUp, stopped, pieceComplete, abandoned, appQuit
+    /// A sprint's or timed practice round's clock ran out; Stop/Esc; the last note of a piece; the
+    /// last of a practice round's set number of notes; replaced by opening or closing a piece or
+    /// starting over; the app quit mid-round.
+    case timeUp, stopped, pieceComplete, notesDone, abandoned, appQuit
 }
 
 enum PieceOpenSource: String, Codable, Equatable {

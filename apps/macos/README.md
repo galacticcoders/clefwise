@@ -19,7 +19,9 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
 
 - Pick a **clef** (Treble, Bass, Both) and a **mode** in the toolbar.
   - *60s Sprint*: name as many notes as you can in a minute; best score is kept per clef/range.
-  - *Practice*: no clock; press Stop (Esc) to see your summary.
+  - *Practice*: at your own pace, with no timer pressure. On the start panel, **Length** sets how a
+    round ends: *No limit* (until you stop), *Time* (2, 5, 10, 15 or 30 minutes) or *Notes* (50, 100,
+    250, 500 or 1 000 notes, right or wrong). Pieces ignore it: a piece ends with its last note.
   - **Pause** (or Space) during a round stops the clock and hides the note until you press
     Resume (or Space again). Paused time doesn't count towards the sprint, your response times
     or your practice time. Switching to another app mid-round pauses it too; it waits for you

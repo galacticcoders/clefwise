@@ -375,6 +375,26 @@ import Testing
         #expect(pieces[0]["originalPath"] as? String == score.path)
     }
 
+    @Test func roundsSayTheirPracticeLimit() throws {
+        try FileManager.default.createDirectory(at: temporary.url, withIntermediateDirectories: true)
+        let log = UsageLog(folder: logFolder)
+        func round(_ change: (inout Game.Settings) -> Void) {
+            var settings = Game.Settings()
+            change(&settings)
+            log.record(.roundStarted(RoundStarted(round: UUID(), via: .button, settings: JSONValue(encoding: settings),
+                                                  keyFifths: 0, piece: nil)))
+        }
+        round { $0.mode = .practice; $0.practiceLimit = .notes; $0.practiceNotes = 250 }
+        round { $0.mode = .practice; $0.practiceLimit = .time; $0.practiceMinutes = 15 }
+        round { $0.mode = .practice }
+        // A limit left in the settings means nothing to a sprint.
+        round { $0.mode = .sprint; $0.practiceLimit = .time }
+        try UsageExport.export(log, to: destination, defaults: InMemoryDefaults())
+        let rows = try table(try unzip(destination).appendingPathComponent("rounds.csv")).rows
+        #expect(rows.map { $0["practiceLimit"] } == ["notes", "time", "", ""])
+        #expect(rows.map { $0["practiceTarget"] } == ["250", "15", "", ""])
+    }
+
     @Test func emptyLogStillExports() throws {
         try FileManager.default.createDirectory(at: temporary.url, withIntermediateDirectories: true)
         try UsageExport.export(UsageLog(folder: logFolder), to: destination, defaults: InMemoryDefaults())

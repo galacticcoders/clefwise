@@ -205,6 +205,8 @@ struct RecentRound: Equatable, Identifiable {
     var attempts: Int
     /// Nil when the round never ended in the log (the app crashed).
     var endReason: RoundEndReason?
+    /// A practice round's limit: "5 min", "100 notes"; nil without one.
+    var practiceLength: String? = nil
 
     var accuracy: Double? { attempts > 0 ? Double(score) / Double(attempts) : nil }
 }
