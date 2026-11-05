@@ -604,22 +604,6 @@ private struct StartPanel: View {
     let game: Game
 
     var body: some View {
-        // As many of the latest pieces as the card has room for, so the panel never outgrows it:
-        // four in a roomy window, fewer down to none (still with All pieces…) in a short one, and
-        // last of all a tighter panel, for a short window with the practice length rows showing.
-        ViewThatFits(in: .vertical) {
-            ForEach(game.library.isEmpty ? [0] : Array((0...4).reversed()), id: \.self) { count in
-                panel(recentPieces: count)
-                    .padding(.vertical, 8)
-            }
-            panel(recentPieces: 0, isTight: true)
-                .padding(.vertical, 8)
-        }
-    }
-
-    /// Without kept pieces, the panel as it was before there was a library. `isTight` leaves out
-    /// what can go: the footer says Space starts too.
-    private func panel(recentPieces: Int, isTight: Bool = false) -> some View {
         VStack(spacing: 10) {
             Text(heading)
                 .font(.title2.weight(.semibold))
@@ -639,13 +623,19 @@ private struct StartPanel: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.extraLarge)
             .padding(.top, 6)
-            if !isTight {
-                Text("or press Space")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Divider()
-                    .frame(width: 240)
-                    .padding(.vertical, 4)
+            // Only what's light has versions to choose from: measuring whole panels, native controls
+            // and all, froze the app for over a second on every change. The hint and rule go first
+            // when room is short (a short window with the practice length rows showing).
+            ViewThatFits(in: .vertical) {
+                VStack(spacing: 10) {
+                    Text("or press Space")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Divider()
+                        .frame(width: 240)
+                        .padding(.vertical, 4)
+                }
+                Color.clear.frame(width: 0, height: 0)
             }
             // Spelled out here as well as in the File menu, so it's found without looking for it.
             HStack(spacing: 10) {
@@ -656,11 +646,18 @@ private struct StartPanel: View {
                     .foregroundStyle(.secondary)
             }
             if !game.library.isEmpty {
-                RecentPiecesSection(game: game, count: recentPieces)
-                    .padding(.top, 4)
+                // As many of the latest pieces as the card has room for, so the panel never outgrows
+                // it: four in a roomy window, fewer down to none (still with All pieces…) in a short one.
+                ViewThatFits(in: .vertical) {
+                    ForEach((0...4).reversed(), id: \.self) { count in
+                        RecentPiecesSection(game: game, count: count)
+                            .padding(.top, 4)
+                    }
+                }
             }
         }
         .panel()
+        .padding(.vertical, 8)
     }
 
     private var heading: String {
