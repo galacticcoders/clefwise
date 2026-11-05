@@ -343,7 +343,23 @@ private struct Analysis {
             naming: settings.string("naming") ?? defaults.naming.rawValue,
             description: description(of: round, settings),
             score: round.end?.score ?? round.correct, attempts: round.end?.attempts ?? round.answers,
-            endReason: round.end?.reason)
+            endReason: round.end?.reason, practiceLength: practiceLength(of: round, settings))
+    }
+
+    /// "5 min" or "100 notes" for a practice round of random notes with a limit.
+    private static func practiceLength(of round: RoundRecord, _ settings: SavedSettings) -> String? {
+        guard round.start?.piece == nil, settings.string("mode") == Game.Mode.practice.rawValue else { return nil }
+        let defaults = Game.Settings()
+        switch settings.string("practiceLimit").flatMap(Game.PracticeLimit.init(rawValue:)) {
+        case .time:
+            let minutes: Int = settings.decode("practiceMinutes") ?? defaults.practiceMinutes
+            return "\(minutes.formatted()) min"
+        case .notes:
+            let notes: Int = settings.decode("practiceNotes") ?? defaults.practiceNotes
+            return "\(notes.formatted()) notes"
+        default:
+            return nil
+        }
     }
 
     /// "Treble · On the staff · G major", or for a piece "Minuet in G · Right hand".

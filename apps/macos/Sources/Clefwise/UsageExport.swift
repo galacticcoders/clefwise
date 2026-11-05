@@ -192,6 +192,8 @@ enum UsageExport {
         Column("round") { $0.id.uuidString },
         Column("via") { $0.start?.via.rawValue },
         Column("mode") { setting("mode", in: $0.start?.settings) },
+        Column("practiceLimit") { practiceLimit(of: $0.start)?.limit },
+        Column("practiceTarget") { practiceLimit(of: $0.start)?.target },
         Column("clefChoice") { setting("clefChoice", in: $0.start?.settings) },
         Column("range") { range(in: $0.start?.settings) },
         Column("keySetting") { keySetting(in: $0.start?.settings) },
@@ -263,6 +265,17 @@ enum UsageExport {
               let data = try? JSONEncoder().encode(value),
               let range = try? JSONDecoder().decode(NoteRange.self, from: data) else { return nil }
         return range.key
+    }
+
+    /// The limit a round ran under, and its minutes or notes; nil for a round without one.
+    private static func practiceLimit(of start: RoundStarted?) -> (limit: String, target: String?)? {
+        guard let start, start.piece == nil, setting("mode", in: start.settings) == Game.Mode.practice.rawValue,
+              let limit = setting("practiceLimit", in: start.settings) else { return nil }
+        switch Game.PracticeLimit(rawValue: limit) {
+        case .time: return (limit, setting("practiceMinutes", in: start.settings))
+        case .notes: return (limit, setting("practiceNotes", in: start.settings))
+        default: return nil
+        }
     }
 
     private static func setting(_ path: String, in settings: JSONValue?) -> String? {

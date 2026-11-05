@@ -149,7 +149,7 @@ struct ContentView: View {
                 Picker("Mode", selection: $game.settings.mode) {
                     ForEach(Game.Mode.allCases) { Text($0.label).tag($0) }
                 }
-                .help("Race the clock, or practice without one")
+                .help("Race the clock, or practice at your own pace")
             }
             .disabled(game.phase == .playing)
 
@@ -237,12 +237,27 @@ private struct StatsBar: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        if game.notesLeft == nil {
+            row(showsStreak: true)
+        } else {
+            // A round of a set number of notes has a fifth tile, which must stay: it's how far along
+            // the round is. A narrow window gives up the streak for it rather than overflow.
+            ViewThatFits(in: .horizontal) {
+                row(showsStreak: true)
+                row(showsStreak: false)
+            }
+        }
+    }
+
+    private func row(showsStreak: Bool) -> some View {
         HStack(spacing: 12) {
-            StatTile(title: game.settings.mode == .sprint ? "Time left" : "Time",
+            StatTile(title: game.roundTimeLimit == nil ? "Time" : "Time left",
                      value: timeText,
                      tint: isRunningOut ? Theme.wrong : Theme.ink)
             StatTile(title: "Score", value: "\(game.score)")
-            StatTile(title: "Streak", value: "\(game.streak)")
+            if showsStreak {
+                StatTile(title: "Streak", value: "\(game.streak)")
+            }
             StatTile(title: "Accuracy", value: game.accuracy.map { "\(Int(($0 * 100).rounded()))%" } ?? "–")
             if let progress = game.pieceProgress {
                 // A fifth tile only fits a wide window; a narrow one does without rather than overflow.
@@ -251,6 +266,11 @@ private struct StatsBar: View {
                     Color.clear.frame(width: 0, height: 0)
                 }
                 .layoutPriority(1)
+            }
+            if let notesLeft = game.notesLeft, let total = game.roundNoteLimit {
+                ProgressTile(title: "Notes left", value: notesLeft.formatted(),
+                             fraction: CGFloat(total - notesLeft) / CGFloat(total),
+                             help: "\((total - notesLeft).formatted()) of \(total.formatted()) notes done")
             }
             Spacer()
             // Between rounds only: mid-round its window would take the keys the answers come from,
@@ -301,16 +321,16 @@ private struct StatsBar: View {
     }
 
     private var timeText: String {
-        let isSprint = game.settings.mode == .sprint
+        let limit = game.roundTimeLimit
         let seconds = switch game.phase {
-        case .idle: isSprint ? Int(Game.sprintLength) : 0
-        case .playing, .finished: isSprint ? Int(game.timeRemaining.rounded(.up)) : Int(game.elapsed)
+        case .idle: limit.map { Int($0) } ?? 0
+        case .playing, .finished: limit == nil ? Int(game.elapsed) : Int(game.timeRemaining.rounded(.up))
         }
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 
     private var isRunningOut: Bool {
-        game.phase == .playing && game.settings.mode == .sprint && game.timeRemaining <= 10
+        game.phase == .playing && game.roundTimeLimit != nil && game.timeRemaining <= 10
     }
 }
 
@@ -348,9 +368,26 @@ private struct PieceProgressTile: View {
     let order: Game.PieceSettings.Order
 
     var body: some View {
-        StatTile(title: order == .inOrder ? "Bar" : "Notes",
-                 value: order == .inOrder ? "\(progress.bar) / \(progress.bars)" : "\(progress.done) / \(progress.total)",
-                 width: 110)
+        ProgressTile(title: order == .inOrder ? "Bar" : "Notes",
+                     value: order == .inOrder ? "\(progress.bar) / \(progress.bars)" : "\(progress.done) / \(progress.total)",
+                     fraction: fraction,
+                     help: "\(progress.done) of \(progress.total) notes done · bar \(progress.bar) of \(progress.bars)")
+    }
+
+    private var fraction: CGFloat {
+        progress.total > 0 ? CGFloat(min(progress.done, progress.total)) / CGFloat(progress.total) : 0
+    }
+}
+
+/// A stat tile with a thin bar along its bottom for how far along the round is.
+private struct ProgressTile: View {
+    let title: String
+    let value: String
+    let fraction: CGFloat
+    let help: String
+
+    var body: some View {
+        StatTile(title: title, value: value, width: 110)
             .overlay(alignment: .bottom) {
                 GeometryReader { proxy in
                     Capsule()
@@ -365,11 +402,7 @@ private struct PieceProgressTile: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, 4)
             }
-            .help("\(progress.done) of \(progress.total) notes done · bar \(progress.bar) of \(progress.bars)")
-    }
-
-    private var fraction: CGFloat {
-        progress.total > 0 ? CGFloat(min(progress.done, progress.total)) / CGFloat(progress.total) : 0
+            .help(help)
     }
 }
 
@@ -571,29 +604,32 @@ private struct StartPanel: View {
     let game: Game
 
     var body: some View {
-        if game.library.isEmpty {
-            panel(recentPieces: 0)
-        } else {
-            // As many of the latest pieces as the card has room for, so the panel never outgrows
-            // it: four in a roomy window, fewer down to none (still with All pieces…) in a short one.
-            ViewThatFits(in: .vertical) {
-                ForEach((0...4).reversed(), id: \.self) { count in
-                    panel(recentPieces: count)
-                        .padding(.vertical, 8)
-                }
+        // As many of the latest pieces as the card has room for, so the panel never outgrows it:
+        // four in a roomy window, fewer down to none (still with All pieces…) in a short one, and
+        // last of all a tighter panel, for a short window with the practice length rows showing.
+        ViewThatFits(in: .vertical) {
+            ForEach(game.library.isEmpty ? [0] : Array((0...4).reversed()), id: \.self) { count in
+                panel(recentPieces: count)
+                    .padding(.vertical, 8)
             }
+            panel(recentPieces: 0, isTight: true)
+                .padding(.vertical, 8)
         }
     }
 
-    /// Without kept pieces, the panel as it was before there was a library.
-    private func panel(recentPieces: Int) -> some View {
+    /// Without kept pieces, the panel as it was before there was a library. `isTight` leaves out
+    /// what can go: the footer says Space starts too.
+    private func panel(recentPieces: Int, isTight: Bool = false) -> some View {
         VStack(spacing: 10) {
-            Text(game.settings.mode == .sprint ? "How many notes can you name in 60 seconds?" : "Practice at your own pace")
+            Text(heading)
                 .font(.title2.weight(.semibold))
             Text(details)
                 .foregroundStyle(.secondary)
             NoteRangeControls(game: game)
                 .padding(.top, 4)
+            if game.settings.mode == .practice {
+                PracticeLimitControls(game: game)
+            }
             Button {
                 game.start(via: .button)
             } label: {
@@ -603,12 +639,14 @@ private struct StartPanel: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.extraLarge)
             .padding(.top, 6)
-            Text("or press Space")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Divider()
-                .frame(width: 240)
-                .padding(.vertical, 4)
+            if !isTight {
+                Text("or press Space")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Divider()
+                    .frame(width: 240)
+                    .padding(.vertical, 4)
+            }
             // Spelled out here as well as in the File menu, so it's found without looking for it.
             HStack(spacing: 10) {
                 Button("Practise a piece…", systemImage: "music.note.list") { PieceFile.choose(for: game, via: .button) }
@@ -623,6 +661,15 @@ private struct StartPanel: View {
             }
         }
         .panel()
+    }
+
+    private var heading: String {
+        guard game.settings.mode == .practice else { return "How many notes can you name in 60 seconds?" }
+        switch game.settings.practiceLimit {
+        case .endless: return "Practice at your own pace"
+        case .time: return "How many notes can you name in \(game.settings.practiceMinutes) minutes?"
+        case .notes: return "How fast can you name \(game.settings.practiceNotes.formatted()) notes?"
+        }
     }
 
     private var details: String {
@@ -682,6 +729,49 @@ private struct NoteRangeControls: View {
     }
 }
 
+/// How a practice round ends: when stopped, after a set time, or after a set number of notes.
+private struct PracticeLimitControls: View {
+    @Bindable var game: Game
+
+    var body: some View {
+        VStack(spacing: 8) {
+            row("Length", help: "Practice until you stop, for a set time, or for a set number of notes") {
+                Picker("Length", selection: $game.settings.practiceLimit) {
+                    ForEach(Game.PracticeLimit.allCases) { Text($0.label).tag($0) }
+                }
+            }
+            switch game.settings.practiceLimit {
+            case .endless:
+                EmptyView()
+            case .time:
+                row("Minutes", help: "How long the round runs; pausing stops the clock") {
+                    Picker("Minutes", selection: $game.settings.practiceMinutes) {
+                        ForEach(Game.practiceMinuteChoices, id: \.self) { Text("\($0)").tag($0) }
+                    }
+                }
+            case .notes:
+                row("Notes to name", help: "How many notes the round asks; a wrong answer counts as one") {
+                    Picker("Notes to name", selection: $game.settings.practiceNotes) {
+                        ForEach(Game.practiceNoteChoices, id: \.self) { Text($0.formatted()).tag($0) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func row(_ title: String, help: String, @ViewBuilder picker: () -> some View) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .foregroundStyle(.secondary)
+            picker()
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+        }
+        .help(help)
+    }
+}
+
 private struct SummaryPanel: View {
     let summary: RoundSummary
     let game: Game
@@ -701,7 +791,8 @@ private struct SummaryPanel: View {
                 Text("\(summary.score)")
                     .font(.system(size: 54, weight: .bold, design: .rounded))
                     .foregroundStyle(Theme.accent)
-                Text(summary.score == 1 ? "note named" : "notes named")
+                Text(summary.finishedNotes ? "of \(summary.attempts.formatted()) right"
+                     : summary.score == 1 ? "note named" : "notes named")
                     .font(.title3)
                     .foregroundStyle(.secondary)
             }
@@ -717,6 +808,9 @@ private struct SummaryPanel: View {
                 }
             }
             HStack(spacing: 32) {
+                if let seconds = summary.noteRoundSeconds {
+                    Metric(title: "Time", value: String(format: "%d:%02d", Int(seconds) / 60, Int(seconds) % 60))
+                }
                 Metric(title: "Accuracy", value: summary.accuracy.map { "\(Int(($0 * 100).rounded()))%" } ?? "–")
                 Metric(title: "Avg. per note", value: summary.averageSeconds.map { String(format: "%.1f s", $0) } ?? "–")
                 Metric(title: "Best streak", value: "\(summary.bestStreak)")
@@ -745,7 +839,9 @@ private struct SummaryPanel: View {
 
     private var title: String {
         if summary.finishedPiece { return "Piece complete" }
-        return summary.mode == .practice ? "Practice complete" : summary.timeRanOut ? "Time's up!" : "Round ended"
+        if summary.finishedNotes { return "\(summary.attempts.formatted()) notes done" }
+        if summary.timeRanOut { return "Time's up!" }
+        return summary.mode == .practice && !summary.hadLimit ? "Practice complete" : "Round ended"
     }
 
     /// "F♯4", or "Fa♯ (F♯4)" with other naming systems; adds the clef when clefs were mixed.

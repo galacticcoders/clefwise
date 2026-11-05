@@ -680,7 +680,7 @@ private extension GameTestBench {
         #expect(game.isShowingMiss)
         game.pause()
         #expect(game.barDisplay?.marks.count == 3)
-        try await Task.sleep(for: .milliseconds(1500))
+        try await waitUntil { game.advancesOnResume }
         #expect(game.isShowingMiss && game.group?.result != nil)
         game.resume()
         #expect(!game.isShowingMiss && asked == [c5])

@@ -42,6 +42,12 @@ struct RoundSummary {
     let pieceTitle: String?
     /// The round ended because the piece (from the start bar) was played through.
     let finishedPiece: Bool
+    /// The round was a practice round with a limit, reached or not.
+    var hadLimit = false
+    /// The round ended on the last of its set number of notes.
+    var finishedNotes = false
+    /// How long a round of a set number of notes took, pauses left out; nil for other rounds.
+    var noteRoundSeconds: TimeInterval? = nil
 
     var accuracy: Double? { attempts > 0 ? Double(score) / Double(attempts) : nil }
 }
@@ -55,6 +61,31 @@ final class Game {
         var id: Self { self }
         var label: String { self == .sprint ? "60s Sprint" : "Practice" }
     }
+
+    /// How a practice round of random notes ends. A sprint has its own clock, and a piece ends with
+    /// its last note, so neither takes a limit.
+    enum PracticeLimit: String, CaseIterable, Identifiable, Codable {
+        /// Only when stopped.
+        case endless
+        /// When `Settings.practiceMinutes` are up.
+        case time
+        /// Once `Settings.practiceNotes` notes are answered, right or wrong.
+        case notes
+
+        var id: Self { self }
+        var label: String {
+            switch self {
+            case .endless: "No limit"
+            case .time: "Time"
+            case .notes: "Notes"
+            }
+        }
+    }
+
+    /// The lengths to choose from. Fixed rather than typed, so that two rounds of one length can be
+    /// compared fairly.
+    static let practiceMinuteChoices = [2, 5, 10, 15, 30]
+    static let practiceNoteChoices = [50, 100, 250, 500, 1000]
 
     enum AnswerInput: String, CaseIterable, Identifiable, Codable {
         case buttons, piano, keyboard
@@ -93,6 +124,10 @@ final class Game {
         var clefChoice = ClefChoice.treble
         var range = NoteRange.staff
         var mode = Mode.sprint
+        var practiceLimit = PracticeLimit.endless
+        /// Each kind of limit keeps its own length, so switching between them loses neither.
+        var practiceMinutes = 5
+        var practiceNotes = 100
         var naming = NamingSystem.letters
         var answerInput = AnswerInput.buttons
         var showHints = false
@@ -122,6 +157,9 @@ final class Game {
             clefChoice = try container.decodeIfPresent(ClefChoice.self, forKey: .clefChoice) ?? clefChoice
             range = try container.decodeIfPresent(NoteRange.self, forKey: .range) ?? range
             mode = try container.decodeIfPresent(Mode.self, forKey: .mode) ?? mode
+            practiceLimit = try container.decodeIfPresent(PracticeLimit.self, forKey: .practiceLimit) ?? practiceLimit
+            practiceMinutes = try container.decodeIfPresent(Int.self, forKey: .practiceMinutes) ?? practiceMinutes
+            practiceNotes = try container.decodeIfPresent(Int.self, forKey: .practiceNotes) ?? practiceNotes
             naming = try container.decodeIfPresent(NamingSystem.self, forKey: .naming) ?? naming
             answerInput = try container.decodeIfPresent(AnswerInput.self, forKey: .answerInput) ?? answerInput
             showHints = try container.decodeIfPresent(Bool.self, forKey: .showHints) ?? showHints
@@ -515,7 +553,7 @@ final class Game {
     @ObservationIgnored private var roundPaused = Duration.zero
     @ObservationIgnored private var questionPaused = Duration.zero
     /// The pause after a miss ran out during a pause: the next note comes when the round resumes.
-    @ObservationIgnored private var advancesOnResume = false
+    @ObservationIgnored private(set) var advancesOnResume = false
     @ObservationIgnored private let synth = Synth()
     /// Where usage events go (the usage log on disk in the app; memory in tests).
     @ObservationIgnored let recorder: UsageRecorder
@@ -547,7 +585,27 @@ final class Game {
     /// The clef on screen: the current question's, or between rounds the first selected clef
     /// (with a piece, the clef of the note the next round starts on).
     var displayedClef: Clef { question?.clef ?? leadingPieceNote?.clef ?? settings.clefChoice.clefs[0] }
-    var timeRemaining: TimeInterval { max(0, Self.sprintLength - elapsed) }
+    var timeRemaining: TimeInterval { max(0, (roundTimeLimit ?? 0) - elapsed) }
+
+    /// The limit on a round started now: only practice rounds of random notes take one.
+    private var practiceRoundLimit: PracticeLimit {
+        settings.mode == .practice && !isPractisingPiece ? settings.practiceLimit : .endless
+    }
+
+    /// How long a round may run; nil when its clock only counts up.
+    var roundTimeLimit: TimeInterval? {
+        if settings.mode == .sprint { return Self.sprintLength }
+        return practiceRoundLimit == .time ? TimeInterval(settings.practiceMinutes * 60) : nil
+    }
+
+    /// How many notes a round asks; nil when it isn't a set number.
+    var roundNoteLimit: Int? { practiceRoundLimit == .notes ? settings.practiceNotes : nil }
+
+    /// Notes still to answer in a round of a set number, while it runs.
+    var notesLeft: Int? {
+        guard phase == .playing, let limit = roundNoteLimit else { return nil }
+        return max(0, limit - attempts)
+    }
     var accuracy: Double? { attempts > 0 ? Double(score) / Double(attempts) : nil }
     /// Pieces don't keep best scores: a score on one piece says little about another.
     var bestScore: Int? { isPractisingPiece ? nil : bestScores[bestScoreKey] }
@@ -1588,14 +1646,15 @@ final class Game {
         let seconds = Self.seconds(from: roundStart, to: now)
         // Only publish whole-second changes so the UI doesn't redraw ten times a second.
         if Int(seconds) != Int(elapsed) { elapsed = seconds }
-        if settings.mode == .sprint, seconds >= Self.sprintLength {
-            elapsed = Self.sprintLength
+        if let limit = roundTimeLimit, seconds >= limit {
+            elapsed = limit
             finish(timeRanOut: true)
         }
     }
 
     /// `finishedPiece`: an in-order practice round got past the piece's last note.
-    private func finish(timeRanOut: Bool, finishedPiece: Bool = false) {
+    /// `finishedNotes`: a round of a set number of notes answered its last.
+    private func finish(timeRanOut: Bool, finishedPiece: Bool = false, finishedNotes: Bool = false) {
         stopClock()
         isShowingMiss = false
         flash = nil
@@ -1615,10 +1674,14 @@ final class Game {
             save(bestScores, as: Keys.bestScores)
             isNewBest = true
         }
-        recordRoundEnd(timeRanOut ? .timeUp : finishedPiece ? .pieceComplete : .stopped, isNewBest: isNewBest)
+        // While a pause can still be left out of it.
+        let seconds = Double(activeMilliseconds(since: roundStart)) / 1000
+        recordRoundEnd(timeRanOut ? .timeUp : finishedPiece ? .pieceComplete : finishedNotes ? .notesDone : .stopped,
+                       isNewBest: isNewBest)
         clearPause()
-        // A practice round stopped before any answer has nothing to sum up.
-        guard attempts > 0 || settings.mode == .sprint else {
+        // A practice round stopped before any answer has nothing to sum up; one that ran out of
+        // time does: nothing named is a result.
+        guard attempts > 0 || settings.mode == .sprint || timeRanOut else {
             phase = .idle
             return
         }
@@ -1636,7 +1699,10 @@ final class Game {
             mixedClefs: pieceRound.map { round in round.notes.contains { $0.clef != round.notes[0].clef } }
                 ?? (settings.clefChoice == .both),
             pieceTitle: pieceRound?.title,
-            finishedPiece: finishedPiece
+            finishedPiece: finishedPiece,
+            hadLimit: practiceRoundLimit != .endless,
+            finishedNotes: finishedNotes,
+            noteRoundSeconds: roundNoteLimit == nil ? nil : seconds
         )
         phase = .finished
     }
@@ -1730,6 +1796,10 @@ final class Game {
     /// a piece after its last one.
     private func nextQuestion() {
         guard var pieceRound else {
+            if let limit = roundNoteLimit, attempts >= limit {
+                finish(timeRanOut: false, finishedNotes: true)
+                return
+            }
             let pick = randomQuestion()
             show([pick.question], pickChance: pick.chance)
             return

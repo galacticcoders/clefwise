@@ -226,7 +226,7 @@ extension UsageExport {
         | Field | Meaning |
         |---|---|
         | `round` | The round's id. |
-        | `reason` | `timeUp` (the sprint clock ran out), `stopped` (Stop or Esc), `pieceComplete` (the last note of a piece), `abandoned` (replaced by opening or closing a piece, or starting over), `appQuit` (the app quit mid-round). |
+        | `reason` | `timeUp` (the clock of a sprint or timed practice round ran out), `stopped` (Stop or Esc), `pieceComplete` (the last note of a piece), `notesDone` (the last of a practice round's set number of notes), `abandoned` (replaced by opening or closing a piece, or starting over), `appQuit` (the app quit mid-round). |
         | `durationMs` | How long the round went on, pauses left out. |
         | `pausedMs` | Time spent paused (absent when the round never was). |
         | `score` | Correct answers. |
@@ -299,7 +299,9 @@ extension UsageExport {
         |---|---|
         | `clefChoice` | `treble`, `bass` or `both`. |
         | `range` | Where random notes come from: `below`, `onStaff` and `above` (booleans, any mix; nothing chosen counts as `onStaff`), and `ledgerLines`, how far below and above go (1 to 5 ledger lines). Changes are logged per value (`range.above`, `range.ledgerLines`). Older versions saved a name instead: `staff` (on the staff), `oneLedgerLine` or `threeLedgerLines` (on the staff and that many ledger lines below and above). |
-        | `mode` | `sprint` (60 seconds) or `practice` (untimed). |
+        | `mode` | `sprint` (60 seconds) or `practice` (at your own pace, see `practiceLimit`). |
+        | `practiceLimit` | How a practice round of random notes ends: `endless` (when stopped), `time` (after `practiceMinutes`) or `notes` (once `practiceNotes` notes are answered, right or wrong). Ignored in sprints and piece rounds. Absent in settings saved before it existed, which means `endless`. |
+        | `practiceMinutes`, `practiceNotes` | The length chosen for each kind of limit. Both stay saved whichever limit is in use. |
         | `naming` | `letters`, `solfege` or `sargam`. |
         | `answerInput` | `buttons`, `piano` or `keyboard`. |
         | `showHints` | Staff hints shown. |
@@ -388,6 +390,7 @@ extension UsageExport {
         | `mode`, `clefChoice`, `range`, `addsAccidentals`, `naming`, `answerInput` | Settings at the start. `range` by its short name, as best scores key it (`staff`, `below2+staff+above2`). |
         | `keySetting` | The key setting: a fixed key in fifths, or `random`. |
         | `keyFifths` | The key the round was in (a random key resolved). |
+        | `practiceLimit`, `practiceTarget` | Practice rounds of random notes with a limit: `time` and its minutes, or `notes` and how many. Empty for other rounds. |
         | `pieceTitle`, `piecePart`, `pieceHand`, `pieceOrder`, `pieceStartBar`, `pieceOneNotePerChord`, `pieceNotes` | Piece rounds only: as in `roundStarted.piece` (`pieceNotes` is `noteCount`). |
         | `pieceChords` | Piece rounds only: `piece.chords`, or for rounds logged before it existed `topOrBottom` or `eachNote` from `oneNotePerChord`. |
         | `pieceLibraryID` | Piece rounds only: `piece.libraryID`, the piece's entry in the piece library, which tells pieces with the same title apart; empty for rounds logged before the library. |

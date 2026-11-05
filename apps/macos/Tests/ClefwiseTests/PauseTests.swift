@@ -142,8 +142,8 @@ private extension GameTestBench {
         #expect(game.isShowingMiss)
         let missed = game.question
         game.pause()
-        // Longer than the pause after a miss.
-        try await Task.sleep(for: .milliseconds(1500))
+        // Until the pause after a miss has run out, however busy the test run is.
+        try await waitUntil { game.advancesOnResume }
         #expect(game.isShowingMiss)
         #expect(game.question == missed)
 
