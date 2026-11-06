@@ -4,7 +4,8 @@ import Observation
 
 /// The pieces opened so far, kept so they can be practised again without looking for the file.
 /// Each file is copied into Clefwise's own folder, so a moved or deleted original doesn't matter,
-/// and `index.json` beside the copies lists them.
+/// and `index.json` beside the copies lists them. Its changes also go to the practice journal, as
+/// `pieceAdded`, `pieceRevised` and `pieceRemoved` (see `journal`).
 @MainActor @Observable
 final class PieceLibrary {
     struct Entry: Codable, Equatable, Identifiable {
@@ -18,6 +19,10 @@ final class PieceLibrary {
         var fileName: String
         /// SHA-256 of the copy's bytes, in hex: the same file opened again is the same entry.
         var contentHash: String
+        /// The piece in the practice journal: the hash of the file it was first added with (its
+        /// `pieceAdded`), which stays when a re-export changes `contentHash`. Entries kept before
+        /// the journal take their `contentHash`.
+        let pieceID: String
         let addedAt: Date
         var lastOpenedAt: Date
         /// The piece's own practice settings, saved as they change; nil until first saved.
@@ -34,10 +39,15 @@ final class PieceLibrary {
     let folder: URL
     /// Most recently opened first.
     private(set) var entries: [Entry]
+    /// Where the library's changes go in the practice journal, each with the score it brings in;
+    /// nil for nowhere (the default, and in tests that don't look at it). The app sets it at
+    /// launch, before the game reopens anything.
+    @ObservationIgnored var journal: JournalEventRecording?
 
     /// Reads the library in `folder`; nothing is written until a piece is added.
-    init(folder: URL) {
+    init(folder: URL, journal: JournalEventRecording? = nil) {
         self.folder = folder
+        self.journal = journal
         entries = Self.loadIndex(in: folder)
     }
 
@@ -63,6 +73,9 @@ final class PieceLibrary {
     /// - Different bytes from a path an entry was first opened from (the score was edited and
     ///   exported again) replace that entry's copy, keeping its id and settings.
     /// - Anything else is copied in as a new entry.
+    ///
+    /// In the journal, a new entry is a `pieceAdded` and a replaced copy a `pieceRevised`, each
+    /// with the score.
     @discardableResult
     func add(_ url: URL, title: String, now: Date = .now) throws -> Entry {
         let data = try Data(contentsOf: url)
@@ -78,14 +91,19 @@ final class PieceLibrary {
             index = updated
             try write(data, as: entries[index].fileName)
             entries[index].contentHash = hash
+            journal?.recordInJournal(.pieceRevised(PieceRevised(piece: entries[index].pieceID, file: hash, title: title)),
+                                     piece: Self.journalFile(data, hash: hash, fileName: entries[index].fileName))
         } else {
             let id = UUID()
             let fileExtension = url.pathExtension.isEmpty ? "musicxml" : url.pathExtension.lowercased()
             let entry = Entry(id: id, title: title, originalPath: url.path, fileName: "\(id.uuidString).\(fileExtension)",
-                              contentHash: hash, addedAt: now, lastOpenedAt: now, settings: nil)
+                              contentHash: hash, pieceID: hash, addedAt: now, lastOpenedAt: now, settings: nil)
             try write(data, as: entry.fileName)
             entries.insert(entry, at: 0)
             saveIndex()
+            journal?.recordInJournal(.pieceAdded(PieceAdded(piece: hash, title: title, fileName: url.lastPathComponent,
+                                                            libraryID: id, originalPath: url.path)),
+                                     piece: Self.journalFile(data, hash: hash, fileName: entry.fileName))
             return entry
         }
         var entry = entries.remove(at: index)
@@ -103,12 +121,14 @@ final class PieceLibrary {
         saveIndex()
     }
 
-    /// Forgets a piece and deletes its copy. The original file is never touched.
+    /// Forgets a piece and deletes its copy: a `pieceRemoved` in the journal, where its files and
+    /// runs stay. The original file is never touched.
     func remove(_ id: UUID) {
         guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
         let entry = entries.remove(at: index)
         try? FileManager.default.removeItem(at: fileURL(for: entry))
         saveIndex()
+        journal?.recordInJournal(.pieceRemoved(PieceRemoved(piece: entry.pieceID)), piece: nil)
     }
 
     // MARK: - Storage
@@ -122,6 +142,14 @@ final class PieceLibrary {
 
     private func isInLibrary(_ url: URL) -> Bool {
         url.standardizedFileURL.deletingLastPathComponent().path == folder.standardizedFileURL.path
+    }
+
+    /// A score for the journal's `pieces/`, with its copy's extension (`musicxml` should that be
+    /// one the journal doesn't take).
+    private static func journalFile(_ data: Data, hash: String, fileName: String) -> JournalPieceFile {
+        let fileExtension = (fileName as NSString).pathExtension.lowercased()
+        return JournalPieceFile(data: data, hash: hash,
+                                fileExtension: JournalLayout.pieceExtensions.contains(fileExtension) ? fileExtension : "musicxml")
     }
 
     private func write(_ data: Data, as fileName: String) throws {
@@ -151,5 +179,29 @@ final class PieceLibrary {
         let stamp = Int(Date().timeIntervalSince1970)
         try? FileManager.default.moveItem(at: url, to: folder.appendingPathComponent("index-unreadable-\(stamp).json"))
         return []
+    }
+}
+
+extension PieceLibrary.Entry {
+    /// An entry whose piece was first added with this copy: its `pieceID` is its `contentHash`.
+    init(id: UUID, title: String, originalPath: String, fileName: String, contentHash: String, addedAt: Date,
+         lastOpenedAt: Date, settings: Game.PieceSettings?) {
+        self.init(id: id, title: title, originalPath: originalPath, fileName: fileName, contentHash: contentHash,
+                  pieceID: contentHash, addedAt: addedAt, lastOpenedAt: lastOpenedAt, settings: settings)
+    }
+
+    /// Reads an entry from the index. One kept before the journal has no `pieceID`, and takes its
+    /// `contentHash`. (In an extension, so the memberwise initialiser stays.)
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        originalPath = try container.decode(String.self, forKey: .originalPath)
+        fileName = try container.decode(String.self, forKey: .fileName)
+        contentHash = try container.decode(String.self, forKey: .contentHash)
+        pieceID = try container.decodeIfPresent(String.self, forKey: .pieceID) ?? contentHash
+        addedAt = try container.decode(Date.self, forKey: .addedAt)
+        lastOpenedAt = try container.decode(Date.self, forKey: .lastOpenedAt)
+        settings = try container.decodeIfPresent(Game.PieceSettings.self, forKey: .settings)
     }
 }

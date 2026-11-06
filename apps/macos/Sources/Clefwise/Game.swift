@@ -1979,10 +1979,13 @@ final class Game {
     private func pieceContext(for round: PieceRound) -> PieceContext? {
         guard let piece, let part = piecePart else { return nil }
         let options = settings.piece
+        // The piece in the journal, and the exact file practised.
+        let entry = pieceEntryID.flatMap(library.entry(id:))
         return PieceContext(title: piece.title, path: pieceURL?.path ?? "", part: part.name, partIndex: options.part,
                             hand: options.hand.rawValue, order: options.order.rawValue, startBar: options.startBar,
                             oneNotePerChord: options.oneNotePerChord, noteCount: round.notes.count,
-                            measureCount: part.measureCount, chords: options.chords.rawValue, libraryID: pieceEntryID)
+                            measureCount: part.measureCount, chords: options.chords.rawValue, libraryID: pieceEntryID,
+                            id: entry?.pieceID, file: entry?.contentHash, staves: part.staffCount)
     }
 
     /// One `questionShown` per note on screen: notes asked together are logged one by one, with

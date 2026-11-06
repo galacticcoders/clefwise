@@ -1,0 +1,317 @@
+import Foundation
+
+// The practice journal's folder: where it is, making it, and adding files to it without ever
+// changing one. See spec/practice-journal.md, "Where the journal lives", "Layout" and "Principles".
+
+/// Why something couldn't go into the journal, or the journal couldn't be made or found.
+enum JournalError: LocalizedError, Equatable {
+    /// No journal is set, or it can't be found (a disk unplugged, the folder moved out of reach).
+    case missing
+    /// A run file's header has no `run`.
+    case notARun
+    /// A different file is already at `path` in the journal. The journal's copy stays, and the one
+    /// that clashed is left where it was.
+    case clash(path: String)
+    /// A score's bytes don't have the hash it's to be named by.
+    case damagedScore(hash: String)
+    /// A journal can't have this name: empty, hidden, or with a slash or colon in it.
+    case invalidName(String)
+    /// Something that isn't a journal already has the chosen name there.
+    case folderInUse(URL)
+    /// The folder picked to locate the journal doesn't hold `clefwise.json`.
+    case notAJournal(URL)
+
+    var errorDescription: String? {
+        switch self {
+        case .missing: "Clefwise can't find your journal."
+        case .notARun: "The run file doesn't say which run it is."
+        case .clash(let path): "A different file is already in the journal at \(path)."
+        case .damagedScore(let hash): "The score doesn't match its name, \(hash)."
+        case .invalidName: "Give the journal a name without a slash or colon, not starting with a dot."
+        case .folderInUse(let url):
+            "There's already a folder called “\(url.lastPathComponent)” there, with other things in it. Choose another name."
+        case .notAJournal(let url): "“\(url.lastPathComponent)” isn't a Clefwise journal: it has no clefwise.json."
+        }
+    }
+}
+
+/// The practice journal on disk: a folder of plain files the user owns and only ever added to.
+/// Where it is comes only from the defaults, as a path and a bookmark, so a folder moved in Finder
+/// is still found (and the path follows it). Every disk change goes through one lock, so it's safe
+/// to use from any thread: finished runs come from the journal outbox's queue, making and locating
+/// it from the main thread.
+final class PracticeJournal: JournalWriting, @unchecked Sendable {
+    static let shared = PracticeJournal(defaults: .standard)
+
+    /// Where the defaults keep the journal's location. A harness can preset it with
+    /// `defaults write <domain> journalPath -string <folder>`: a path alone is enough.
+    enum Keys {
+        static let path = "journalPath"
+        static let bookmark = "journalBookmark"
+    }
+
+    private let defaults: UserDefaults
+    /// Guards `found` and serialises every change on disk.
+    private let lock = NSLock()
+    /// The folder last found, checked again (one look for `clefwise.json`) before each use.
+    private var found: URL?
+
+    /// `defaults` keeps where the journal is; tests pass their own.
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+    }
+
+    // MARK: - Where it is
+
+    /// The journal's folder; nil while none is set, or when it can't be found.
+    var folder: URL? {
+        lock.withLock { locate() }
+    }
+
+    /// Whether a journal has been set, found or not: without one, the app asks to make it.
+    var isSet: Bool {
+        lastKnownPath != nil
+    }
+
+    /// Where the journal was last known to be, for telling the user when it can't be found.
+    var lastKnownPath: String? {
+        defaults.object(forKey: Keys.path) as? String
+    }
+
+    /// Whether `url` is a journal: it holds `clefwise.json` (or iCloud Drive's placeholder for it,
+    /// when the file isn't downloaded).
+    static func isJournal(_ url: URL) -> Bool {
+        let manager = FileManager.default
+        var isFolder: ObjCBool = false
+        guard manager.fileExists(atPath: url.path, isDirectory: &isFolder), isFolder.boolValue else { return false }
+        return manager.fileExists(atPath: url.appendingPathComponent(JournalLayout.markerName).path)
+            || manager.fileExists(atPath: url.appendingPathComponent(".\(JournalLayout.markerName).icloud").path)
+    }
+
+    /// The name to suggest for a new journal in `parent`: "Clefwise Journal", unless something
+    /// other than a journal already has it there; then "Clefwise Journal 2", 3 and so on.
+    static func suggestedName(in parent: URL) -> String {
+        let base = "Clefwise Journal"
+        for number in 1... {
+            let name = number == 1 ? base : "\(base) \(number)"
+            let url = parent.appendingPathComponent(name, isDirectory: true)
+            if !FileManager.default.fileExists(atPath: url.path) || isJournal(url) { return name }
+        }
+        return base
+    }
+
+    /// The folder kept in the defaults, if it still holds a journal: by its path first (which a
+    /// harness may have set by itself), otherwise by its bookmark, which follows the folder when
+    /// it's moved or renamed (and then the path is updated). Keeps the bookmark pointing where the
+    /// path does. Called with the lock held.
+    private func locate() -> URL? {
+        if let found, Self.isJournal(found) { return found }
+        found = nil
+        guard let path = lastKnownPath else { return nil }
+        let atPath = URL(fileURLWithPath: path, isDirectory: true)
+        let bookmarked = (defaults.object(forKey: Keys.bookmark) as? Data).flatMap(Self.resolve)
+        if Self.isJournal(atPath) {
+            if bookmarked.map({ !Self.isSameFolder($0, atPath) }) ?? true { remember(atPath) }
+            found = atPath
+        } else if let bookmarked, Self.isJournal(bookmarked) {
+            remember(bookmarked)
+            found = bookmarked
+        }
+        return found
+    }
+
+    /// Keeps `folder` as the journal's location: its path, and a bookmark to find it if it moves.
+    private func remember(_ folder: URL) {
+        defaults.set(folder.path, forKey: Keys.path)
+        if let bookmark = try? folder.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
+            defaults.set(bookmark, forKey: Keys.bookmark)
+        } else {
+            defaults.removeObject(forKey: Keys.bookmark)
+        }
+    }
+
+    /// Where a bookmark points now, without asking the user or mounting anything; nil when it
+    /// can't be found.
+    private static func resolve(_ bookmark: Data) -> URL? {
+        var isStale = false
+        return try? URL(resolvingBookmarkData: bookmark, options: [.withoutUI, .withoutMounting], relativeTo: nil,
+                        bookmarkDataIsStale: &isStale)
+    }
+
+    private static func isSameFolder(_ a: URL, _ b: URL) -> Bool {
+        a.resolvingSymlinksInPath().standardizedFileURL.path == b.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    // MARK: - Making and locating it
+
+    /// Makes the journal `name` in `parent` (the folder, then its root files with their exact
+    /// bytes), keeps it as the journal, and returns its folder. If `parent` is a journal itself, or
+    /// already holds one called `name`, that one is kept as it is. A folder called `name` with
+    /// anything else in it isn't used.
+    @discardableResult
+    func create(named name: String, in parent: URL) throws -> URL {
+        try lock.withLock {
+            let folder: URL
+            if let existing = Self.existingJournal(named: name, in: parent) {
+                folder = existing
+            } else {
+                let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty, !name.hasPrefix("."), !name.contains("/"), !name.contains(":") else {
+                    throw JournalError.invalidName(name)
+                }
+                folder = parent.appendingPathComponent(name, isDirectory: true)
+                try Self.makeJournal(at: folder)
+            }
+            remember(folder)
+            found = folder
+            return folder
+        }
+    }
+
+    /// The journal `create(named:in:)` would keep as it is: `parent` when it's a journal itself,
+    /// otherwise a journal called `name` in it; nil when it would make one.
+    static func existingJournal(named name: String, in parent: URL) -> URL? {
+        if isJournal(parent) { return parent }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        let folder = parent.appendingPathComponent(name, isDirectory: true)
+        return isJournal(folder) ? folder : nil
+    }
+
+    /// Keeps `folder`, a journal found again by the user, as the journal.
+    func use(_ folder: URL) throws {
+        try lock.withLock {
+            guard Self.isJournal(folder) else { throw JournalError.notAJournal(folder) }
+            remember(folder)
+            found = folder
+        }
+    }
+
+    /// Makes the folder (or takes an empty one) and writes the root files. `clefwise.json` goes
+    /// last: once it's there, the folder is a journal.
+    private static func makeJournal(at folder: URL) throws {
+        let manager = FileManager.default
+        if manager.fileExists(atPath: folder.path) {
+            guard let contents = try? manager.contentsOfDirectory(atPath: folder.path),
+                  contents.allSatisfy({ $0 == ".DS_Store" }) else { throw JournalError.folderInUse(folder) }
+        }
+        try manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        func order(_ name: String) -> (Int, String) { (name == JournalLayout.markerName ? 1 : 0, name) }
+        for (name, contents) in JournalLayout.rootFiles.sorted(by: { order($0.key) < order($1.key) }) {
+            try add(contents, at: folder.appendingPathComponent(name), named: name)
+        }
+    }
+
+    // MARK: - Adding files
+
+    /// As `JournalWriting.place`. A file already at that path is never replaced: with the same
+    /// bytes, `runFile` just goes; with different ones it throws `JournalError.clash`, and the
+    /// journal outbox moves `runFile` to `Pending/kept/`.
+    func place(runFile: URL, header: RunFileHeader, startedAt: Date) throws {
+        guard let run = header.run else { throw JournalError.notARun }
+        try lock.withLock {
+            guard let folder = locate() else { throw JournalError.missing }
+            let path = JournalLayout.runPath(startedAt: startedAt, run: run)
+            let destination = folder.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            if try Self.move(runFile, toNew: destination) { return }
+            // Already there: the same file placed before (the app stopped before the working file
+            // went), or something gone wrong. Never replace it.
+            guard try Self.sameBytes(runFile, destination) else { throw JournalError.clash(path: path) }
+            try FileManager.default.removeItem(at: runFile)
+        }
+    }
+
+    /// As `JournalWriting.add`, each file written to a temporary name first and then renamed, so
+    /// a reader never sees half of one. An event file already there with different bytes throws
+    /// `JournalError.clash`; a score whose bytes don't have its hash, `JournalError.damagedScore`.
+    func add(event: LoggedEvent, header: RunFileHeader, piece: JournalPieceFile?) throws {
+        var header = header
+        header.event = event.id
+        let contents = try header.encodedLine() + event.encodedLine()
+        try lock.withLock {
+            guard let folder = locate() else { throw JournalError.missing }
+            if let piece { try Self.write(piece, in: folder) }
+            let path = JournalLayout.eventPath(at: event.time, event: event.id)
+            try Self.add(contents, at: folder.appendingPathComponent(path), named: path)
+        }
+    }
+
+    /// Writes the score to `pieces/` unless it's already there. A different file under its name
+    /// is damaged (its bytes don't have the hash it's named by), and the one change to a file the
+    /// format allows is putting a damaged score back to the right bytes.
+    private static func write(_ piece: JournalPieceFile, in folder: URL) throws {
+        guard JournalPieceFile.sha256(of: piece.data) == piece.hash.lowercased() else {
+            throw JournalError.damagedScore(hash: piece.hash)
+        }
+        let destination = folder.appendingPathComponent(JournalLayout.piecePath(hash: piece.hash,
+                                                                                 fileExtension: piece.fileExtension))
+        if let existing = try? Data(contentsOf: destination), existing == piece.data { return }
+        let directory = destination.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let temporary = temporaryURL(in: directory)
+        try writeSynced(piece.data, to: temporary)
+        guard rename(temporary.path, destination.path) == 0 else {
+            let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            try? FileManager.default.removeItem(at: temporary)
+            throw error
+        }
+    }
+
+    /// Writes `contents` as a new file at `destination` (its folders made first): to a temporary
+    /// name beside it, then renamed, so a reader never sees half a file. The same bytes already
+    /// there count as written; different ones are kept, and it throws.
+    private static func add(_ contents: Data, at destination: URL, named path: String) throws {
+        let directory = destination.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let temporary = temporaryURL(in: directory)
+        try writeSynced(contents, to: temporary)
+        if try move(temporary, toNew: destination) { return }
+        try? FileManager.default.removeItem(at: temporary)
+        guard (try? Data(contentsOf: destination)) == contents else { throw JournalError.clash(path: path) }
+    }
+
+    /// Moves `source` to `destination` unless something is already there: renamed when both are
+    /// on one volume, otherwise copied in under a temporary name first and then renamed, and the
+    /// source deleted. Returns false, leaving `source` as it was, when `destination` exists.
+    private static func move(_ source: URL, toNew destination: URL) throws -> Bool {
+        if renamex_np(source.path, destination.path, UInt32(RENAME_EXCL)) == 0 { return true }
+        switch errno {
+        case EEXIST: return false
+        case EXDEV: break
+        case let code: throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+        }
+        let temporary = temporaryURL(in: destination.deletingLastPathComponent())
+        try writeSynced(try Data(contentsOf: source), to: temporary)
+        guard renamex_np(temporary.path, destination.path, UInt32(RENAME_EXCL)) == 0 else {
+            let code = errno
+            try? FileManager.default.removeItem(at: temporary)
+            if code == EEXIST { return false }
+            throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+        }
+        try FileManager.default.removeItem(at: source)
+        return true
+    }
+
+    private static func sameBytes(_ a: URL, _ b: URL) throws -> Bool {
+        try Data(contentsOf: a) == Data(contentsOf: b)
+    }
+
+    /// A hidden name in `directory` that no reader takes for part of the journal.
+    private static func temporaryURL(in directory: URL) -> URL {
+        directory.appendingPathComponent(".clefwise-\(UUID().uuidString).tmp")
+    }
+
+    /// Writes `data` to a new file at `url` and waits for it to reach the disk, so a file renamed
+    /// into the journal afterwards is never there without its bytes.
+    static func writeSynced(_ data: Data, to url: URL) throws {
+        guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+        }
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.write(contentsOf: data)
+        try handle.synchronize()
+    }
+}
