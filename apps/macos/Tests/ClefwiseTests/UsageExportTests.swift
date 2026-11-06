@@ -348,6 +348,20 @@ import Testing
         #expect(try String(contentsOf: top.appendingPathComponent("settings.json"), encoding: .utf8) == "{}\n")
     }
 
+    @Test func aJournalsSavedValuesComeFromItsNamespace() throws {
+        try FileManager.default.createDirectory(at: temporary.url, withIntermediateDirectories: true)
+        let defaults = try defaultsWithStats()
+        let namespace = "journal.6f9619ff-8b86-4011-b42d-00c04fc964ff."
+        defaults.set(try JSONEncoder().encode(["bass.staff": 7]), forKey: namespace + "bestScores")
+        try UsageExport.export(UsageLog(folder: logFolder), to: destination, defaults: defaults, namespace: namespace)
+        let top = try unzip(destination)
+        #expect(try String(contentsOf: top.appendingPathComponent("best-scores.json"), encoding: .utf8)
+                == "{\n  \"bass.staff\" : 7\n}\n")
+        // Nothing saved in the journal's namespace yet: not the values under the plain keys.
+        #expect(try String(contentsOf: top.appendingPathComponent("settings.json"), encoding: .utf8) == "{}\n")
+        #expect(try String(contentsOf: top.appendingPathComponent("note-stats.json"), encoding: .utf8) == "{}\n")
+    }
+
     @Test func replacesAnExistingFile() throws {
         try FileManager.default.createDirectory(at: temporary.url, withIntermediateDirectories: true)
         try Data("an older export".utf8).write(to: destination)

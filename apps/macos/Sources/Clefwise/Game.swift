@@ -541,6 +541,9 @@ final class Game {
     }
 
     @ObservationIgnored private let defaults: UserDefaults
+    /// The prefix of every key this game keeps in `defaults` (`Game.key(_:in:)`): `""` for the
+    /// keys the app has always used, or a journal's own (`JournalRecord.defaultsNamespace`).
+    @ObservationIgnored let namespace: String
     @ObservationIgnored private var noteStats: [String: NoteStat]
     @ObservationIgnored private var bestStreak = 0
     @ObservationIgnored private var roundMisses: [StaffNote: Int] = [:]
@@ -573,16 +576,22 @@ final class Game {
     /// The question on screen, from `questionShown` until it's answered.
     @ObservationIgnored private var questionLog: QuestionLog?
 
-    /// `defaults` is where settings, note stats and best scores are kept, `recorder` where usage
-    /// events go, `library` where opened pieces are kept; tests pass their own. The library has no
-    /// default, so nothing can reach the real one by accident.
-    init(defaults: UserDefaults = .standard, recorder: UsageRecorder = UsageLog.shared, library: PieceLibrary) {
+    /// `defaults` is where settings, note stats and best scores are kept, each under its key in
+    /// `Keys` with `namespace` in front (`Game.key(_:in:)`): the empty namespace keeps the keys the
+    /// app has always used; a journal's own (`JournalRecord.defaultsNamespace`) keeps its values
+    /// apart from every other journal's, and a namespace with nothing saved yet starts from the
+    /// default settings. `recorder` is where usage events go, `library` where opened pieces are
+    /// kept; tests pass their own. The library has no default, so nothing can reach the real one by
+    /// accident.
+    init(defaults: UserDefaults = .standard, namespace: String = "", recorder: UsageRecorder = UsageLog.shared,
+         library: PieceLibrary) {
         self.defaults = defaults
+        self.namespace = namespace
         self.recorder = recorder
         self.library = library
-        settings = Self.load(Settings.self, from: Keys.settings, in: defaults) ?? Settings()
-        noteStats = Self.load([String: NoteStat].self, from: Keys.noteStats, in: defaults) ?? [:]
-        bestScores = Self.load([String: Int].self, from: Keys.bestScores, in: defaults) ?? [:]
+        settings = Self.load(Settings.self, from: Self.key(Keys.settings, in: namespace), in: defaults) ?? Settings()
+        noteStats = Self.load([String: NoteStat].self, from: Self.key(Keys.noteStats, in: namespace), in: defaults) ?? [:]
+        bestScores = Self.load([String: Int].self, from: Self.key(Keys.bestScores, in: namespace), in: defaults) ?? [:]
         settingsAsLogged = JSONValue(encoding: settings)
         recordStatsSnapshotOnce()
         reopenLastPiece()
@@ -1835,12 +1844,12 @@ final class Game {
         // One that ended is the run-file writer's to place; one with no events has nothing to bring back.
         guard !replay.hasEnded, replay.lastEventTime != nil else { return }
         let id = pending.round.uuidString
-        if defaults.object(forKey: Keys.restoringRound) as? String == id || replay.resumedAfterRestoreWithoutAnswer {
+        if defaults.object(forKey: key(Keys.restoringRound)) as? String == id || replay.resumedAfterRestoreWithoutAnswer {
             endInterrupted(pending.round, replay)
             return
         }
         // Written before rebuilding, so that if rebuilding crashes the app, the next launch knows.
-        defaults.set(id, forKey: Keys.restoringRound)
+        defaults.set(id, forKey: key(Keys.restoringRound))
         guard let rebuilt = rebuild(from: replay) else {
             endInterrupted(pending.round, replay)
             return
@@ -1961,8 +1970,8 @@ final class Game {
 
     /// Clears the device's note that `round` is being brought back, if it's still about that round.
     private func forgetRestoring(_ round: UUID) {
-        guard defaults.object(forKey: Keys.restoringRound) as? String == round.uuidString else { return }
-        defaults.removeObject(forKey: Keys.restoringRound)
+        guard defaults.object(forKey: key(Keys.restoringRound)) as? String == round.uuidString else { return }
+        defaults.removeObject(forKey: key(Keys.restoringRound))
     }
 
     /// After a crash, as the round resumes: the question that was on screen, asked again as a new
@@ -2190,11 +2199,14 @@ final class Game {
     }
 
     /// Once per defaults store: the note stats and best scores kept from before there was a log.
+    /// Only under the keys the app has always used (the empty namespace): a journal's own values
+    /// all come after the log began, so there's nothing from before to record, and an empty
+    /// snapshot in the log would hide the real one from the dashboard.
     private func recordStatsSnapshotOnce() {
-        guard defaults.object(forKey: Keys.usageLogStarted) == nil else { return }
+        guard namespace.isEmpty, defaults.object(forKey: key(Keys.usageLogStarted)) == nil else { return }
         recorder.record(.statsSnapshot(StatsSnapshot(reason: "beforeUsageLog", noteStats: noteStats,
                                                      bestScores: bestScores)))
-        defaults.set(Date(), forKey: Keys.usageLogStarted)
+        defaults.set(Date(), forKey: key(Keys.usageLogStarted))
     }
 
     /// One `settingChanged` per saved value that differs from what was last logged, by its dotted
@@ -2398,7 +2410,22 @@ final class Game {
 
     // MARK: - Persistence
 
-    private enum Keys {
+    /// Takes the note stats and best scores worked out from the journal in place of the ones kept
+    /// here, and saves them: they're a cache of the journal, which is the source of truth. Nothing
+    /// else changes, even in a round in progress: it carries on, its answers from
+    /// now on counting on top of the new stats, and a sprint's score is checked against the new
+    /// best scores when it ends. The round's own answers come back into the stats once its run is
+    /// in the journal and it's read again.
+    func apply(projection: JournalProjection) {
+        noteStats = projection.noteStats
+        bestScores = projection.bestScores
+        save(noteStats, as: Keys.noteStats)
+        save(bestScores, as: Keys.bestScores)
+    }
+
+    /// The names `Game` keeps its values under in the defaults, before any namespace
+    /// (`key(_:in:)`). The data export reads `settings`, `noteStats` and `bestScores`.
+    enum Keys {
         static let settings = "settings"
         static let noteStats = "noteStats"
         static let bestScores = "bestScores"
@@ -2409,12 +2436,25 @@ final class Game {
         static let restoringRound = "restoringRound"
     }
 
+    /// The full key in the defaults for `name` (one of `Keys`) in `namespace`: the namespace,
+    /// then the name, as in `journal.<lowercase id>.settings`. The empty namespace gives the name
+    /// itself, the key the app has always used.
+    nonisolated static func key(_ name: String, in namespace: String) -> String {
+        namespace + name
+    }
+
+    /// `name`'s full key in this game's namespace.
+    private func key(_ name: String) -> String {
+        Self.key(name, in: namespace)
+    }
+
     private static func load<T: Decodable>(_ type: T.Type, from key: String, in defaults: UserDefaults) -> T? {
         defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(type, from: $0) }
     }
 
-    private func save<T: Encodable>(_ value: T, as key: String) {
-        defaults.set(try? JSONEncoder().encode(value), forKey: key)
+    /// Saves `value` under `name` (one of `Keys`) in this game's namespace.
+    private func save<T: Encodable>(_ value: T, as name: String) {
+        defaults.set(try? JSONEncoder().encode(value), forKey: key(name))
     }
 }
 

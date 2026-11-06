@@ -6,17 +6,18 @@ import Foundation
 
 /// Note stats and best scores folded from a journal's runs, starting from its opening balances,
 /// exactly as `Game` keeps them as it goes.
-struct JournalProjection: Equatable {
+struct JournalProjection: Equatable, Sendable {
     /// As `Game` saves them (`noteStats`), by `statKey`.
     var noteStats: [String: NoteStat] = [:]
     /// As `Game` saves them (`bestScores`), by `Game.bestScoreKey(for:)`.
     var bestScores: [String: Int] = [:]
     /// Runs folded in.
     var runsRead = 0
-    /// Run files left out: not complete yet (still arriving, no `roundEnded` last), or in a format
-    /// newer than this version reads.
+    /// Record files left out, runs and event files alike (`JournalReader.Contents.skippedFiles`):
+    /// not complete yet (still arriving, no `roundEnded` last), or in a format newer than this
+    /// version reads.
     var runsSkipped = 0
-    /// Lines in the files read that didn't parse, headers included.
+    /// Lines that didn't parse in the files folded in (`JournalReader.Contents.unreadableLines`).
     var unreadableLines = 0
 
     /// The note stats key, as `Game` keeps them: "treble.F♯4", the clef and the pitch's name as
@@ -27,55 +28,12 @@ struct JournalProjection: Equatable {
 
     // MARK: - From a journal
 
-    /// Reads the journal in `folder`: its opening balances (`statsSnapshot` event files, merged by
-    /// `apply(_:)` in time order), then its runs by start time, then id. Files whose names don't
-    /// fit the layout are ignored, as are runs not complete yet and files in a newer format.
+    /// Reads the journal in `folder` from scratch with a `JournalReader` and folds it with
+    /// `init(contents:)`. Files whose names don't fit the layout are ignored, as are runs not
+    /// complete yet and files in a newer format. An app that reads the journal again and again
+    /// keeps its own `JournalReader`, which then reads only the files it hasn't read yet.
     static func read(journal folder: URL) -> JournalProjection {
-        var projection = JournalProjection()
-
-        var snapshots: [(time: Date, id: String, snapshot: StatsSnapshot)] = []
-        for (path, file) in records(in: JournalLayout.eventsFolder, of: folder) {
-            guard case .event(_, let id) = file else { continue }
-            let read = RunFile.read(folder.appendingPathComponent(path))
-            projection.unreadableLines += read.unreadableLines
-            guard let header = read.header, header.format <= RunFileHeader.currentFormat,
-                  let line = read.events.first, case .statsSnapshot(let snapshot) = line.event else { continue }
-            snapshots.append((line.time, id.uuidString.lowercased(), snapshot))
-        }
-        for snapshot in snapshots.sorted(by: { ($0.time, $0.id) < ($1.time, $1.id) }) {
-            projection.apply(snapshot.snapshot)
-        }
-
-        var runs: [(startedAt: Date, id: String, events: [LoggedEvent])] = []
-        for (path, file) in records(in: JournalLayout.runsFolder, of: folder) {
-            guard case .run(let named, let id) = file else { continue }
-            let read = RunFile.read(folder.appendingPathComponent(path))
-            projection.unreadableLines += read.unreadableLines
-            guard let header = read.header, header.format <= RunFileHeader.currentFormat,
-                  case .roundEnded = read.events.last?.event else {
-                projection.runsSkipped += 1
-                continue
-            }
-            // The start to the millisecond, from its `roundStarted`; the name has it to the second.
-            let startedAt = read.events.first { if case .roundStarted = $0.event { true } else { false } }?.time ?? named
-            runs.append((startedAt, id.uuidString.lowercased(), read.events))
-        }
-        for run in runs.sorted(by: { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) }) {
-            projection.apply(run: run.events)
-        }
-        return projection
-    }
-
-    /// The relative paths of the files under `subfolder` of `journal` that fit the layout, with
-    /// what they are.
-    private static func records(in subfolder: String, of journal: URL) -> [(String, JournalLayout.File)] {
-        let root = journal.appendingPathComponent(subfolder, isDirectory: true)
-        guard let paths = FileManager.default.enumerator(atPath: root.path) else { return [] }
-        return paths.compactMap { item in
-            guard let relative = item as? String else { return nil }
-            let path = "\(subfolder)/\(relative)"
-            return JournalLayout.file(at: path).map { (path, $0) }
-        }
+        JournalProjection(contents: JournalReader(folder: folder).read())
     }
 
     // MARK: - From events
@@ -154,5 +112,21 @@ struct JournalProjection: Equatable {
     private static func settings(from value: JSONValue) -> Game.Settings? {
         guard let data = try? JSONEncoder().encode(value) else { return nil }
         return try? JSONDecoder().decode(Game.Settings.self, from: data)
+    }
+}
+
+// In an extension, so the memberwise initialiser and `init()` stay.
+extension JournalProjection {
+    /// Folds what a `JournalReader` read: the opening balances (`contents.snapshots`, merged by
+    /// `apply(_:)` in time order), then the runs (`contents.runs`, by start time, then id).
+    /// `runsSkipped` takes `contents.skippedFiles`, and `unreadableLines` its `unreadableLines`.
+    init(contents: JournalReader.Contents) {
+        self.init()
+        for event in contents.snapshots {
+            if case .statsSnapshot(let snapshot) = event.event { apply(snapshot) }
+        }
+        for run in contents.runs { apply(run: run.events) }
+        runsSkipped = contents.skippedFiles
+        unreadableLines = contents.unreadableLines
     }
 }

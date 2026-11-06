@@ -17,8 +17,8 @@ and the rest is a projection of them.
   or be shared with Syncthing, and every device that sees it has the same practice history (see
   Folder sync). Git may come later as an option (see Optional git).
 - **No accounts.** There's no sign-up and no Clefwise server.
-- **One journal per person.** Each person keeps their own. Several people on one computer, each
-  with their own journal, will come later.
+- **One journal per person.** Each person keeps their own, and one computer can hold several (see
+  Several journals).
 
 ## Principles
 
@@ -205,6 +205,24 @@ The journal leaves these out:
 - **Projections:** the note stats, best scores and dashboard data worked out from the files. They
   can be cached on the device, but the cache must be rebuildable at any time from the files alone.
 
+## Several journals
+
+A device may know several journals, one per person: for example a family sharing a Mac, each
+practising in their own. The app works on one journal at a time, and switches between them only
+between rounds.
+
+- **Journals don't mix.** Runs, pieces and opening balances count only in their own journal, and
+  each journal has its own piece library on the device.
+- **What a device keeps about a journal stays on that device,** apart from what it keeps about any
+  other: its settings and each piece's own practice settings, its projections (see What stays on
+  each device), and its records waiting to be placed (see Writing a run). A journal new to the
+  device starts with the default settings.
+- **The device knows each journal by a local id** of its own, which never goes in the journal. The
+  device id in headers is the same whichever journal the device writes to.
+- **The old usage log is brought into only one journal:** the first one the device makes or uses
+  (see Bringing in the old usage log). Its practice is one person's; a journal added later starts
+  without it.
+
 ## Folder sync
 
 Any service that syncs a folder can carry a journal: iCloud Drive, Dropbox, Syncthing, a network
@@ -240,7 +258,8 @@ Readers still have to expect what sync services do:
 
 ## Bringing in the old usage log
 
-Each device brings in its existing log once, when its journal is made. The log itself is only
+Each device brings in its existing log once, when its first journal is made (into that journal
+only: see Several journals). The log itself is only
 read, never changed.
 - **Runs:** its day files are split into run files using the rules above: everything a session
   logged from a `roundStarted` to its `roundEnded`. Each header comes from its session's
@@ -316,7 +335,6 @@ one key. An HTTPS token is the alternative.
 
 ## Later
 
-- **Several journals on one computer,** one per person, and switching between them.
 - **Encryption,** as in `pass`: each file's contents encrypted, compressed first, because git
   shrinks run files about five times and encrypted bytes don't shrink. The layout and names stay as
   they are, so names still show when practice happened, not what it was. `clefwise.json` can't

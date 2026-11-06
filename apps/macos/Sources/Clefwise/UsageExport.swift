@@ -6,9 +6,11 @@ import Foundation
 enum UsageExport {
     /// Writes everything in `log` to a zip at `destination`, replacing any file there. Reads the
     /// whole log, which after years of use takes a few seconds: call it off the main thread.
-    /// `defaults` holds the saved settings and stats, `libraryFolder` the piece library (nil
-    /// writes an empty list); local-time columns are in `timeZone`.
-    static func export(_ log: UsageLog, to destination: URL, defaults: UserDefaults = .standard,
+    /// `defaults` holds the saved settings and stats, under `Game`'s keys in `namespace` (a
+    /// journal's `JournalRecord.defaultsNamespace`; `""` for the keys the app has always used),
+    /// `libraryFolder` the piece library (nil writes an empty list); local-time columns are in
+    /// `timeZone`.
+    static func export(_ log: UsageLog, to destination: URL, defaults: UserDefaults = .standard, namespace: String = "",
                        libraryFolder: URL? = nil, timeZone: TimeZone = .current) throws {
         log.flush()
         let fileManager = FileManager.default
@@ -33,7 +35,7 @@ enum UsageExport {
         let counts = try step("write the tables") { try writeTables(from: copies, to: top, times: times) }
         try step("write the saved settings and stats") {
             for (key, name) in savedValues {
-                try writeSaved(key, from: defaults, to: top.appendingPathComponent(name))
+                try writeSaved(Game.key(key, in: namespace), from: defaults, to: top.appendingPathComponent(name))
             }
         }
         try step("write the piece library") {
@@ -66,9 +68,10 @@ enum UsageExport {
         }
     }
 
-    /// The UserDefaults keys `Game` saves under (its private `Keys`), and the files they go to.
-    private static let savedValues = [("settings", "settings.json"), ("noteStats", "note-stats.json"),
-                                      ("bestScores", "best-scores.json")]
+    /// The names `Game` saves under in the defaults (`Game.Keys`, before the namespace), and the
+    /// files they go to.
+    private static let savedValues = [(Game.Keys.settings, "settings.json"), (Game.Keys.noteStats, "note-stats.json"),
+                                      (Game.Keys.bestScores, "best-scores.json")]
 
     /// Runs one step, so a failure says which step it was.
     private static func step<T>(_ name: String, _ work: () throws -> T) throws -> T {

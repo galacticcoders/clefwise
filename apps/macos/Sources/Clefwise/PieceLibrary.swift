@@ -131,6 +131,45 @@ final class PieceLibrary {
         journal?.recordInJournal(.pieceRemoved(PieceRemoved(piece: entry.pieceID)), piece: nil)
     }
 
+    // MARK: - From the journal
+
+    /// Brings the library up to date with the piece events in the journal in `journalFolder`
+    /// (`contents.pieceEvents`, as a `JournalReader` read them): pieces added, revised or removed on
+    /// another device, or on this one in an earlier library. Nothing is written to the journal:
+    /// what this does records no `pieceAdded`, `pieceRevised` or `pieceRemoved` (`journal` isn't
+    /// called).
+    ///
+    /// - **The journal's state:** each piece's events, folded in time order (the order of
+    ///   `contents.pieceEvents`), the latest winning: a `pieceAdded` makes the piece present, with
+    ///   its file (`PieceAdded.piece`) and title; a `pieceRevised` gives it a new file and title; a
+    ///   `pieceRemoved` makes it absent. A piece matches the entry with its id as `Entry.pieceID`,
+    ///   compared in lowercase.
+    /// - **Added:** present in the journal and not here: a new entry, its copy written from the
+    ///   journal's `pieces/<hash>.<ext>` (whichever of `JournalLayout.pieceExtensions` is there),
+    ///   checked against the hash. Its `id` is the `libraryID` of its `pieceAdded`, unless that's
+    ///   missing or already taken here; `title` the latest; `originalPath` the `pieceAdded`'s
+    ///   `originalPath`, failing that its `fileName`; `pieceID` the piece's id; `contentHash` the
+    ///   file's hash; `fileName` `<id>.<ext>`, as `add` names copies; `addedAt` and `lastOpenedAt`
+    ///   the `pieceAdded`'s `time`; `settings` nil (a piece's own settings stay on each device).
+    /// - **Revised:** present in both, with another file or title in the journal: the copy gets the
+    ///   new file's bytes (checked the same way) and the entry its `contentHash` and `title`. It
+    ///   keeps its id, file name, settings and dates.
+    /// - **Removed:** absent in the journal and here: the entry leaves the library and its copy is
+    ///   deleted.
+    /// - **A score not there yet,** or not matching its hash: that piece's change waits, and the
+    ///   next call tries again (a `pieceAdded` can arrive before its score).
+    /// - **Pieces with no events in the journal** are left alone: for example one added here whose
+    ///   `pieceAdded` is still on its way.
+    /// - **Changes made here win while they're on their way:** an event older than this library's
+    ///   own last change to that piece (adding, revising or removing it here) isn't applied, so the
+    ///   journal's older state doesn't undo a change still waiting to go in. The library keeps what
+    ///   it needs for that beside its index.
+    /// - Calling it again with the same contents changes nothing. The index is saved once, if
+    ///   anything changed.
+    func adopt(from contents: JournalReader.Contents, journalFolder: URL) {
+        // C2
+    }
+
     // MARK: - Storage
 
     private var indexURL: URL { Self.indexURL(in: folder) }
