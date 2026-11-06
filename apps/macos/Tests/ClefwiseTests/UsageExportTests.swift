@@ -413,3 +413,94 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: nowhere.path))
     }
 }
+
+// MARK: - Rounds that came back after a crash
+
+extension UsageExportTests {
+    /// One round crashes and comes back at the next launch, so it spans two sessions; it belongs to
+    /// the one it started in. Another crashes and can't come back: a third launch ends it as
+    /// `interrupted`, timed at its last event.
+    @Test func aRoundThatCameBackBelongsToTheSessionItStartedIn() throws {
+        try FileManager.default.createDirectory(at: temporary.url, withIntermediateDirectories: true)
+        let clock = UsageTestClock(start)
+        let restored = UUID(), interrupted = UUID()
+        let questions = (0..<5).map { _ in UUID() }
+        func launch() -> UsageLog {
+            let log = UsageLog(folder: logFolder, clock: { clock.now }, timeZone: bucharest)
+            log.record(.appLaunched(AppLaunched(appVersion: "0.2.0", build: "8", osVersion: "26.5", model: "Mac15,12",
+                                                locale: "en_GB", timeZone: "Europe/Bucharest", screen: nil)))
+            return log
+        }
+        func shown(_ round: UUID, _ number: Int, index: Int) -> UsageEvent {
+            .questionShown(QuestionShown(round: round, question: questions[number], index: index, clef: "treble",
+                                         pitch: LoggedPitch(Pitch(.c, 5)), written: LoggedPitch(Pitch(.c, 5)), position: 5,
+                                         keyFifths: 0, printedAccidental: nil, octaveShift: 0, pieceNote: nil, pickChance: 0.1,
+                                         naming: "letters", input: "buttons", hintsVisible: false, keyNamesVisible: false))
+        }
+        func answer(_ round: UUID, _ number: Int, score: Int) -> UsageEvent {
+            .answerGiven(AnswerGiven(round: round, question: questions[number], responseMs: 1000, source: .click, letter: "C",
+                                     accidental: 0, name: "C", pitch: nil, correct: true, wrongOctave: nil, keystrokes: [],
+                                     scoreAfter: score, streakAfter: score))
+        }
+        let practice = settings { $0.mode = .practice }
+
+        let first = launch()
+        first.record(.roundStarted(RoundStarted(round: restored, via: .button, settings: practice, keyFifths: 0, piece: nil)))
+        first.record(shown(restored, 0, index: 0))
+        clock.advance(2)
+        first.record(answer(restored, 0, score: 1))
+        first.record(shown(restored, 1, index: 1))
+        first.flush()
+
+        clock.advance(3600)
+        let second = launch()
+        second.record(.roundRestored(RoundRestored(round: restored, activeMs: 2_000, unansweredQuestion: questions[1])))
+        clock.advance(5)
+        second.record(.roundResumed(RoundResumed(round: restored, question: nil, via: .button, pausedMs: 5_000)))
+        second.record(shown(restored, 2, index: 2))
+        clock.advance(1)
+        second.record(answer(restored, 2, score: 2))
+        second.record(.roundEnded(RoundEnded(round: restored, reason: .stopped, durationMs: 3_000, pausedMs: 5_000, score: 2,
+                                             attempts: 2, bestStreak: 2, averageResponseMs: 1000, bestScore: nil,
+                                             isNewBest: false, notesToReview: [])))
+        clock.advance(10)
+        second.record(.roundStarted(RoundStarted(round: interrupted, via: .key, settings: practice, keyFifths: 0, piece: nil)))
+        second.record(shown(interrupted, 3, index: 0))
+        clock.advance(1)
+        second.record(answer(interrupted, 3, score: 1))
+        second.record(shown(interrupted, 4, index: 1))
+        let lastEvent = clock.now
+        second.flush()
+
+        clock.advance(7200)
+        let third = launch()
+        var end = RoundEnded(round: interrupted, reason: .interrupted, durationMs: 1_000, score: 1, attempts: 1, bestStreak: 1,
+                             averageResponseMs: 1000, bestScore: nil, isNewBest: false, notesToReview: [])
+        end.recordedAt = clock.now
+        third.record(.roundEnded(end), at: lastEvent)
+        try UsageExport.export(third, to: destination, defaults: InMemoryDefaults(), timeZone: bucharest)
+        let top = try unzip(destination)
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let rounds = try table(top.appendingPathComponent("rounds.csv")).rows
+        #expect(rounds.count == 2)
+        let back = try #require(rounds.first { $0["round"] == restored.uuidString })
+        #expect(back["session"] == first.session.uuidString && back["startTime"] == iso.string(from: start))
+        #expect(back["restores"] == "1" && back["answers"] == "2" && back["endReason"] == "stopped")
+        #expect(back["durationMs"] == "3000" && back["pausedMs"] == "5000" && back["endRecordedTime"] == "")
+        let lost = try #require(rounds.first { $0["round"] == interrupted.uuidString })
+        #expect(lost["session"] == second.session.uuidString && lost["restores"] == "0")
+        #expect(lost["endReason"] == "interrupted" && lost["endTime"] == iso.string(from: lastEvent))
+        #expect(lost["endRecordedTime"] == iso.string(from: clock.now) && lost["answers"] == "1")
+
+        let sessions = try table(top.appendingPathComponent("sessions.csv")).rows
+        let bySession = Dictionary(uniqueKeysWithValues: sessions.compactMap { row in row["session"].map { ($0, row) } })
+        let launches = [first, second, third].map { bySession[$0.session.uuidString] }
+        #expect(launches.map { $0?["rounds"] } == ["1", "1", "0"])
+        #expect(launches.map { $0?["restoredRounds"] } == ["0", "1", "0"])
+        #expect(launches.map { $0?["answers"] } == ["1", "2", "0"])
+        // The third launch starts at its launch, not at the earlier time its round end is timed at.
+        #expect(launches[2]?["launchTime"] == iso.string(from: clock.now))
+    }
+}

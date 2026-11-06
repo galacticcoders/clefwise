@@ -445,8 +445,8 @@ extension UsageExport {
         | Column | Meaning |
         |---|---|
         | `startLocalTime`, `startTime` | When the round started. |
-        | `endLocalTime`, `endTime` | When it ended; empty if no `roundEnded` was logged (the app crashed, or the round is still going). |
-        | `session`, `round` | Ids, as in the log. |
+        | `endLocalTime`, `endTime` | When it ended; empty if no `roundEnded` was logged (the app crashed, or the round is still going). An `interrupted` round ends at its last event. |
+        | `session`, `round` | Ids, as in the log. A round that came back after a crash spans two sessions: `session` is the one it started in. |
         | `via` | What started it. |
         | `mode`, `clefChoice`, `range`, `addsAccidentals`, `naming`, `answerInput` | Settings at the start. `range` by its short name, as best scores key it (`staff`, `below2+staff+above2`). |
         | `keySetting` | The key setting: a fixed key in fifths, or `random`. |
@@ -455,7 +455,9 @@ extension UsageExport {
         | `pieceTitle`, `piecePart`, `pieceHand`, `pieceOrder`, `pieceStartBar`, `pieceOneNotePerChord`, `pieceNotes` | Piece rounds only: as in `roundStarted.piece` (`pieceNotes` is `noteCount`). |
         | `pieceChords` | Piece rounds only: `piece.chords`, or for rounds logged before it existed `topOrBottom` or `eachNote` from `oneNotePerChord`. |
         | `pieceLibraryID` | Piece rounds only: `piece.libraryID`, the piece's entry in the piece library, which tells pieces with the same title apart; empty for rounds logged before the library. |
-        | `endReason`, `durationMs`, `pausedMs`, `score`, `attempts`, `bestStreak`, `averageResponseMs`, `bestScore`, `isNewBest` | From `roundEnded`. |
+        | `endReason`, `durationMs`, `pausedMs`, `score`, `attempts`, `bestStreak`, `averageResponseMs`, `bestScore`, `isNewBest` | From `roundEnded`. The time between a crash and the round coming back counts in neither `durationMs` nor `pausedMs`. |
+        | `endRecordedTime` | `recordedAt` from `roundEnded`: for an `interrupted` round, when a later launch wrote its end. Empty otherwise. |
+        | `restores` | How many times the round came back after a crash (`roundRestored`). |
         | `accuracy` | `score / attempts`, 0–1. |
         | `notesToReview` | Space-separated. |
         | `answers` | `answerGiven` events logged for the round; equals `attempts` unless lines are missing. |
@@ -472,6 +474,7 @@ extension UsageExport {
         | `appVersion`, `build`, `osVersion`, `model`, `locale`, `timeZone`, `systemAppearance` | From `appLaunched`. |
         | `events` | Events logged. |
         | `rounds` | Rounds started. |
+        | `restoredRounds` | Rounds that came back after a crash in this session (`roundRestored`); they count under `rounds` in the session they started in. |
         | `answers`, `correct`, `accuracy` | Answers given, how many were right, and the share right (0–1). |
 
         ## Loading the data

@@ -145,6 +145,7 @@ private struct Analysis {
             let index = round(start.round)
             rounds[index].started = logged.time
             rounds[index].start = start
+            rounds[index].clock = RoundClock(time: logged.time, activeMs: 0, running: true)
             if let piece = start.piece, let staves = partStaves[piece.path], staves.indices.contains(piece.partIndex) {
                 rounds[index].singleStaff = staves[piece.partIndex] == 1
             }
@@ -152,6 +153,18 @@ private struct Analysis {
             questions[question.question] = WaitingQuestion(shown: question, stepsFromPrevious: stepsFromPrevious(to: question))
         case .answerGiven(let answer):
             add(answer, at: logged.time)
+        case .roundPaused(let pause):
+            rounds[round(pause.round)].clock = RoundClock(time: logged.time, activeMs: pause.activeMs, running: false)
+        case .roundResumed(let resume):
+            let index = round(resume.round)
+            rounds[index].clock = rounds[index].clock.map { RoundClock(time: logged.time, activeMs: $0.activeMs, running: true) }
+        case .roundRestored(let restore):
+            // Back after a crash, paused: the time since its last event counts for nothing. The
+            // question left on screen is asked again as a new one, so it never gets an answer, and
+            // the new one doesn't follow on from it.
+            rounds[round(restore.round)].clock = RoundClock(time: logged.time, activeMs: restore.activeMs, running: false)
+            if let question = restore.unansweredQuestion { questions[question] = nil }
+            lastShown[restore.round] = nil
         case .roundEnded(let end):
             rounds[round(end.round)].end = end
         case .pieceOpened(let opened):
@@ -177,7 +190,9 @@ private struct Analysis {
         let index = round(answer.round)
         rounds[index].answers += 1
         if answer.correct { rounds[index].correct += 1 }
-        rounds[index].lastAnswer = max(rounds[index].lastAnswer ?? time, time)
+        if let active = rounds[index].clock?.activeMs(at: time) {
+            rounds[index].activeMsAtLastAnswer = max(rounds[index].activeMsAtLastAnswer ?? active, active)
+        }
 
         // A question has one answer, so it can go.
         guard let waiting = questions.removeValue(forKey: answer.question) else { return }
@@ -604,7 +619,8 @@ private struct PieceTally {
     }
 }
 
-/// A round as the log tells it: its start and end (either may be missing) and its answers.
+/// A round as the log tells it: its start and end (either may be missing) and its answers. A round
+/// that came back after a crash spans two sessions; it belongs to the one it started in.
 private struct RoundRecord {
     let id: UUID
     var started: Date?
@@ -612,15 +628,32 @@ private struct RoundRecord {
     var end: RoundEnded?
     /// Every `answerGiven` for it, for a round that never ended.
     var answers = 0, correct = 0
-    var lastAnswer: Date?
+    /// The round time as of its latest start, pause, resume or restore; nil before its start.
+    var clock: RoundClock?
+    /// The round time at its last answer, for a round that never ended.
+    var activeMsAtLastAnswer: Int?
     var hasAnswerInClef = false
     var singleStaff = false
 
-    /// From `roundEnded`; a round that never ended (the app crashed) runs to its last answer.
+    /// From `roundEnded`; a round that never ended (the app crashed, or it's still going) runs to
+    /// its last answer, pauses left out, and the time before it came back after a crash too.
     var durationMs: Int? {
         if let end { return end.durationMs }
-        guard let started, let lastAnswer else { return nil }
-        return max(0, Int((lastAnswer.timeIntervalSince(started) * 1000).rounded()))
+        guard started != nil else { return nil }
+        return activeMsAtLastAnswer
+    }
+}
+
+/// A round's time as of one of its events: the round time then, and whether it ran on from there.
+private struct RoundClock {
+    let time: Date
+    let activeMs: Int
+    let running: Bool
+
+    /// The round time at `later`.
+    func activeMs(at later: Date) -> Int {
+        guard running else { return activeMs }
+        return activeMs + max(0, Int((later.timeIntervalSince(time) * 1000).rounded()))
     }
 }
 
