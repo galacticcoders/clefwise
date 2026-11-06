@@ -174,6 +174,13 @@ extension UsageExport {
         | `pausedMs` | How long the round was paused while the question was up (absent when it wasn't). |
         | `group`, `groupSize` | For notes asked together: as in their `questionShown`. Absent for a note answered on its own. |
 
+        **Typing one note.** Since 2026-11-06 no Return is needed when notes can be sharp or flat: a
+        right name is taken the moment it's typed (`fa` for Fa, though a ♯ could have followed), a
+        wrong one is judged at once, and only the right letter typed without its sign (`fa` for
+        Fa♯) waits for the sign, or for Return, which answers it as typed. Before, every whole name
+        that could still take a ♯ or ♭ waited for Return, so typed `responseMs` in those setups
+        drops by about one Return press from that day.
+
         **Notes asked together.** With `piece.chords` `together`, every note struck at one moment
         (in the staves read; tied-over notes aren't asked) is one question, answered with one name
         per note in any order, or on the piano one key per note (notes sounding the same key share

@@ -53,10 +53,11 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
     octave wrong.
   - *Keyboard*: type the note's name in the current naming system (`c`, `sol`, `dha`); it
     answers as soon as a whole name is typed. Add `#` for sharp or `b` for flat (`f#`, `sib`;
-    sargam `reb` = komal Re, `ma#` = tivra Ma). A name that could still take a sign (`f`) waits
-    for Return. Keys that can't continue any name are ignored with a shake, and Backspace fixes
-    typos; neither counts as a miss. Any octave counts. During a round every letter types, so H
-    and M only work as shortcuts between rounds.
+    sargam `reb` = komal Re, `ma#` = tivra Ma). No Return needed: a right name goes in at once and
+    a wrong one is marked at once; only the right letter typed without its sign (`f` for F♯)
+    waits for the sign (Return answers it as typed). Keys that can't continue any name are
+    ignored with a shake, and Backspace fixes typos; neither counts as a miss. Any octave counts.
+    During a round every letter types, so H and M only work as shortcuts between rounds.
 
   Each answer method, key and accidentals setting keeps its own best scores.
 - A correct answer plays the note. A miss shows the note in red with its name and highlights the
