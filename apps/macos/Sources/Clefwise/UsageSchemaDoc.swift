@@ -60,7 +60,7 @@ extension UsageExport {
         | `id` | This event's own id. |
         | `time` | When it happened (UTC). |
         | `session` | One id per app launch. |
-        | `sequence` | Order within the session, from 0. |
+        | `sequence` | Order within the session, from 0. Numbers can be skipped: they were taken by events kept only in the practice journal, such as `pieceAdded`. |
 
         Optional fields without a value are left out of the line.
 
@@ -380,7 +380,10 @@ extension UsageExport {
         Every piece opened, most recently opened first: `id` (the `libraryID` in the log),
         `title`, `originalPath` (where it was first opened from, the `path` in the log),
         `fileName` (Clefwise's own copy, in Application Support/Clefwise/Pieces), `contentHash`
-        (SHA-256 of the copy), `addedAt`, `lastOpenedAt`, and `settings`, the piece's own practice
+        (SHA-256 of the copy), `pieceID` (the SHA-256 of the file the piece was first added with:
+        its id in the practice journal, as `roundStarted.piece.id`; it stays when a score exported
+        again changes `contentHash`; absent in entries saved before the journal, where it's
+        `contentHash`), `addedAt`, `lastOpenedAt`, and `settings`, the piece's own practice
         settings as under `piece` in Settings (absent until first saved). A piece removed from the
         list is gone from here, but its events stay in the log.
 

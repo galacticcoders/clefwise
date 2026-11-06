@@ -26,6 +26,10 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
     Resume (or Space again). Paused time doesn't count towards the sprint, your response times
     or your practice time. Switching to another app mid-round pauses it too; it waits for you
     to resume.
+  - If Clefwise closes unexpectedly mid-round (a crash, a force quit, a flat battery), the round
+    comes back paused where it was at the next launch, with the note that was on screen. If it
+    closes again once you carry on, before your next answer, the round ends there. Quitting (⌘Q)
+    ends a round as before.
 - Pick the **notes** on the start panel, under the staff: tick any mix of *Above the staff*,
   *On the staff* (lines and spaces, the default) and *Below the staff*. *Ledger lines* (1 to 5)
   sets how far above and below go: one line adds middle C and friends below the treble staff.
@@ -147,12 +151,33 @@ everything on the page follows that choice.
 Every chart has a **Table** view with the numbers. The dashboard refreshes when a round ends and
 can stay open beside the game.
 
+## Your practice journal
+
+Clefwise keeps your practice in a *practice journal*: a folder of plain files that's yours, the
+way Obsidian keeps notes in a folder. There's no account and no Clefwise server.
+
+- **Where:** at first launch Clefwise asks for the journal's name and place (by default
+  `~/Documents/Clefwise Journal`). Back it up or sync it however you like: keep it in iCloud Drive
+  or Dropbox, or share it with Syncthing. You can move or rename it in Finder.
+- **What's in it:** each finished practice run is one file in `runs/<year>/<month>/` (its lines
+  from the usage log, below). Your pieces go in `pieces/`, named by their SHA-256, and changes to
+  the list in `events/`. Files are only ever added, never changed. A run with no answers gets no
+  file.
+- **Practice so far:** when the journal is made, your usage log and pieces so far are copied in.
+- **File → Show Journal in Finder** opens it. If Clefwise can't find it (a disk unplugged, the
+  folder moved out of reach), it offers **Locate…** or **Create New…**; finished runs wait on your
+  Mac until it's back.
+- For now the dashboard, best scores and your pieces still come from the app's own data; the
+  journal keeps the same history beside it. The format is in
+  [spec/practice-journal.md](../../spec/practice-journal.md).
+
 ## Your usage data
 
 Everything you do is recorded locally for analysing your progress: every question and answer
 (note, clef, key, response time in ms, how you answered, each keystroke with its timing), every
 round with its settings and result, settings changes, pieces opened, and app sessions (launch,
-quit, time the app was in front). Nothing leaves your Mac.
+quit, time the app was in front). Nothing leaves your Mac, unless you keep your practice journal
+in a synced folder.
 
 - Stored as one JSON Lines file per day in `~/Library/Application Support/Clefwise/Usage/`,
   only ever appended to.
@@ -179,6 +204,7 @@ Sources/Clefwise/
   PianoKeyboard.swift piano answer input
   TypingPad.swift     keyboard (typing) answer input
   Game.swift          round logic (random and piece rounds), adaptive note picking, persistence
+  RoundReplay.swift   a round as its run file tells it, to bring it back after a crash
   Music.swift         pitches, accidentals, key signatures, clefs, ranges, naming systems
   Song.swift          a piece read from MusicXML: notes to ask, and every bar as drawn
   MusicXML.swift      MusicXML / .mxl importer
@@ -190,6 +216,9 @@ Sources/Clefwise/
   Dashboard/          the Progress window: ProgressAnalyzer turns the usage log into a
                       ProgressReport; ProgressStore loads it off the main thread; DashboardView
                       and one file per section draw it (palette and card chrome in DashboardTheme)
+  Journal/            the practice journal: run files and their writer, the folder, its first-launch
+                      sheet, bringing in the old log (LogImport), rebuilding stats from it
+                      (JournalProjection)
   Synth.swift         tiny additive synth for note playback
   Theme.swift         colors
 Tests/ClefwiseTests/  Swift Testing tests (`swift test`); the MusicXML test scores they read are
