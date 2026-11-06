@@ -17,6 +17,8 @@ struct ClefwiseApp: App {
                 }
                 .background(WindowSizeRecorder(recorder: game.recorder))
                 .background(WindowReader { appDelegate.mainWindow = $0 })
+                // Asks for a journal at first launch, or says when it can't be found.
+                .journalSetup(appDelegate.journalSetup)
         }
         .defaultSize(width: 1000, height: 780)
         .windowResizability(.contentMinSize)
@@ -32,6 +34,8 @@ struct ClefwiseApp: App {
                 Button("Export Usage Data…") { UsageData.export() }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                 Button("Show Usage Data in Finder") { UsageData.showInFinder() }
+                Button("Show Journal in Finder") { appDelegate.journalSetup.showInFinder() }
+                    .disabled(appDelegate.journalSetup.folder == nil)
             }
             ProgressCommands(game: game)
             AppearanceCommands(game: game)
@@ -149,6 +153,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Kept for the app's life, so reopening the Progress window shows the last numbers while it
     /// reads the log again.
     let progressStore: ProgressStore
+    /// The practice journal in the window: the sheet that makes it at first launch, the alert when
+    /// it can't be found, and File ▸ Show Journal in Finder. Its `onJournalCreated` is where the
+    /// usage log so far is to be brought in.
+    let journalSetup: JournalSetup
+    /// The run the last launch left unfinished (a crash, a force quit, the battery running out),
+    /// found before this launch logged anything; nil when there was none. Its working file stays
+    /// open, so this launch's lines, its `appLaunched` first, go on in it. It's for
+    /// `Game.restore`, which brings the round back or ends it as `interrupted` (still to be wired in).
+    let pendingRun: PendingRun?
+    /// Tees each run's lines into its working file and hands finished runs to the journal.
+    private let runWriter: RunFileWriter
     private let launchDate = Date()
 
     /// The game's window. Closing it still quits, as when it was the only window: the Progress
@@ -166,6 +181,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor override init() {
+        // The journal's side first, before anything is logged: a run the last launch left
+        // unfinished takes this launch's lines, from its `appLaunched` on.
+        let writer = RunFileWriter.shared
+        pendingRun = writer.inspectAtLaunch()
+        UsageLog.shared.lineSink = writer
+        runWriter = writer
+        // The library's changes go only to the journal, numbered in this session's order.
+        PieceLibrary.shared.journal = JournalEventRecorder(outbox: writer.outbox, device: writer.device,
+                                                          launch: writer.launch, log: UsageLog.shared)
+        journalSetup = JournalSetup(journal: .shared, outbox: writer.outbox, usageFolder: UsageLog.shared.folder,
+                                    recorder: UsageLog.shared)
         // Before the game exists, so the session's log starts with the launch: making the game
         // reopens last time's piece, which is logged too.
         UsageLog.shared.record(.appLaunched(.current))
@@ -204,5 +230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UsageLog.shared.record(.appTerminated(AppTerminated(sessionSeconds: Date().timeIntervalSince(launchDate))))
         // Written before the process goes, or the session's last events are lost.
         UsageLog.shared.flush()
+        // The round just ended goes into the journal; should that take long (a slow network
+        // drive), the next launch places it instead.
+        runWriter.outbox.waitUntilDone(timeout: 2)
     }
 }

@@ -73,6 +73,16 @@ final class UsageLog: UsageRecorder, @unchecked Sendable {
         }
     }
 
+    /// Hands out the next sequence number without writing anything: for an event of this session
+    /// kept only in the practice journal (the piece library's changes), so it still has its place
+    /// in the session's order. The log then has a gap there.
+    func takeSequence() -> Int {
+        lock.withLock {
+            defer { nextSequence += 1 }
+            return nextSequence
+        }
+    }
+
     /// Returns once everything recorded so far is written and synced (before quitting or exporting).
     func flush() {
         queue.sync { try? file?.synchronize() }
