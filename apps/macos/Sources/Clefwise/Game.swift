@@ -641,15 +641,11 @@ final class Game {
         return settings.addsAccidentals || settings.key != .fixed(.cMajor)
     }
 
-    /// In keyboard mode: the typed text is a whole name but could still get a ♯/♭, so it waits for
-    /// Return. While notes are asked together: it reads as all their names, but something longer
-    /// still could.
-    var typingNeedsReturn: Bool {
-        if let typedNames { return typedNames.needsReturn }
-        let answers = typeableAnswers
-        return answers.contains { $0.text == typedText }
-            && answers.contains { $0.text != typedText && $0.text.hasPrefix(typedText) }
-    }
+    /// In keyboard mode, while notes are asked together: the typed text reads as all their names,
+    /// but something longer still could, so it waits for Return. One note never asks for Return:
+    /// the only name that waits is the right letter without its sign, where Return would answer it
+    /// as typed (a miss), so the cue would mislead (see `type(_:)`).
+    var typingNeedsReturn: Bool { typedNames?.needsReturn ?? false }
 
     /// How `typedText` reads while notes are asked together (`group`), for the typing box; nil
     /// while one note is asked at a time.
@@ -1546,9 +1542,13 @@ final class Game {
         }
     }
 
-    /// Adds a typed character; answers as soon as the text is a whole answer nothing longer starts
-    /// with (a bare "f" might still become "f♯", so that one waits for Return). Keystrokes that
-    /// can't lead to any answer are dropped rather than counted as wrong, so typos aren't punished.
+    /// Adds a typed character; answers as soon as the text is a whole name, with no Return:
+    /// - a right name at once, even when a ♯/♭ could follow ("fa" for Fa in G major);
+    /// - a wrong name at once too, when no ♯/♭ could make it right ("mi" for Fa♯);
+    /// - only the right letter without its sign ("fa" for Fa♯) waits for the ♯/♭, or for Return,
+    ///   which answers it as typed.
+    /// So a wrong name is always judged and can't be taken back and retyped. Keystrokes that can't
+    /// lead to any answer are dropped rather than counted as wrong, so typos aren't punished.
     private func type(_ character: Character) {
         guard !isPaused, !isShowingMiss else {
             recordIgnored(isPaused ? "paused" : "missPause", from: .typing, detail: String(character))
@@ -1569,7 +1569,12 @@ final class Game {
         }
         let text = typedText + addition
         let extensions = answers.filter { $0.text.hasPrefix(text) }
-        if extensions.count == 1, let match = extensions.first, match.text == text {
+        func isRight(_ answer: (text: String, letter: NoteLetter, accidental: Accidental)) -> Bool {
+            guard let question else { return false }
+            return settings.naming.accepts(answer.letter, answer.accidental, for: question.pitch)
+        }
+        if let match = extensions.first(where: { $0.text == text }),
+           isRight(match) || !extensions.contains(where: { $0.text != text && isRight($0) }) {
             typedText = ""
             answerName(match.letter, match.accidental, via: .typing)
         } else if !extensions.isEmpty {
@@ -1616,7 +1621,8 @@ final class Game {
         judgeGroup(via: .typing)
     }
 
-    /// Return in keyboard mode: answers with a whole name that was waiting for a possible ♯/♭.
+    /// Return in keyboard mode: answers with a whole name that was waiting for a possible ♯/♭ (the
+    /// right letter without its sign, so a miss).
     /// While notes are asked together, with the names typed if they read as all of them.
     private func confirmTyping() {
         guard !isShowingMiss, !typedText.isEmpty else { return }

@@ -148,27 +148,29 @@ private extension GameTestBench {
     @Test func typingLogsEveryKeystroke() async throws {
         game.settings.mode = .practice
         game.settings.answerInput = .keyboard
-        // With sharps about, a whole name waits for Return in case a ♯ or ♭ follows.
+        game.settings.naming = .solfege
+        // G major: the right name goes in by itself, with its ♯ when it has one; no Return.
         game.settings.key = .fixed(KeySignature(fifths: 1))
         game.start()
         let question = try #require(game.question)
-        let letter = question.pitch.letter.name.lowercased()
+        let name = Array(NamingSystem.solfege.name(of: question.pitch.letter).lowercased()
+                         + (question.pitch.accidental == .sharp ? "#" : "")).map(String.init)
         try await pause()
         press("x") // no name starts with x
-        press(letter)
+        press(name[0])
         press("\u{7f}", keyCode: 51)
-        press(letter)
-        if question.pitch.accidental == .sharp { press("#") } else { press("\r", keyCode: 36) }
+        for key in name { press(key) }
 
         let answer = try #require(logged(AnswerGiven.self).last)
         #expect(answer.source == .typing && answer.correct)
         #expect(answer.question == question.id)
         let keystrokes = answer.keystrokes
-        #expect(keystrokes.map(\.key) == ["x", letter, "Delete", letter, question.pitch.accidental == .sharp ? "#" : "Return"])
-        #expect(keystrokes.map(\.result) == [.rejected, .typed, .deleted, .typed, .submitted])
+        #expect(keystrokes.map(\.key) == ["x", name[0], "Delete"] + name)
+        #expect(keystrokes.map(\.result)
+                == [.rejected, .typed, .deleted] + Array(repeating: .typed, count: name.count - 1) + [.submitted])
         #expect(keystrokes[0].ms > 0)
         #expect(zip(keystrokes, keystrokes.dropFirst()).allSatisfy { $0.ms <= $1.ms })
-        #expect(answer.responseMs >= keystrokes[4].ms)
+        #expect(answer.responseMs >= keystrokes[keystrokes.count - 1].ms)
         #expect(logged(QuestionShown.self).first?.input == "keyboard")
     }
 
