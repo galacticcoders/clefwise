@@ -177,6 +177,34 @@ import Testing
         #expect(try LoggedEvent.decoder.decode(LoggedEvent.self, from: Data(text.utf8)).event == .roundStarted(started))
     }
 
+    @Test func libraryEventsRoundTripWithTheSpecsFieldNames() throws {
+        let first = String(repeating: "ab", count: 32), second = String(repeating: "cd", count: 32)
+        var added = PieceAdded(piece: first, title: "Tune", fileName: "Tune.mxl")
+        let events: [(UsageEvent, String, [String: Any])] = [
+            (.pieceAdded(added), "pieceAdded", ["piece": first, "title": "Tune", "fileName": "Tune.mxl"]),
+            (.pieceRevised(PieceRevised(piece: first, file: second, title: "Tune, revised")), "pieceRevised",
+             ["piece": first, "file": second, "title": "Tune, revised"]),
+            (.pieceRemoved(PieceRemoved(piece: first)), "pieceRemoved", ["piece": first]),
+        ]
+        let envelope: Set<String> = ["schema", "type", "id", "time", "session", "sequence"]
+        for (event, type, fields) in events {
+            let (text, json, logged) = try line(event)
+            #expect(json["type"] as? String == type)
+            // Exactly the spec's fields next to the envelope: optional ones without a value are left out.
+            #expect(Set(json.keys).subtracting(envelope) == Set(fields.keys), "\(type)")
+            for (key, value) in fields { #expect(json[key] as? String == value as? String, "\(type).\(key)") }
+            #expect(try LoggedEvent.decoder.decode(LoggedEvent.self, from: Data(text.utf8)).event == logged.event)
+        }
+
+        added.libraryID = UUID()
+        added.originalPath = "/Users/me/Scores/Tune.mxl"
+        let (text, json, _) = try line(.pieceAdded(added))
+        #expect(json["libraryID"] as? String == added.libraryID?.uuidString)
+        #expect(json["originalPath"] as? String == "/Users/me/Scores/Tune.mxl")
+        #expect(text.contains(#""originalPath":"/Users/me/Scores/Tune.mxl""#), "slashes not escaped")
+        #expect(try LoggedEvent.decoder.decode(LoggedEvent.self, from: Data(text.utf8)).event == .pieceAdded(added))
+    }
+
     @Test func memoryRecorderStampsTheTimeItIsGiven() {
         let recorder = MemoryUsageRecorder()
         let earlier = usageTestTime("2026-11-01T08:00:00.000Z")
@@ -188,7 +216,10 @@ import Testing
 
     @Test func schemaDocumentsTheJournalAdditions() {
         let schema = UsageExport.schema
-        #expect(schema.contains("### `roundRestored`"))
+        for type in ["roundRestored", "pieceAdded", "pieceRevised", "pieceRemoved"] {
+            #expect(schema.contains("### `\(type)`"), "\(type)")
+        }
+        #expect(schema.contains("only in the practice journal's event files"))
         for field in ["`interrupted`", "`recordedAt`", "`piece.id`", "`piece.file`", "`piece.staves`", "`unansweredQuestion`"] {
             #expect(schema.contains(field), "\(field)")
         }

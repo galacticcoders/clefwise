@@ -35,6 +35,9 @@ enum UsageEvent: Equatable {
     case pieceOpened(PieceOpened)
     case pieceOpenFailed(PieceOpenFailed)
     case pieceClosed(PieceClosed)
+    case pieceAdded(PieceAdded)
+    case pieceRevised(PieceRevised)
+    case pieceRemoved(PieceRemoved)
     case uiAction(UIAction)
     case statsSnapshot(StatsSnapshot)
 }
@@ -340,6 +343,40 @@ struct PieceClosed: Codable, Equatable {
     var libraryID: UUID? = nil
 }
 
+// The piece library's changes, as the practice journal keeps them: each is one event file in its
+// `events/`, never a line in the usage log. See spec/practice-journal.md, "Event files".
+
+/// A score joined the library. Its file is written to the journal's `pieces/` first.
+struct PieceAdded: Codable, Equatable {
+    /// The piece's id: the SHA-256 (lowercase hex) of the file it was first added with, which is
+    /// that file's name in `pieces/`.
+    var piece: String
+    var title: String
+    /// The original file's name, without its folder.
+    var fileName: String
+    /// The piece's entry in the adding device's piece library, and where the file was first
+    /// opened from: the `libraryID` and `path` the usage log knows the piece by, so runs logged
+    /// before the journal map to it. Nil when unknown.
+    var libraryID: UUID? = nil
+    var originalPath: String? = nil
+}
+
+/// A new version of a piece, for example the score edited and exported again. Both files stay in
+/// `pieces/`.
+struct PieceRevised: Codable, Equatable {
+    /// The id the piece was first added with (`PieceAdded.piece`).
+    var piece: String
+    /// The new file's SHA-256: its name in `pieces/`.
+    var file: String
+    var title: String
+}
+
+/// The piece left the library. Its files and its runs stay; a `pieceAdded` brings it back.
+struct PieceRemoved: Codable, Equatable {
+    /// The id the piece was first added with.
+    var piece: String
+}
+
 /// A button or menu item used, for questions like "does anyone press Play again?".
 struct UIAction: Codable, Equatable {
     var name: String
@@ -493,6 +530,9 @@ extension UsageEvent {
         case .pieceOpened: "pieceOpened"
         case .pieceOpenFailed: "pieceOpenFailed"
         case .pieceClosed: "pieceClosed"
+        case .pieceAdded: "pieceAdded"
+        case .pieceRevised: "pieceRevised"
+        case .pieceRemoved: "pieceRemoved"
         case .uiAction: "uiAction"
         case .statsSnapshot: "statsSnapshot"
         }
@@ -516,6 +556,9 @@ extension UsageEvent {
         case .pieceOpened(let payload): payload
         case .pieceOpenFailed(let payload): payload
         case .pieceClosed(let payload): payload
+        case .pieceAdded(let payload): payload
+        case .pieceRevised(let payload): payload
+        case .pieceRemoved(let payload): payload
         case .uiAction(let payload): payload
         case .statsSnapshot(let payload): payload
         }
@@ -539,6 +582,9 @@ extension UsageEvent {
         case "pieceOpened": self = .pieceOpened(try PieceOpened(from: decoder))
         case "pieceOpenFailed": self = .pieceOpenFailed(try PieceOpenFailed(from: decoder))
         case "pieceClosed": self = .pieceClosed(try PieceClosed(from: decoder))
+        case "pieceAdded": self = .pieceAdded(try PieceAdded(from: decoder))
+        case "pieceRevised": self = .pieceRevised(try PieceRevised(from: decoder))
+        case "pieceRemoved": self = .pieceRemoved(try PieceRemoved(from: decoder))
         case "uiAction": self = .uiAction(try UIAction(from: decoder))
         case "statsSnapshot": self = .statsSnapshot(try StatsSnapshot(from: decoder))
         default:

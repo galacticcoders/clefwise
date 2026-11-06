@@ -299,6 +299,41 @@ extension UsageExport {
         | `path` | The piece that was closed. |
         | `libraryID` | Its entry in the piece library, when it had one. |
 
+        ### `pieceAdded`: a score joined the library (practice journal only)
+
+        This and the next two events appear only in the practice journal's event files
+        (`events/` in the journal folder), one event per file, never in the usage log or in this
+        export's `events/`. A piece in the journal is known by its id: the SHA-256 of the score file
+        it was first added with, the same as `roundStarted.piece.id`. Its files are kept in the
+        journal's `pieces/`, named by their SHA-256. When these events disagree, the latest by
+        `time` wins.
+
+        | Field | Meaning |
+        |---|---|
+        | `piece` | The piece's id. |
+        | `title` | The piece's title. |
+        | `fileName` | The original file's name, without its folder. |
+        | `libraryID` | The piece's entry in the piece library of the Mac that added it, as `libraryID` in the log, so rounds logged before the journal can be matched to it. Absent when not known. |
+        | `originalPath` | Where the file was first opened from, as `path` in the log, for rounds logged before the piece library. Absent when not known. |
+
+        ### `pieceRevised`: a new version of a piece (practice journal only)
+
+        The score edited and exported again, for example. Both versions stay in `pieces/`.
+
+        | Field | Meaning |
+        |---|---|
+        | `piece` | The piece's id, from its `pieceAdded`. |
+        | `file` | The SHA-256 of the new version's file, as in `roundStarted.piece.file`. |
+        | `title` | The piece's title. |
+
+        ### `pieceRemoved`: a piece left the library (practice journal only)
+
+        Its files and its rounds stay; a later `pieceAdded` brings it back.
+
+        | Field | Meaning |
+        |---|---|
+        | `piece` | The piece's id, from its `pieceAdded`. |
+
         ### `uiAction`: a button or menu item used
 
         | Field | Meaning |
