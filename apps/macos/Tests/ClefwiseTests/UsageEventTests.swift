@@ -98,6 +98,102 @@ import Testing
         #expect(settings["isMuted"] == .bool(false))
     }
 
+    // MARK: - The practice journal's additions
+
+    @Test func roundRestoredRoundTripsAndLeavesOutAMissingQuestion() throws {
+        var restored = RoundRestored(round: UUID(), activeMs: 42_500, unansweredQuestion: nil)
+        var (text, json, logged) = try line(.roundRestored(restored))
+        #expect(json["type"] as? String == "roundRestored")
+        #expect(json["activeMs"] as? Int == 42_500)
+        #expect(json["round"] as? String == restored.round.uuidString)
+        #expect(json["unansweredQuestion"] == nil && !text.contains("unansweredQuestion"))
+        #expect(try LoggedEvent.decoder.decode(LoggedEvent.self, from: Data(text.utf8)).event == logged.event)
+
+        restored.unansweredQuestion = UUID()
+        (text, json, logged) = try line(.roundRestored(restored))
+        #expect(json["unansweredQuestion"] as? String == restored.unansweredQuestion?.uuidString)
+        #expect(try LoggedEvent.decoder.decode(LoggedEvent.self, from: Data(text.utf8)).event == .roundRestored(restored))
+    }
+
+    @Test func interruptedEndSaysWhenItWasWritten() throws {
+        var ended = RoundEnded(round: UUID(), reason: .interrupted, durationMs: 95_000, score: 30, attempts: 32,
+                               bestStreak: 12, averageResponseMs: 1400, bestScore: nil, isNewBest: false,
+                               notesToReview: ["F♯4"])
+        var json = try line(.roundEnded(ended)).json
+        #expect(json["reason"] as? String == "interrupted")
+        #expect(json["recordedAt"] == nil, "left out without a value")
+
+        ended.recordedAt = usageTestTime("2026-11-05T09:31:12.348Z")
+        let (text, written, _) = try line(.roundEnded(ended))
+        json = written
+        // Written like every other time in the log.
+        #expect(json["recordedAt"] as? String == "2026-11-05T09:31:12.348Z")
+        let decoded = try LoggedEvent.decoder.decode(LoggedEvent.self, from: Data(text.utf8))
+        guard case .roundEnded(let back) = decoded.event else {
+            Issue.record("should decode as roundEnded")
+            return
+        }
+        #expect(back.reason == .interrupted)
+        let recordedAt = try #require(back.recordedAt)
+        #expect(abs(recordedAt.timeIntervalSince(usageTestTime("2026-11-05T09:31:12.348Z"))) < 0.001)
+        var withoutTime = back
+        withoutTime.recordedAt = ended.recordedAt
+        #expect(withoutTime == ended)
+    }
+
+    @Test func pieceLinesFromBeforeTheJournalStillDecode() throws {
+        // A round on a piece logged before `chords`, `libraryID` and the journal's fields existed.
+        let text = #"{"id":"0E3A8E52-6B8B-4E59-9C51-0E7B3E2C6B11","keyFifths":1,"piece":{"hand":"right","measureCount":4,"noteCount":6,"oneNotePerChord":false,"order":"inOrder","part":"Piano","partIndex":0,"path":"/Users/me/Tune.musicxml","startBar":1,"title":"Tune"},"round":"5C1D2E3F-4A5B-4C6D-8E7F-9A0B1C2D3E4F","schema":1,"sequence":3,"session":"A1B2C3D4-E5F6-4711-8899-AABBCCDDEEFF","settings":{},"time":"2026-11-01T10:00:00.000Z","type":"roundStarted","via":"button"}"#
+        let decoded = try LoggedEvent.decoder.decode(LoggedEvent.self, from: Data(text.utf8))
+        guard case .roundStarted(let started) = decoded.event, let piece = started.piece else {
+            Issue.record("should decode as a piece round")
+            return
+        }
+        #expect(piece.title == "Tune" && piece.noteCount == 6)
+        #expect(piece.chords == nil && piece.libraryID == nil)
+        #expect(piece.id == nil && piece.file == nil && piece.staves == nil)
+        #expect(decoded.id.uuidString == "0E3A8E52-6B8B-4E59-9C51-0E7B3E2C6B11")
+    }
+
+    @Test func pieceJournalFieldsRoundTripAndAreLeftOutWithoutAValue() throws {
+        var piece = PieceContext(title: "Tune", path: "/Users/me/Tune.musicxml", part: "Piano", partIndex: 0,
+                                 hand: "both", order: "inOrder", startBar: 1, oneNotePerChord: false, noteCount: 40,
+                                 measureCount: 16, chords: "eachNote", libraryID: UUID())
+        var started = RoundStarted(round: UUID(), via: .button, settings: .object([:]), keyFifths: 1, piece: piece)
+        var pieceJSON = try #require(try line(.roundStarted(started)).json["piece"] as? [String: Any])
+        #expect(pieceJSON["id"] == nil && pieceJSON["file"] == nil && pieceJSON["staves"] == nil)
+
+        piece.id = String(repeating: "ab", count: 32)
+        piece.file = String(repeating: "cd", count: 32)
+        piece.staves = 2
+        started.piece = piece
+        let (text, json, logged) = try line(.roundStarted(started))
+        pieceJSON = try #require(json["piece"] as? [String: Any])
+        #expect(pieceJSON["id"] as? String == piece.id)
+        #expect(pieceJSON["file"] as? String == piece.file)
+        #expect(pieceJSON["staves"] as? Int == 2)
+        // The piece's id sits inside `piece`, apart from the event's own.
+        #expect(json["id"] as? String == logged.id.uuidString)
+        #expect(try LoggedEvent.decoder.decode(LoggedEvent.self, from: Data(text.utf8)).event == .roundStarted(started))
+    }
+
+    @Test func memoryRecorderStampsTheTimeItIsGiven() {
+        let recorder = MemoryUsageRecorder()
+        let earlier = usageTestTime("2026-11-01T08:00:00.000Z")
+        recorder.record(.uiAction(UIAction(name: "now", detail: nil)))
+        recorder.record(.uiAction(UIAction(name: "earlier", detail: nil)), at: earlier)
+        #expect(recorder.events.map(\.sequence) == [0, 1])
+        #expect(recorder.events[1].time == earlier)
+    }
+
+    @Test func schemaDocumentsTheJournalAdditions() {
+        let schema = UsageExport.schema
+        #expect(schema.contains("### `roundRestored`"))
+        for field in ["`interrupted`", "`recordedAt`", "`piece.id`", "`piece.file`", "`piece.staves`", "`unansweredQuestion`"] {
+            #expect(schema.contains(field), "\(field)")
+        }
+    }
+
     @Test func memoryRecorderNumbersEvents() {
         let recorder = MemoryUsageRecorder()
         recorder.record(.uiAction(UIAction(name: "a", detail: nil)))

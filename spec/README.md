@@ -6,6 +6,8 @@ one particular app.
 ## What's here
 
 - [`fixtures/scores/`](fixtures/scores): MusicXML test scores that every version's tests read.
+- [`practice-journal.md`](practice-journal.md): the practice journal, the folder of plain files a
+  person's practice is kept in (a draft; the macOS app is being built to it).
 
 ## What can go here later
 

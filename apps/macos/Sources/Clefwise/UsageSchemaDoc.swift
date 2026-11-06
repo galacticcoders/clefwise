@@ -122,6 +122,9 @@ extension UsageExport {
         | `piece.chords` | How chords are asked: `eachNote` (note by note, lower staff first, low to high), `topOrBottom` (only the top note of right-hand chords and the bottom note of left-hand ones), `together` (all the notes struck at one moment, on the staves read, named as one answer; see Notes asked together). Absent in rounds logged before the setting existed: `oneNotePerChord` says which of the first two it was. |
         | `piece.noteCount` | Notes this round asks. |
         | `piece.measureCount` | Bars in the part. |
+        | `piece.id` | The piece in your practice journal: the SHA-256 of the score file it was first added with. Absent for a piece not in the journal, and in rounds logged before it. |
+        | `piece.file` | The SHA-256 of the exact score file practised. It differs from `piece.id` once the score has been exported again with changes. Absent when `piece.id` is. |
+        | `piece.staves` | Staves in the part practised: 1, or 2 for a grand staff. Absent in rounds logged before the practice journal. |
 
         ### `questionShown`: a note appeared
 
@@ -224,16 +227,31 @@ extension UsageExport {
         |---|---|
         | `round`, `question` | As in `roundPaused`. |
         | `via` | `button` (Resume) or `key` (Space). |
-        | `pausedMs` | How long this pause lasted. |
+        | `pausedMs` | How long this pause lasted. After a `roundRestored`, counted from it. |
 
         A round can also end while paused (Stop, Esc, quitting), with no `roundResumed`.
+
+        ### `roundRestored`: the round came back after a crash
+
+        If Clefwise stops mid-round without quitting (a crash, a force quit, the battery running
+        out), the round comes back at the next launch, paused, rebuilt from what was logged: score,
+        streak, the place in a piece and the round time used. Its events then span two sessions,
+        with the new session's `appLaunched` just before this event. When you carry on,
+        `roundResumed` follows, then a new `questionShown` for the note that was on screen. The
+        time between the crash and this event counts as neither round time nor paused time.
+
+        | Field | Meaning |
+        |---|---|
+        | `round` | The round's id. |
+        | `activeMs` | The round time brought back: up to the round's last event before the crash, pauses left out. A timed round has its limit minus this left. |
+        | `unansweredQuestion` | The id of the question on screen at the crash, if there was one. It stays unanswered: its note is asked again, as a new question with its own id, when the round resumes. |
 
         ### `roundEnded`
 
         | Field | Meaning |
         |---|---|
         | `round` | The round's id. |
-        | `reason` | `timeUp` (the clock of a sprint or timed practice round ran out), `stopped` (Stop or Esc), `pieceComplete` (the last note of a piece), `notesDone` (the last of a practice round's set number of notes), `abandoned` (replaced by opening or closing a piece, or starting over), `appQuit` (the app quit mid-round). |
+        | `reason` | `timeUp` (the clock of a sprint or timed practice round ran out), `stopped` (Stop or Esc), `pieceComplete` (the last note of a piece), `notesDone` (the last of a practice round's set number of notes), `abandoned` (replaced by opening or closing a piece, or starting over), `appQuit` (the app quit mid-round), `interrupted` (the app stopped without quitting and the round couldn't be brought back; see `roundRestored`. It's written at a later launch, timed at the round's last event, with its duration, score and attempts counted from the events). |
         | `durationMs` | How long the round went on, pauses left out. |
         | `pausedMs` | Time spent paused (absent when the round never was). |
         | `score` | Correct answers. |
@@ -244,6 +262,7 @@ extension UsageExport {
         | `isNewBest` | This round set a new best score. |
         | `notesToReview` | The notes missed most, as listed in the round summary. |
         | `unansweredQuestion` | The question still on screen when the round ended, if any: `question` id, `shownMs` (how long it was up, pauses left out), `pausedMs` (how long the round was paused meanwhile, if it was), its `keystrokes` (as in `answerGiven`) and for notes asked together their `group` (then `question` is the first of them). |
+        | `recordedAt` | When this event was written, if later than its `time`: an `interrupted` end takes the time of the round's last event, and is written at the next launch. Absent otherwise. |
 
         ### `pieceOpened`: a MusicXML file was opened
 

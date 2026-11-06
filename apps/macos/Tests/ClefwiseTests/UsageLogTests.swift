@@ -32,6 +32,19 @@ func usageTestTime(_ text: String) -> Date {
     return formatter.date(from: text)!
 }
 
+/// Keeps what the usage log hands its line sink; safe to read once the log is flushed.
+final class CollectingLineSink: RunLineSink, @unchecked Sendable {
+    private let lock = NSLock()
+    private var collected: [(line: Data, event: LoggedEvent)] = []
+
+    func lineLogged(_ line: Data, _ event: LoggedEvent) {
+        lock.withLock { collected.append((line, event)) }
+    }
+
+    var lines: [Data] { lock.withLock { collected.map(\.line) } }
+    var events: [LoggedEvent] { lock.withLock { collected.map(\.event) } }
+}
+
 @Suite struct UsageLogTests {
     private let temporary = UsageTestFolder()
     private var folder: URL { temporary.url.appendingPathComponent("Usage", isDirectory: true) }
@@ -174,6 +187,85 @@ func usageTestTime(_ text: String) -> Date {
         log.record(action("kept"))
         log.flush()
         #expect(UsageLog.readEvents(in: folder).events.map(\.event) == [action("kept")])
+    }
+
+    @Test func recordingAtATimeStampsThatTime() throws {
+        let clock = UsageTestClock(usageTestTime("2026-11-05T09:00:00.000Z"))
+        let log = UsageLog(folder: folder, clock: { clock.now }, timeZone: bucharest)
+        let lastEvent = usageTestTime("2026-11-03T20:15:42.123Z")
+        log.record(action("launched"))
+        log.record(action("interrupted end"), at: lastEvent)
+        log.record(action("after"))
+        log.flush()
+
+        // Numbered in the order recorded; the earlier time goes in its own day's file.
+        let (events, unreadable) = UsageLog.readEvents(in: folder)
+        #expect(unreadable == 0)
+        #expect(events.map(\.event) == [action("interrupted end"), action("launched"), action("after")])
+        #expect(events.map(\.sequence) == [1, 0, 2])
+        #expect(abs(events[0].time.timeIntervalSince(lastEvent)) < 0.001)
+        #expect(events[1].time == clock.now && events[2].time == clock.now)
+        #expect(UsageLog.eventFiles(in: folder).map(\.lastPathComponent) == ["usage-2026-11-03.jsonl", "usage-2026-11-05.jsonl"])
+    }
+
+    @Test func theSinkGetsExactlyTheBytesOfTheDayFileInOrder() throws {
+        let log = UsageLog(folder: folder)
+        let sink = CollectingLineSink()
+        log.lineSink = sink
+        DispatchQueue.concurrentPerform(iterations: 4) { thread in
+            for index in 0..<50 { log.record(action("thread \(thread) event \(index)")) }
+        }
+        log.flush()
+
+        let file = try #require(UsageLog.eventFiles(in: folder).first)
+        let written = try Data(contentsOf: file)
+        #expect(sink.lines.reduce(Data(), +) == written)
+        for line in sink.lines {
+            #expect(line.last == 0x0A && line.filter { $0 == 0x0A }.count == 1, "one whole line each")
+        }
+        #expect(sink.events.map(\.sequence) == Array(0..<200))
+        // Each line is its event (times to the millisecond, as written).
+        let decoded = sink.lines.compactMap { UsageLog.event(in: $0.dropLast()) }
+        #expect(decoded.map(\.id) == sink.events.map(\.id))
+        #expect(decoded.map(\.event) == sink.events.map(\.event))
+    }
+
+    @Test func theSinkOnlyGetsLinesWrittenAfterItIsSet() {
+        let log = UsageLog(folder: folder)
+        log.record(action("before"))
+        let sink = CollectingLineSink()
+        log.lineSink = sink
+        #expect(log.lineSink === sink)
+        log.record(action("after"))
+        log.flush()
+        #expect(sink.events.map(\.event) == [action("after")])
+        #expect(UsageLog.readEvents(in: folder).events.count == 2)
+
+        log.lineSink = nil
+        log.record(action("unplugged"))
+        log.flush()
+        #expect(sink.events.count == 1)
+    }
+
+    @Test func theSinkGetsLinesTheDayFileCouldNotTake() throws {
+        // A file where the folder should be: the day file takes nothing, the sink still gets it all.
+        try FileManager.default.createDirectory(at: temporary.url, withIntermediateDirectories: true)
+        try Data("in the way".utf8).write(to: folder)
+        let log = UsageLog(folder: folder)
+        let sink = CollectingLineSink()
+        log.lineSink = sink
+        log.record(action("lost from the day file"))
+        log.flush()
+        #expect(UsageLog.readEvents(in: folder).events.isEmpty)
+        #expect(sink.events.map(\.event) == [action("lost from the day file")])
+        let line = try sink.events[0].encodedLine()
+        #expect(sink.lines == [line])
+    }
+
+    @Test func linesSplitWithoutTheirLineFeeds() {
+        var lines: [String] = []
+        UsageLog.forEachLine(in: Data("one\n\ntwo\nthree, cut off".utf8)) { lines.append(String(decoding: $0, as: UTF8.self)) }
+        #expect(lines == ["one", "two", "three, cut off"])
     }
 
     @Test func readingAMissingFolderFindsNothing() {

@@ -9,7 +9,13 @@ import Foundation
 
 /// Where events go. The app writes them to disk (`UsageLog`); tests keep them in memory.
 protocol UsageRecorder: AnyObject {
+    /// Records `event` as happening now.
     func record(_ event: UsageEvent)
+    /// Records `event` as happening at `time` rather than now, for an event that belongs to an
+    /// earlier moment: an `interrupted` round end takes the time of the round's last event (and
+    /// says when it was written in `RoundEnded.recordedAt`). It's still numbered in the order
+    /// recorded.
+    func record(_ event: UsageEvent, at time: Date)
 }
 
 enum UsageEvent: Equatable {
@@ -24,6 +30,7 @@ enum UsageEvent: Equatable {
     case inputIgnored(InputIgnored)
     case roundPaused(RoundPaused)
     case roundResumed(RoundResumed)
+    case roundRestored(RoundRestored)
     case roundEnded(RoundEnded)
     case pieceOpened(PieceOpened)
     case pieceOpenFailed(PieceOpenFailed)
@@ -103,6 +110,16 @@ struct PieceContext: Codable, Equatable {
     /// The piece's entry in the piece library; nil for a piece that couldn't be kept there, and in
     /// rounds logged before the library.
     var libraryID: UUID? = nil
+    /// The piece in the practice journal: the SHA-256 (lowercase hex) of the file it was first
+    /// added with, as in the journal's `pieceAdded`. Nil for a piece not in the journal, and in
+    /// rounds logged before it.
+    var id: String? = nil
+    /// The SHA-256 of the exact file practised; differs from `id` once the piece was revised (the
+    /// score exported again with changes). Nil whenever `id` is.
+    var file: String? = nil
+    /// Staves in the part practised: 1, or 2 for a grand staff. Nil in rounds logged before the
+    /// journal.
+    var staves: Int? = nil
 }
 
 struct QuestionShown: Codable, Equatable {
@@ -231,8 +248,21 @@ struct RoundResumed: Codable, Equatable {
     var round: UUID
     var question: UUID?
     var via: PauseSource
-    /// How long this pause lasted.
+    /// How long this pause lasted. After a `roundRestored`, counted from it.
     var pausedMs: Int
+}
+
+/// The round came back, paused, at the launch after a crash (or a force quit, or the battery
+/// running out), rebuilt from its run file. The new session's `appLaunched` comes just before.
+/// The time between the round's last event and this one counts as neither round time nor paused
+/// time. See spec/practice-journal.md, "After a crash".
+struct RoundRestored: Codable, Equatable {
+    var round: UUID
+    /// The round time brought back: up to the round's last event before the crash, pauses left out.
+    var activeMs: Int
+    /// The question on screen at the crash, if one was. It stays unanswered: when the round
+    /// resumes, its note is asked again as a new question.
+    var unansweredQuestion: UUID?
 }
 
 struct RoundEnded: Codable, Equatable {
@@ -251,6 +281,9 @@ struct RoundEnded: Codable, Equatable {
     var notesToReview: [String]
     /// The question still on screen when the round ended (time up, stopped, quit…), if any.
     var unansweredQuestion: UnansweredQuestion? = nil
+    /// When this event was written, for one timed earlier than that: an `interrupted` end takes the
+    /// time of the round's last event and is written at a later launch. Nil otherwise.
+    var recordedAt: Date? = nil
 }
 
 /// A question left without an answer: how long it was up and the keys pressed meanwhile.
@@ -344,8 +377,9 @@ enum KeystrokeResult: String, Codable, Equatable {
 enum RoundEndReason: String, Codable, Equatable {
     /// A sprint's or timed practice round's clock ran out; Stop/Esc; the last note of a piece; the
     /// last of a practice round's set number of notes; replaced by opening or closing a piece or
-    /// starting over; the app quit mid-round.
-    case timeUp, stopped, pieceComplete, notesDone, abandoned, appQuit
+    /// starting over; the app quit mid-round; the round couldn't be brought back after a crash
+    /// (ended at a later launch, with `RoundEnded.recordedAt`).
+    case timeUp, stopped, pieceComplete, notesDone, abandoned, appQuit, interrupted
 }
 
 enum PieceOpenSource: String, Codable, Equatable {
@@ -403,6 +437,13 @@ struct LoggedEvent: Codable, Equatable {
         event = try UsageEvent(type: try container.decode(String.self, forKey: .type), from: decoder)
     }
 
+    /// The event as one usage-log line: its JSON and a line feed, exactly as the log writes it.
+    func encodedLine() throws -> Data {
+        var line = try Self.encoder.encode(self)
+        line.append(0x0A)
+        return line
+    }
+
     /// The one encoder for log lines: ISO 8601 times with milliseconds, keys sorted.
     static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -447,6 +488,7 @@ extension UsageEvent {
         case .inputIgnored: "inputIgnored"
         case .roundPaused: "roundPaused"
         case .roundResumed: "roundResumed"
+        case .roundRestored: "roundRestored"
         case .roundEnded: "roundEnded"
         case .pieceOpened: "pieceOpened"
         case .pieceOpenFailed: "pieceOpenFailed"
@@ -469,6 +511,7 @@ extension UsageEvent {
         case .inputIgnored(let payload): payload
         case .roundPaused(let payload): payload
         case .roundResumed(let payload): payload
+        case .roundRestored(let payload): payload
         case .roundEnded(let payload): payload
         case .pieceOpened(let payload): payload
         case .pieceOpenFailed(let payload): payload
@@ -491,6 +534,7 @@ extension UsageEvent {
         case "inputIgnored": self = .inputIgnored(try InputIgnored(from: decoder))
         case "roundPaused": self = .roundPaused(try RoundPaused(from: decoder))
         case "roundResumed": self = .roundResumed(try RoundResumed(from: decoder))
+        case "roundRestored": self = .roundRestored(try RoundRestored(from: decoder))
         case "roundEnded": self = .roundEnded(try RoundEnded(from: decoder))
         case "pieceOpened": self = .pieceOpened(try PieceOpened(from: decoder))
         case "pieceOpenFailed": self = .pieceOpenFailed(try PieceOpenFailed(from: decoder))
@@ -560,6 +604,10 @@ final class MemoryUsageRecorder: UsageRecorder {
     let session = UUID()
 
     func record(_ event: UsageEvent) {
-        events.append(LoggedEvent(event, session: session, sequence: events.count))
+        record(event, at: Date())
+    }
+
+    func record(_ event: UsageEvent, at time: Date) {
+        events.append(LoggedEvent(event, session: session, sequence: events.count, time: time))
     }
 }

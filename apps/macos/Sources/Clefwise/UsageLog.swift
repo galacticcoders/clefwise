@@ -1,5 +1,15 @@
 import Foundation
 
+/// Gets a copy of every line the usage log writes: the run-file writer tees a practice run's lines
+/// into its own file through it (`UsageLog.lineSink`).
+protocol RunLineSink: AnyObject, Sendable {
+    /// Called on the log's queue, one line at a time in the order written. `line` is exactly the
+    /// bytes meant for the day file, its line feed included, and `event` what they encode. It's
+    /// called whether or not the day file took the line (a full disk, a missing folder). It must
+    /// not call back into the log: `flush()` would deadlock.
+    func lineLogged(_ line: Data, _ event: LoggedEvent)
+}
+
 /// The usage log on disk: one JSON Lines file per local day in Application Support, only ever
 /// appended to, so a crash can at worst cut off the line being written.
 final class UsageLog: UsageRecorder, @unchecked Sendable {
@@ -23,10 +33,12 @@ final class UsageLog: UsageRecorder, @unchecked Sendable {
     private let lock = NSLock()
     private var nextSequence = 0
 
-    /// Disk work happens here, never on the caller's thread. `file` and `fileName` belong to it.
+    /// Disk work happens here, never on the caller's thread. `file`, `fileName` and `sink` belong
+    /// to it.
     private let queue = DispatchQueue(label: "Clefwise.UsageLog", qos: .utility)
     private var file: FileHandle?
     private var fileName: String?
+    private var sink: RunLineSink?
 
     /// `clock` and `timeZone` are for tests.
     init(folder: URL, clock: @escaping () -> Date = { Date() }, timeZone: TimeZone = .autoupdatingCurrent) {
@@ -37,10 +49,25 @@ final class UsageLog: UsageRecorder, @unchecked Sendable {
         self.calendar = calendar
     }
 
+    /// Also gets every line written, after the day file (nil, the default, for none). It's kept
+    /// strongly, and only lines written after it's set reach it: set it once at startup, before
+    /// the first event is recorded. Setting it waits for the lines already queued; never set it
+    /// from the sink itself.
+    var lineSink: RunLineSink? {
+        get { queue.sync { sink } }
+        set { queue.sync { sink = newValue } }
+    }
+
     /// Stamps the event now and leaves the writing to the log's queue.
     func record(_ event: UsageEvent) {
+        record(event, at: clock())
+    }
+
+    /// Stamps the event with `time` and leaves the writing to the log's queue. It's numbered in the
+    /// order recorded, and goes in the file of the local day `time` falls on.
+    func record(_ event: UsageEvent, at time: Date) {
         lock.withLock {
-            let logged = LoggedEvent(event, session: session, sequence: nextSequence, time: clock())
+            let logged = LoggedEvent(event, session: session, sequence: nextSequence, time: time)
             nextSequence += 1
             queue.async { self.write(logged) }
         }
@@ -53,12 +80,17 @@ final class UsageLog: UsageRecorder, @unchecked Sendable {
 
     // MARK: - Writing (on `queue`)
 
+    /// Writes the line to its day file, then hands the same bytes to the sink.
+    private func write(_ logged: LoggedEvent) {
+        guard let line = try? logged.encodedLine() else { return }
+        writeToDayFile(line, time: logged.time)
+        sink?.lineLogged(line, logged)
+    }
+
     /// Drops the line on any I/O problem (disk full, folder gone…) and reopens on the next write:
     /// losing an event beats crashing or stalling the app.
-    private func write(_ logged: LoggedEvent) {
-        guard var line = try? LoggedEvent.encoder.encode(logged) else { return }
-        line.append(0x0A)
-        let name = Self.fileName(for: logged.time, in: calendar)
+    private func writeToDayFile(_ line: Data, time: Date) {
+        let name = Self.fileName(for: time, in: calendar)
         // A file deleted while open would swallow writes without an error.
         if name != fileName || !FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path) {
             closeFile()
@@ -130,13 +162,8 @@ final class UsageLog: UsageRecorder, @unchecked Sendable {
         var unreadable = 0
         for url in files {
             guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { continue }
-            var start = data.startIndex
-            while start < data.endIndex {
-                let end = data[start...].firstIndex(of: 0x0A) ?? data.endIndex
-                let line = data[start..<end]
-                start = end + 1
-                guard !line.isEmpty else { continue }
-                if let event = try? LoggedEvent.decoder.decode(LoggedEvent.self, from: line) {
+            try forEachLine(in: data) { line in
+                if let event = Self.event(in: line) {
                     try body(event)
                 } else {
                     unreadable += 1
@@ -144,5 +171,23 @@ final class UsageLog: UsageRecorder, @unchecked Sendable {
             }
         }
         return unreadable
+    }
+
+    /// Calls `body` with each line of JSON Lines `data`, in order, without its line feed. Empty
+    /// lines are skipped; a last line with no line feed (cut off) is passed on like the others.
+    static func forEachLine(in data: Data, _ body: (Data) throws -> Void) rethrows {
+        var start = data.startIndex
+        while start < data.endIndex {
+            let end = data[start...].firstIndex(of: 0x0A) ?? data.endIndex
+            let line = data[start..<end]
+            start = end + 1
+            guard !line.isEmpty else { continue }
+            try body(line)
+        }
+    }
+
+    /// The event in one log line, or nil when it can't be read (cut off, from a newer version…).
+    static func event(in line: Data) -> LoggedEvent? {
+        try? LoggedEvent.decoder.decode(LoggedEvent.self, from: line)
     }
 }

@@ -609,10 +609,14 @@ final class Game {
     var accuracy: Double? { attempts > 0 ? Double(score) / Double(attempts) : nil }
     /// Pieces don't keep best scores: a score on one piece says little about another.
     var bestScore: Int? { isPractisingPiece ? nil : bestScores[bestScoreKey] }
-    /// Each answer method plays differently (the piano needs the octave, typing takes keystrokes),
-    /// and so do key signatures and printed accidentals, so each setup keeps its own best scores.
-    /// Plain C major adds nothing, so scores saved before keys existed still count.
-    private var bestScoreKey: String {
+    /// The current settings' best-score key.
+    private var bestScoreKey: String { Self.bestScoreKey(for: settings) }
+
+    /// The key `settings` keep their best sprint score under. Each answer method plays differently
+    /// (the piano needs the octave, typing takes keystrokes), and so do key signatures and printed
+    /// accidentals, so each setup keeps its own best scores. Plain C major adds nothing, so scores
+    /// saved before keys existed still count.
+    nonisolated static func bestScoreKey(for settings: Settings) -> String {
         var key = "\(settings.clefChoice.rawValue).\(settings.range.key)"
             + (settings.answerInput == .buttons ? "" : ".\(settings.answerInput.rawValue)")
         switch settings.key {

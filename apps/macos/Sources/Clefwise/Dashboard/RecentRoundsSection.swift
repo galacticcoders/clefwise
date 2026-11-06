@@ -164,6 +164,7 @@ struct RecentRoundsSection: View {
         case .notesDone: "All notes done"
         case .abandoned: "Interrupted"
         case .appQuit: "App quit"
+        case .interrupted: "Closed unexpectedly"
         }
     }
 }
