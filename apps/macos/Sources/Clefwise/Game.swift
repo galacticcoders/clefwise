@@ -554,6 +554,9 @@ final class Game {
     @ObservationIgnored private var questionPaused = Duration.zero
     /// The pause after a miss ran out during a pause: the next note comes when the round resumes.
     @ObservationIgnored private(set) var advancesOnResume = false
+    /// The round came back after a crash with a question on screen: it's asked again, as a new
+    /// question, when the round resumes.
+    @ObservationIgnored private var asksAgainOnResume = false
     @ObservationIgnored private let synth = Synth()
     /// Where usage events go (the usage log on disk in the app; memory in tests).
     @ObservationIgnored let recorder: UsageRecorder
@@ -1098,13 +1101,18 @@ final class Game {
         question = nil
         phase = .playing
         roundStart = .now
+        startClock()
+        recordRoundStart(via: source)
+        nextQuestion()
+    }
+
+    /// The round clock's timer, ten times a second (`tick`).
+    private func startClock() {
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
-        recordRoundStart(via: source)
-        nextQuestion()
     }
 
     func stop() {
@@ -1151,6 +1159,9 @@ final class Game {
             advancesOnResume = false
             isShowingMiss = false
             nextQuestion()
+        } else if asksAgainOnResume {
+            asksAgainOnResume = false
+            askAgain()
         }
     }
 
@@ -1167,6 +1178,7 @@ final class Game {
         roundPaused = .zero
         questionPaused = .zero
         advancesOnResume = false
+        asksAgainOnResume = false
     }
 
     func dismissSummary() {
@@ -1721,10 +1733,13 @@ final class Game {
         responseTimes.isEmpty ? nil : responseTimes.reduce(0, +) / Double(responseTimes.count)
     }
 
-    /// The round's most missed notes, at most four. F and F♯ share a staff position, so pitch
-    /// height breaks the tie.
-    private var notesToReview: [StaffNote] {
-        roundMisses
+    /// The round's most missed notes, at most four.
+    private var notesToReview: [StaffNote] { Self.notesToReview(from: roundMisses) }
+
+    /// The most missed of `misses`, at most four. F and F♯ share a staff position, so pitch height
+    /// breaks the tie.
+    private static func notesToReview(from misses: [StaffNote: Int]) -> [StaffNote] {
+        misses
             .sorted {
                 $0.value != $1.value ? $0.value > $1.value
                     : ($0.key.pitch.diatonicIndex, $0.key.pitch.midiNumber) < ($1.key.pitch.diatonicIndex, $1.key.pitch.midiNumber)
@@ -1790,6 +1805,236 @@ final class Game {
     private func pausedMilliseconds(_ paused: Duration) -> Int? {
         let total = paused + (pausedAt.map { .now - $0 } ?? .zero)
         return total > .zero ? Self.milliseconds(total) : nil
+    }
+
+    // MARK: - Coming back after a crash
+
+    /// How long a round that came back keeps the device's note about it (`Keys.restoringRound`): a
+    /// crash within that time is taken to be the restore's own doing.
+    private static let restoreSettles: Duration = .seconds(2)
+
+    /// Brings back the round a crash cut short (or a force quit, or the battery running out), from
+    /// its run file's events: called at launch, right after `init` has reopened the round's piece.
+    /// The round comes back paused, as it was at its last event: the score, attempts, streaks,
+    /// misses and response times, the place in a piece, and the round time used. `roundRestored` is
+    /// logged. When the round resumes, the note that was on screen is asked again as a new question;
+    /// after a miss (or with no question left on screen) the next note comes instead.
+    ///
+    /// The round is ended instead, as `interrupted` and timed at its last event, when bringing it
+    /// back last time crashed (the device's note says that restore never settled, or the round
+    /// carried on and stopped before another answer), or when it can't be rebuilt: its piece is
+    /// gone or different, the settings that shape it changed, or its events don't make a round.
+    /// See spec/practice-journal.md, "After a crash".
+    func restore(_ pending: PendingRun) {
+        // Already back (called twice), it's left as it is.
+        guard roundLog?.id != pending.round else { return }
+        let replay = RoundReplay(round: pending.round, events: pending.events)
+        // One that ended is the run-file writer's to place; one with no events has nothing to bring back.
+        guard !replay.hasEnded, replay.lastEventTime != nil else { return }
+        let id = pending.round.uuidString
+        if defaults.object(forKey: Keys.restoringRound) as? String == id || replay.resumedAfterRestoreWithoutAnswer {
+            endInterrupted(pending.round, replay)
+            return
+        }
+        // Written before rebuilding, so that if rebuilding crashes the app, the next launch knows.
+        defaults.set(id, forKey: Keys.restoringRound)
+        guard let rebuilt = rebuild(from: replay) else {
+            endInterrupted(pending.round, replay)
+            return
+        }
+
+        pieceError = nil
+        pieceRound = rebuilt.pieceRound
+        if let key = rebuilt.roundKey { roundKey = key }
+        stopClock()
+        clearPause()
+        score = replay.score
+        attempts = replay.attempts
+        streak = replay.streak
+        bestStreak = replay.bestStreak
+        roundMisses = replay.misses
+        responseTimes = replay.responseTimes
+        summary = nil
+        flash = nil
+        groupFlash = nil
+        typedText = ""
+        armedAccidental = .natural
+        isShowingMiss = false
+        // The question last shown, which the next one follows on from (or which is asked again).
+        question = rebuilt.questions.first
+        group = rebuilt.questions.count > 1 ? NoteGroup(questions: rebuilt.questions) : nil
+        phase = .playing
+        // Paused from now, with the round time used before the crash: the time since counts for nothing.
+        let now = ContinuousClock.now
+        roundStart = now - .milliseconds(replay.activeMs)
+        questionStart = now
+        pausedAt = now
+        isPaused = true
+        roundPaused = .milliseconds(replay.pausedMs)
+        elapsed = Double(replay.activeMs) / 1000
+        if replay.unansweredQuestion.isEmpty {
+            advancesOnResume = true
+        } else {
+            asksAgainOnResume = true
+        }
+        startClock()
+        roundLog = RoundLog(id: pending.round, questionsShown: replay.questionsShown)
+        questionLog = nil
+        recorder.record(.roundRestored(RoundRestored(round: pending.round, activeMs: replay.activeMs,
+                                                     unansweredQuestion: replay.unansweredQuestion.first?.question)))
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.restoreSettles)
+            self?.forgetRestoring(pending.round)
+        }
+    }
+
+    /// A round rebuilt from its events, ready to come back.
+    private struct RebuiltRound {
+        /// Nil for random notes.
+        var pieceRound: PieceRound?
+        /// Random notes' key.
+        var roundKey: KeySignature?
+        /// The question last shown (the notes asked together, if they were), as it was.
+        var questions: [Question]
+    }
+
+    /// The round `replay` tells of, as `start()` set it up; nil when that can't be the same round:
+    /// the settings that shape it changed, its piece isn't open or isn't the same, or the question
+    /// last shown isn't one it asks. A piece round is rebuilt from the piece settings it started
+    /// with, which may since have changed for the next round.
+    private func rebuild(from replay: RoundReplay) -> RebuiltRound? {
+        guard phase != .playing, let started = replay.started, !replay.lastQuestion.isEmpty,
+              let saved = Self.settings(from: started.settings), Self.shapeRoundsAlike(saved, settings) else { return nil }
+        guard let logged = started.piece else {
+            // Random notes: their key, and the question rebuilt from its line.
+            guard piece == nil, (-7...7).contains(started.keyFifths) else { return nil }
+            let questions = replay.lastQuestion.compactMap(Self.question(from:))
+            guard questions.count == replay.lastQuestion.count else { return nil }
+            return RebuiltRound(pieceRound: nil, roundKey: KeySignature(fifths: started.keyFifths), questions: questions)
+        }
+        // As `start()` set it up, with the round's own piece settings: changes made to them during
+        // the round wait for the next one, and stay.
+        let options = saved.piece
+        guard let piece, piece.parts.indices.contains(options.part) else { return nil }
+        let part = piece.parts[options.part]
+        let notes = Self.notes(of: part, with: options)
+        guard !notes.isEmpty else { return nil }
+        var round = PieceRound(title: piece.title, part: part, notes: notes, order: options.order,
+                               barLayout: options.usesWholeBar ? Self.barLayout(of: notes, in: part) : nil,
+                               namesTogether: options.chords == .together)
+        guard let context = pieceContext(for: round), Self.isSamePiece(round, known: context, as: logged),
+              let index = Self.groupIndex(of: replay.lastQuestion, in: round) else { return nil }
+        round.groupIndex = index
+        let bar = round.barDisplay
+        let questions = round.groupNotes.map { Self.question(for: $0, in: bar) }
+        guard questions.count == replay.lastQuestion.count,
+              zip(questions, replay.lastQuestion).allSatisfy(Self.asks) else { return nil }
+        return RebuiltRound(pieceRound: round, roundKey: nil, questions: questions)
+    }
+
+    /// Ends the round `replay` tells of as `interrupted`, at its last event, with what it had come
+    /// to: it can't come back.
+    private func endInterrupted(_ round: UUID, _ replay: RoundReplay) {
+        forgetRestoring(round)
+        guard let time = replay.lastEventTime else { return }
+        let saved = replay.started.flatMap { Self.settings(from: $0.settings) }
+        // As other ends have it: sprints on random notes say the best score for their settings.
+        let bestScore = saved.flatMap { saved in
+            saved.mode == .sprint && replay.started?.piece == nil ? bestScores[Self.bestScoreKey(for: saved)] : nil
+        }
+        let unanswered = replay.unansweredQuestion.first.map {
+            UnansweredQuestion(question: $0.question, shownMs: replay.lastQuestionShownMs, keystrokes: [],
+                               pausedMs: replay.lastQuestionPausedMs > 0 ? replay.lastQuestionPausedMs : nil,
+                               group: $0.group)
+        }
+        recorder.record(.roundEnded(RoundEnded(
+            round: round, reason: .interrupted, durationMs: replay.activeMs,
+            pausedMs: replay.pausedMs > 0 ? replay.pausedMs : nil,
+            score: replay.score, attempts: replay.attempts, bestStreak: replay.bestStreak,
+            averageResponseMs: replay.averageResponseMs, bestScore: bestScore, isNewBest: false,
+            notesToReview: Self.notesToReview(from: replay.misses).map { Self.statKey($0.clef, $0.pitch) },
+            unansweredQuestion: unanswered, recordedAt: Date())), at: time)
+    }
+
+    /// Clears the device's note that `round` is being brought back, if it's still about that round.
+    private func forgetRestoring(_ round: UUID) {
+        guard defaults.object(forKey: Keys.restoringRound) as? String == round.uuidString else { return }
+        defaults.removeObject(forKey: Keys.restoringRound)
+    }
+
+    /// After a crash, as the round resumes: the question that was on screen, asked again as a new
+    /// one (the notes asked together, as a new group).
+    private func askAgain() {
+        guard let question else {
+            nextQuestion()
+            return
+        }
+        show((group?.questions ?? [question]).map {
+            Question(clef: $0.clef, pitch: $0.pitch, keySignature: $0.keySignature,
+                     printedAccidental: $0.printedAccidental, octaveShift: $0.octaveShift)
+        }, pickChance: nil)
+    }
+
+    /// Settings as `roundStarted` logged them; nil when they don't read.
+    private static func settings(from logged: JSONValue) -> Settings? {
+        guard case .object = logged, let data = try? JSONEncoder().encode(logged) else { return nil }
+        return try? JSONDecoder().decode(Settings.self, from: data)
+    }
+
+    /// `a` and `b` make the same round: what it asks, how it ends, and the piece open. Naming, the
+    /// answer input, hints, sound and looks don't come into it, nor the piece settings: a piece
+    /// round is rebuilt from its own.
+    private static func shapeRoundsAlike(_ a: Settings, _ b: Settings) -> Bool {
+        a.mode == b.mode && a.clefChoice == b.clefChoice && a.range == b.range && a.key == b.key
+            && a.addsAccidentals == b.addsAccidentals && a.practiceLimit == b.practiceLimit
+            && a.practiceMinutes == b.practiceMinutes && a.practiceNotes == b.practiceNotes
+            && a.pieceID == b.pieceID && a.piecePath == b.piecePath
+    }
+
+    /// `round`, rebuilt on the piece open now (`current` says how the app knows it), is on the one
+    /// the round started on (`logged`): as many notes and bars, and when the round knew the piece
+    /// and its file by their hashes, the same ones.
+    private static func isSamePiece(_ round: PieceRound, known current: PieceContext, as logged: PieceContext) -> Bool {
+        round.notes.count == logged.noteCount && round.bars == logged.measureCount
+            && (logged.id == nil || current.id == logged.id) && (logged.file == nil || current.file == logged.file)
+    }
+
+    /// Index in `round.groups` of the question `shown` logged (its notes, in order); nil when the
+    /// round has no such question.
+    private static func groupIndex(of shown: [QuestionShown], in round: PieceRound) -> Int? {
+        guard let first = shown.first, let ref = first.pieceNote,
+              let index = round.notes.firstIndex(where: { isNote($0, ref, pitch: first.pitch) }),
+              let group = round.groups.firstIndex(where: { $0.lowerBound == index }) else { return nil }
+        let notes = round.notes[round.groups[group]]
+        guard notes.count == shown.count, zip(notes, shown).allSatisfy({ note, shown in
+            shown.pieceNote.map { isNote(note, $0, pitch: shown.pitch) } ?? false
+        }) else { return nil }
+        return group
+    }
+
+    /// `note` is the one `ref` points to, with the pitch logged for it.
+    private static func isNote(_ note: ScoreNote, _ ref: PieceNoteRef, pitch: LoggedPitch) -> Bool {
+        note.measure == ref.measure && note.staff == ref.staff && abs(note.onset - ref.onset) < 1e-6
+            && note.chord == ref.chord && note.symbolIndex == ref.symbolIndex && LoggedPitch(note.pitch) == pitch
+    }
+
+    /// `question` is the one `shown` logged: clef, pitch, key, printed sign and octave line.
+    private static func asks(_ question: Question, as shown: QuestionShown) -> Bool {
+        question.clef.rawValue == shown.clef && LoggedPitch(question.pitch) == shown.pitch
+            && question.keySignature.fifths == shown.keyFifths
+            && question.printedAccidental?.rawValue == shown.printedAccidental && question.octaveShift == shown.octaveShift
+    }
+
+    /// The question `shown` logged in a round of random notes; nil when it doesn't read.
+    private static func question(from shown: QuestionShown) -> Question? {
+        guard let note = RoundReplay.staffNote(of: shown) else { return nil }
+        var printed: Accidental?
+        if let sign = shown.printedAccidental {
+            guard let accidental = Accidental(rawValue: sign) else { return nil }
+            printed = accidental
+        }
+        return Question(clef: note.clef, pitch: note.pitch, keySignature: KeySignature(fifths: shown.keyFifths),
+                        printedAccidental: printed, octaveShift: shown.octaveShift)
     }
 
     // MARK: - Picking notes
@@ -1921,8 +2166,14 @@ final class Game {
     // MARK: - Usage log
 
     private struct RoundLog {
-        let id = UUID()
-        var questionsShown = 0
+        let id: UUID
+        var questionsShown: Int
+
+        /// A new round; or, brought back after a crash, the round's own id and the questions it had shown.
+        init(id: UUID = UUID(), questionsShown: Int = 0) {
+            self.id = id
+            self.questionsShown = questionsShown
+        }
     }
 
     /// Kept for the question's `answerGiven`. Notes asked together keep one, under the first note.
@@ -2150,6 +2401,9 @@ final class Game {
         static let bestScores = "bestScores"
         /// When the usage log first saw this store (and took its stats snapshot).
         static let usageLogStarted = "usageLogStarted"
+        /// The device's note that a round is being brought back after a crash: its id, from just
+        /// before it's rebuilt until it has settled back in (`restoreSettles`).
+        static let restoringRound = "restoringRound"
     }
 
     private static func load<T: Decodable>(_ type: T.Type, from key: String, in defaults: UserDefaults) -> T? {

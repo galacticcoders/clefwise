@@ -212,6 +212,8 @@ enum UsageExport {
         Column("pieceNotes") { $0.start?.piece?.noteCount },
         Column("pieceLibraryID") { $0.start?.piece?.libraryID?.uuidString },
         Column("endReason") { $0.end?.reason.rawValue },
+        Column("endRecordedTime") { times.iso($0.end?.recordedAt) },
+        Column("restores") { $0.restores },
         Column("durationMs") { $0.end?.durationMs },
         Column("pausedMs") { $0.end?.pausedMs },
         Column("score") { $0.end?.score },
@@ -242,6 +244,7 @@ enum UsageExport {
         Column("systemAppearance") { $0.launch?.systemAppearance },
         Column("events") { $0.events },
         Column("rounds") { $0.rounds },
+        Column("restoredRounds") { $0.restoredRounds },
         Column("answers") { $0.answers },
         Column("correct") { $0.correct },
         Column("accuracy") { ratio($0.correct, $0.answers) },
@@ -330,14 +333,18 @@ private struct AnswerRow {
     let round: RoundStarted?
 }
 
+/// A round that came back after a crash spans two sessions; it belongs to the one it started in.
 private struct RoundRow {
     let id: UUID
+    /// The session it started in (or, without its `roundStarted`, the first that logged it).
     let session: UUID
     var startTime: Date?
     var start: RoundStarted?
     var endTime: Date?
     var end: RoundEnded?
     var answers = 0
+    /// Times it came back after a crash.
+    var restores = 0
 }
 
 private struct SessionRow {
@@ -352,6 +359,8 @@ private struct SessionRow {
     var activeSeconds: Double?
     var activeSince: Date?
     var events = 0, rounds = 0, answers = 0, correct = 0
+    /// Rounds that came back after a crash in this session (they count in the session they started in).
+    var restoredRounds = 0
 
     var start: Date { launchTime ?? firstTime }
     /// As the app measured it; for a session that didn't quit cleanly (or is still going), up to its last event.
@@ -414,6 +423,11 @@ private struct Tables {
             rounds[round].answers += 1
             return AnswerRow(time: logged.time, session: logged.session, answer: answer,
                              question: questions[answer.question], round: rounds[round].start)
+        case .roundRestored(let restore):
+            sessions[session].restoredRounds += 1
+            rounds[roundRow(restore.round, in: logged.session)].restores += 1
+            // Its note is asked again as a new question: this one stays unanswered.
+            if let question = restore.unansweredQuestion { questions[question] = nil }
         case .roundEnded(let end):
             let round = roundRow(end.round, in: logged.session)
             rounds[round].end = end
