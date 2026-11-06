@@ -159,8 +159,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let journalSetup: JournalSetup
     /// The run the last launch left unfinished (a crash, a force quit, the battery running out),
     /// found before this launch logged anything; nil when there was none. Its working file stays
-    /// open, so this launch's lines, its `appLaunched` first, go on in it. It's for
-    /// `Game.restore`, which brings the round back or ends it as `interrupted` (still to be wired in).
+    /// open, so this launch's lines, its `appLaunched` first, go on in it. `Game.restore` brings
+    /// the round back or ends it as `interrupted`.
     let pendingRun: PendingRun?
     /// Tees each run's lines into its working file and hands finished runs to the journal.
     private let runWriter: RunFileWriter
@@ -192,10 +192,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                           launch: writer.launch, log: UsageLog.shared)
         journalSetup = JournalSetup(journal: .shared, outbox: writer.outbox, usageFolder: UsageLog.shared.folder,
                                     recorder: UsageLog.shared)
+        // A new journal (or one taken over from before) gets everything practised so far. This
+        // session is left out: its runs reach the journal through the writer.
+        let libraryFolder = PieceLibrary.shared.folder
+        journalSetup.onJournalCreated = { _ in
+            Task {
+                let detail: String
+                do {
+                    let summary = try await LogImport.bringIn(
+                        usageLog: UsageLog.shared.folder, pieceLibrary: libraryFolder, device: writer.device,
+                        launch: writer.launch, into: PracticeJournal.shared, skippingSession: UsageLog.shared.session)
+                    detail = "runs \(summary.runsWritten), already there \(summary.runsAlreadyPresent), "
+                        + "pieces \(summary.piecesWritten), events \(summary.eventsWritten)"
+                } catch {
+                    detail = "failed: \(error.localizedDescription)"
+                }
+                UsageLog.shared.recordUIAction("broughtInUsageLog", detail: detail)
+            }
+        }
         // Before the game exists, so the session's log starts with the launch: making the game
         // reopens last time's piece, which is logged too.
         UsageLog.shared.record(.appLaunched(.current))
         game = Game(library: .shared)
+        // A round the last launch left unfinished comes back paused, or ends as `interrupted`.
+        if let pendingRun { game.restore(pendingRun) }
         progressStore = ProgressStore()
         super.init()
     }

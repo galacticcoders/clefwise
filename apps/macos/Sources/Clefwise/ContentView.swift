@@ -576,10 +576,9 @@ private struct PausedPanel: View {
         VStack(spacing: 10) {
             Text("Paused")
                 .font(.title2.weight(.semibold))
-            Text(game.pausedVia == .appSwitch
-                 ? "Paused while you were in another app. The \(notes) hidden until you carry on."
-                 : "The clock is stopped and the \(notes) hidden until you carry on.")
+            Text(message)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
             Button {
                 game.recorder.recordUIAction("resumePanelButton")
                 game.resume(via: .button)
@@ -595,6 +594,15 @@ private struct PausedPanel: View {
                 .foregroundStyle(.secondary)
         }
         .panel()
+    }
+
+    private var message: String {
+        if game.isPausedAfterCrash {
+            return "Clefwise closed unexpectedly, so your round was kept where it was. The \(notes) hidden until you carry on."
+        }
+        return game.pausedVia == .appSwitch
+            ? "Paused while you were in another app. The \(notes) hidden until you carry on."
+            : "The clock is stopped and the \(notes) hidden until you carry on."
     }
 
     private var notes: String { game.group == nil ? "note is" : "notes are" }

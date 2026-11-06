@@ -385,6 +385,9 @@ final class Game {
     private(set) var isPaused = false
     /// What paused the round, while it's paused.
     private(set) var pausedVia: PauseSource?
+    /// True while a round brought back after a crash waits to carry on: `restore` pauses it without
+    /// a `pausedVia`, which every other pause sets.
+    var isPausedAfterCrash: Bool { isPaused && pausedVia == nil }
     private(set) var flash: Flash?
     /// While notes struck together are asked as one question (an "All together" piece round),
     /// those notes, the entries so far and, once judged, the result: it stays up through the
