@@ -115,19 +115,20 @@ Every piece you open is kept, so you can practise it again without looking for t
   panel's **Open another…** menu. The full list can be searched once it's longer than eight.
 - **Each piece keeps its own settings** (part, hand, order, start bar, chords, whole bar), so it
   comes back as you left it.
-- **Clefwise keeps its own copy** in `~/Library/Application Support/Clefwise/Pieces/`, so moving or
-  deleting the original doesn't matter. Opening the same file again, from anywhere, is the same
+- **Clefwise keeps its own copy** in `~/Library/Application Support/Clefwise/` (and one in your
+  practice journal), so moving or deleting the original doesn't matter. Opening the same file again, from anywhere, is the same
   piece; a score exported again to the same place replaces the copy and keeps the settings.
 - **Remove…** in the list forgets a piece and its copy; the original file isn't touched.
 
 Notes you've missed recently come up more often (based on your last 8 tries at each note), so
-practice concentrates on what you don't know yet. History, best scores and settings are stored in
-`UserDefaults`; reset everything with `defaults delete local.clefwise`.
+practice concentrates on what you don't know yet. History and best scores come from your practice
+journal (below); settings are stored in `UserDefaults`, one set per journal. To start afresh, make
+a new journal.
 
 ## Progress dashboard
 
 **Window → Progress** (⇧⌘P), or the **Progress** button next to the hints and mute buttons, opens
-a dashboard built from your usage data. Pick a range (last 7 / 30 / 90 days, all time) and a clef;
+a dashboard built from your practice journal. Pick a range (last 7 / 30 / 90 days, all time) and a clef;
 everything on the page follows that choice.
 
 - **Overview**: practice time, notes answered, accuracy, typical response time (median to a
@@ -148,8 +149,8 @@ everything on the page follows that choice.
 - **Practice calendar**, **how you answer** (by answer method and naming system), **pieces** bar by
   bar, and **recent rounds**.
 
-Every chart has a **Table** view with the numbers. The dashboard refreshes when a round ends and
-can stay open beside the game.
+Every chart has a **Table** view with the numbers. The dashboard refreshes whenever practice
+reaches the journal (a round ending, or another device's) and can stay open beside the game.
 
 ## Your practice journal
 
@@ -163,13 +164,25 @@ way Obsidian keeps notes in a folder. There's no account and no Clefwise server.
   from the usage log, below). Your pieces go in `pieces/`, named by their SHA-256, and changes to
   the list in `events/`. Files are only ever added, never changed. A run with no answers gets no
   file.
-- **Practice so far:** when the journal is made, your usage log and pieces so far are copied in.
-- **File → Show Journal in Finder** opens it. If Clefwise can't find it (a disk unplugged, the
-  folder moved out of reach), it offers **Locate…** or **Create New…**; finished runs wait on your
-  Mac until it's back.
-- For now the dashboard, best scores and your pieces still come from the app's own data; the
-  journal keeps the same history beside it. The format is in
-  [spec/practice-journal.md](../../spec/practice-journal.md).
+- **It's the source:** the dashboard, your best scores and which notes come up more often are
+  all worked out from the journal.
+- **From your other devices:** in a folder synced by iCloud Drive, Dropbox or Syncthing, practice
+  from another device comes in while Clefwise is open: the dashboard and note picking follow it,
+  and a piece added, changed or removed there is here too. New stats wait for the round to end.
+- **One journal per person,** so several people can share a Mac, still with no accounts. Each
+  journal keeps its own settings, pieces and best scores; a new one starts with the default
+  settings. The window title names the journal in use.
+  - **Switch** between rounds with **Journal: <name>** on the start panel or **File → Switch
+    Journal**. The start panel's menu and the File menu also have **New Journal…** and **Open
+    Journal…** (a folder with `clefwise.json` in it).
+  - **Remove "<name>" from List…** (on the start panel) only forgets it on this Mac; the folder
+    stays as it is.
+- **Practice so far:** when your first journal is made, your usage log and pieces so far are
+  copied into it (only that one: it's one person's practice).
+- **File → Show Journal in Finder** opens it, during a round too. If Clefwise can't find it (a
+  disk unplugged, the folder moved out of reach), it offers **Locate…**, **Create New…** or
+  another of your journals; finished runs wait on your Mac until it's back.
+- The format is in [spec/practice-journal.md](../../spec/practice-journal.md).
 
 ## Your usage data
 
@@ -213,12 +226,14 @@ Sources/Clefwise/
   UsageExport.swift   export zip: raw events, CSV tables, saved settings and stats
   UsageSchemaDoc.swift SCHEMA.md text included in exports
   AppUsage.swift      app lifecycle and UI-click logging, usage data menu items
-  Dashboard/          the Progress window: ProgressAnalyzer turns the usage log into a
+  AppModel.swift      the journal in use with its game, pieces and dashboard; switching journals
+  Dashboard/          the Progress window: ProgressAnalyzer turns the practice journal into a
                       ProgressReport; ProgressStore loads it off the main thread; DashboardView
                       and one file per section draw it (palette and card chrome in DashboardTheme)
-  Journal/            the practice journal: run files and their writer, the folder, its first-launch
-                      sheet, bringing in the old log (LogImport), rebuilding stats from it
-                      (JournalProjection)
+  Journal/            the practice journal: run files and their writer, the folder, the journals
+                      this Mac knows (JournalRegistry) and its state for each, the sheet and alerts,
+                      reading it (JournalReader) and watching it for changes (JournalWatcher),
+                      bringing in the old log (LogImport), note stats from it (JournalProjection)
   Synth.swift         tiny additive synth for note playback
   Theme.swift         colors
 Tests/ClefwiseTests/  Swift Testing tests (`swift test`); the MusicXML test scores they read are
