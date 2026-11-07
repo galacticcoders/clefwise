@@ -43,12 +43,17 @@ final class PieceLibrary {
     /// nil for nowhere (the default, and in tests that don't look at it). The app sets it at
     /// launch, before the game reopens anything.
     @ObservationIgnored var journal: JournalEventRecording?
+    /// When each piece last changed here, through `add` (added or revised) or `remove`, by its
+    /// `pieceID` in lowercase; kept until the journal has that change or a later one, so `adopt`
+    /// doesn't undo it meanwhile. A removed piece's time stays here after its entry has gone.
+    @ObservationIgnored private var changedHere: [String: Date]
 
     /// Reads the library in `folder`; nothing is written until a piece is added.
     init(folder: URL, journal: JournalEventRecording? = nil) {
         self.folder = folder
         self.journal = journal
         entries = Self.loadIndex(in: folder)
+        changedHere = Self.loadChangesHere(in: folder)
     }
 
     var isEmpty: Bool { entries.isEmpty }
@@ -91,6 +96,7 @@ final class PieceLibrary {
             index = updated
             try write(data, as: entries[index].fileName)
             entries[index].contentHash = hash
+            noteChangeHere(to: entries[index].pieceID, at: now)
             journal?.recordInJournal(.pieceRevised(PieceRevised(piece: entries[index].pieceID, file: hash, title: title)),
                                      piece: Self.journalFile(data, hash: hash, fileName: entries[index].fileName))
         } else {
@@ -101,6 +107,7 @@ final class PieceLibrary {
             try write(data, as: entry.fileName)
             entries.insert(entry, at: 0)
             saveIndex()
+            noteChangeHere(to: hash, at: now)
             journal?.recordInJournal(.pieceAdded(PieceAdded(piece: hash, title: title, fileName: url.lastPathComponent,
                                                             libraryID: id, originalPath: url.path)),
                                      piece: Self.journalFile(data, hash: hash, fileName: entry.fileName))
@@ -128,6 +135,7 @@ final class PieceLibrary {
         let entry = entries.remove(at: index)
         try? FileManager.default.removeItem(at: fileURL(for: entry))
         saveIndex()
+        noteChangeHere(to: entry.pieceID, at: .now)
         journal?.recordInJournal(.pieceRemoved(PieceRemoved(piece: entry.pieceID)), piece: nil)
     }
 
@@ -141,16 +149,21 @@ final class PieceLibrary {
     ///
     /// - **The journal's state:** each piece's events, folded in time order (the order of
     ///   `contents.pieceEvents`), the latest winning: a `pieceAdded` makes the piece present, with
-    ///   its file (`PieceAdded.piece`) and title; a `pieceRevised` gives it a new file and title; a
-    ///   `pieceRemoved` makes it absent. A piece matches the entry with its id as `Entry.pieceID`,
-    ///   compared in lowercase.
+    ///   its file (`PieceAdded.piece`) and title; a `pieceRevised` gives it a new file and title,
+    ///   and makes it present again should it come after a `pieceRemoved` (another device revised
+    ///   the piece later, and has it); a `pieceRemoved` makes it absent. A piece matches the entry
+    ///   with its id as `Entry.pieceID`, compared in lowercase.
     /// - **Added:** present in the journal and not here: a new entry, its copy written from the
     ///   journal's `pieces/<hash>.<ext>` (whichever of `JournalLayout.pieceExtensions` is there),
     ///   checked against the hash. Its `id` is the `libraryID` of its `pieceAdded`, unless that's
     ///   missing or already taken here; `title` the latest; `originalPath` the `pieceAdded`'s
     ///   `originalPath`, failing that its `fileName`; `pieceID` the piece's id; `contentHash` the
     ///   file's hash; `fileName` `<id>.<ext>`, as `add` names copies; `addedAt` and `lastOpenedAt`
-    ///   the `pieceAdded`'s `time`; `settings` nil (a piece's own settings stay on each device).
+    ///   the `pieceAdded`'s `time` (placing it among the others, most recently opened first);
+    ///   `settings` nil (a piece's own settings stay on each device). The other device's
+    ///   `originalPath` is kept as it is, since old runs and the dashboard know the piece by it,
+    ///   even though no such file is likely to be on this Mac. A piece whose `pieceAdded` hasn't
+    ///   arrived yet (only a `pieceRevised` has) waits for it.
     /// - **Revised:** present in both, with another file or title in the journal: the copy gets the
     ///   new file's bytes (checked the same way) and the entry its `contentHash` and `title`. It
     ///   keeps its id, file name, settings and dates.
@@ -162,12 +175,113 @@ final class PieceLibrary {
     ///   `pieceAdded` is still on its way.
     /// - **Changes made here win while they're on their way:** an event older than this library's
     ///   own last change to that piece (adding, revising or removing it here) isn't applied, so the
-    ///   journal's older state doesn't undo a change still waiting to go in. The library keeps what
-    ///   it needs for that beside its index.
+    ///   journal's older state doesn't undo a change still waiting to go in. The library keeps
+    ///   when each piece last changed here in `local-changes.json` beside its index (removed pieces
+    ///   too), and forgets it once the journal's latest event for the piece is as new or newer:
+    ///   the change has arrived, or another device changed the piece after it.
     /// - Calling it again with the same contents changes nothing. The index is saved once, if
     ///   anything changed.
+    ///
+    /// Scores are small, so they're read and copied here, on the main actor; only the ones an
+    /// entry needs are read.
     func adopt(from contents: JournalReader.Contents, journalFolder: URL) {
-        // C2
+        var entriesChanged = false
+        var changesHereForgotten = false
+        for piece in Self.journalPieces(in: contents.pieceEvents) {
+            if let changed = changedHere[piece.id] {
+                guard piece.changedAt >= changed else { continue }
+                changedHere[piece.id] = nil
+                changesHereForgotten = true
+            }
+            let index = entries.firstIndex { $0.pieceID.lowercased() == piece.id }
+            switch (piece.file, index) {
+            case (nil, let index?):
+                let entry = entries.remove(at: index)
+                try? FileManager.default.removeItem(at: fileURL(for: entry))
+                entriesChanged = true
+            case (let file?, let index?):
+                if entries[index].contentHash.lowercased() != file {
+                    guard let score = Self.journalScore(file, in: journalFolder),
+                          (try? write(score.data, as: entries[index].fileName)) != nil else { continue }
+                    entries[index].contentHash = file
+                } else if entries[index].title == piece.title {
+                    continue
+                }
+                entries[index].title = piece.title
+                entriesChanged = true
+            case (let file?, nil):
+                guard let added = piece.added, let score = Self.journalScore(file, in: journalFolder) else { continue }
+                let id = added.event.libraryID.flatMap { self.entry(id: $0) == nil ? $0 : nil } ?? UUID()
+                let new = Entry(id: id, title: piece.title, originalPath: added.event.originalPath ?? added.event.fileName,
+                                fileName: "\(id.uuidString).\(score.fileExtension)", contentHash: file,
+                                pieceID: piece.id, addedAt: added.time, lastOpenedAt: added.time, settings: nil)
+                guard (try? write(score.data, as: new.fileName)) != nil else { continue }
+                entries.insert(new, at: entries.firstIndex { $0.lastOpenedAt < new.lastOpenedAt } ?? entries.endIndex)
+                entriesChanged = true
+            case (nil, nil):
+                break
+            }
+        }
+        if entriesChanged { saveIndex() }
+        if changesHereForgotten { saveChangesHere() }
+    }
+
+    /// A piece as the journal's events leave it.
+    private struct JournalPiece {
+        /// Its id, in lowercase.
+        let id: String
+        /// Its latest `pieceAdded` and that event's time; nil while none has arrived.
+        var added: (event: PieceAdded, time: Date)?
+        /// The hash of its file now, in lowercase; nil when it's been removed.
+        var file: String?
+        var title = ""
+        /// The time of its latest event.
+        var changedAt: Date
+    }
+
+    /// Each piece in `events` (in time order), folded, in the order the pieces first appear.
+    private static func journalPieces(in events: [LoggedEvent]) -> [JournalPiece] {
+        var order: [String] = []
+        var pieces: [String: JournalPiece] = [:]
+        for event in events {
+            let id: String
+            switch event.event {
+            case .pieceAdded(let added): id = added.piece.lowercased()
+            case .pieceRevised(let revised): id = revised.piece.lowercased()
+            case .pieceRemoved(let removed): id = removed.piece.lowercased()
+            default: continue
+            }
+            var piece = pieces[id] ?? JournalPiece(id: id, changedAt: event.time)
+            if pieces[id] == nil { order.append(id) }
+            piece.changedAt = max(piece.changedAt, event.time)
+            switch event.event {
+            case .pieceAdded(let added):
+                piece.added = (added, event.time)
+                piece.file = id
+                piece.title = added.title
+            case .pieceRevised(let revised):
+                piece.file = revised.file.lowercased()
+                piece.title = revised.title
+            case .pieceRemoved:
+                piece.file = nil
+            default:
+                break
+            }
+            pieces[id] = piece
+        }
+        return order.compactMap { pieces[$0] }
+    }
+
+    /// The score named `hash` in the journal's `pieces/`, with its extension; nil when it isn't
+    /// there yet (still arriving), can't be read, or its bytes don't match its name.
+    private static func journalScore(_ hash: String, in journalFolder: URL) -> (data: Data, fileExtension: String)? {
+        for fileExtension in JournalLayout.pieceExtensions.sorted() {
+            let url = journalFolder.appendingPathComponent(JournalLayout.piecePath(hash: hash, fileExtension: fileExtension))
+            if let data = try? Data(contentsOf: url), JournalPieceFile.sha256(of: data) == hash.lowercased() {
+                return (data, fileExtension)
+            }
+        }
+        return nil
     }
 
     // MARK: - Storage
@@ -204,6 +318,45 @@ final class PieceLibrary {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try? data.write(to: indexURL, options: .atomic)
     }
+
+    /// Remembers that `piece` changed here at `time` (see `adopt`), and saves that. The time is
+    /// kept to the millisecond, as saved, and as the journal's events have theirs.
+    private func noteChangeHere(to piece: String, at time: Date) {
+        changedHere[piece.lowercased()] = (try? Self.changeTimeStyle.parse(Self.changeTimeStyle.format(time))) ?? time
+        saveChangesHere()
+    }
+
+    /// Where a library in `folder` keeps `changedHere`: beside the index, which keeps its own
+    /// format (a list of entries), as builds without the journal's adopting read it.
+    private static func changesHereURL(in folder: URL) -> URL {
+        folder.appendingPathComponent("local-changes.json")
+    }
+
+    /// `changedHere` as JSON, each piece's time in UTC to the millisecond, like the journal's.
+    private func saveChangesHere() {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(Self.changeTimeStyle.format(date))
+        }
+        guard let data = try? encoder.encode(changedHere) else { return }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? data.write(to: Self.changesHereURL(in: folder), options: .atomic)
+    }
+
+    /// What `saveChangesHere` saved; nothing when it's missing or unreadable, which only lets the
+    /// journal's state win sooner.
+    private static func loadChangesHere(in folder: URL) -> [String: Date] {
+        guard let data = try? Data(contentsOf: changesHereURL(in: folder)) else { return [:] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            try changeTimeStyle.parse(try decoder.singleValueContainer().decode(String.self))
+        }
+        return (try? decoder.decode([String: Date].self, from: data)) ?? [:]
+    }
+
+    private nonisolated static let changeTimeStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 
     /// An unreadable index is set aside (renamed with the time) rather than lost, and the library
     /// starts empty; the copies stay where they are.
