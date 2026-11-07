@@ -132,6 +132,84 @@ struct TestJournal {
         #expect(allTime.pieces.map(\.id) == [SyntheticUsage.piecePath] && allTime.answersBeforeTracking == 138)
     }
 
+    // MARK: - Data from versions with the sprint
+
+    /// Four rounds and an opening balance, logged by a version until 2026-11-07 (`old`), with
+    /// sprints and best scores, or as the same rounds are logged now: a sprint, a sprint on a piece,
+    /// a timed practice round, and a sprint whose settings kept a limit it didn't have.
+    private func practice(old: Bool) -> Log {
+        var log = Log()
+        log.add(.statsSnapshot(StatsSnapshot(reason: "beforeUsageLog", noteStats: ["treble.F5": NoteStat(attempts: 10, correct: 7)],
+                                             bestScores: old ? ["treble.staff": 12] : nil)), at: at(30, 9))
+        func start(_ time: Date, _ mode: String, piece: PieceContext? = nil,
+                   _ change: (inout Game.Settings) -> Void = { _ in }) -> UUID {
+            old ? log.oldRound(at: time, mode: mode, piece: piece, change) : log.round(at: time, piece: piece, change)
+        }
+        func end(_ round: UUID, at time: Date, durationMs: Int, score: Int, attempts: Int, reason: RoundEndReason,
+                 best: Int? = nil) {
+            var ended = RoundEnded(round: round, reason: reason, durationMs: durationMs, score: score, attempts: attempts,
+                                   bestStreak: score, averageResponseMs: nil, notesToReview: [])
+            if old {
+                ended.bestScore = best
+                ended.isNewBest = best == score
+            }
+            log.add(.roundEnded(ended), at: time)
+        }
+        let sprint = start(at(2, 10), "sprint")
+        log.answer(sprint, at: at(2, 10, 0, 2), Pitch(.f, 5), ms: 1500)
+        log.answer(sprint, at: at(2, 10, 0, 4), Pitch(.g, 4), correct: false, ms: 1800)
+        end(sprint, at: at(2, 10, 1), durationMs: 60_000, score: 1, attempts: 2, reason: .timeUp, best: 12)
+        let onPiece = start(at(1, 10), "sprint", piece: piece("Minuet in G", path: "/minuet.musicxml", staves: 1))
+        log.answer(onPiece, at: at(1, 10, 0, 2), Pitch(.c, 5), bar: 1)
+        log.answer(onPiece, at: at(1, 10, 0, 4), Pitch(.d, 5), bar: 2)
+        end(onPiece, at: at(1, 10, 1), durationMs: 60_000, score: 2, attempts: 2, reason: .timeUp)
+        let timed = start(at(0, 9), "practice") {
+            $0.practiceLimit = .time
+            $0.practiceMinutes = 5
+        }
+        log.answer(timed, at: at(0, 9, 0, 2), Pitch(.e, 4))
+        end(timed, at: at(0, 9, 0, 30), durationMs: 30_000, score: 1, attempts: 1, reason: .stopped)
+        let withLimit = start(at(0, 11), "sprint") { $0.practiceLimit = .notes }
+        log.answer(withLimit, at: at(0, 11, 0, 2), Pitch(.b, 4))
+        end(withLimit, at: at(0, 11, 1), durationMs: 60_000, score: 1, attempts: 1, reason: .timeUp, best: 12)
+        return log
+    }
+
+    @Test func sprintsFromBeforeItWentCountAsTheyAlwaysDid() throws {
+        let then = temporary.url.appendingPathComponent("Then", isDirectory: true)
+        let since = temporary.url.appendingPathComponent("Since", isDirectory: true)
+        try TestJournal(folder: then).write(practice(old: true).events)
+        try TestJournal(folder: since).write(practice(old: false).events)
+        let old = JournalReader(folder: then).read(), new = JournalReader(folder: since).read()
+        #expect(old.runs.count == 4 && old.snapshots.count == 1 && old.unreadableLines == 0)
+
+        // The same note stats, the opening balance's included…
+        let stats = JournalProjection(contents: old).noteStats
+        #expect(stats == JournalProjection(contents: new).noteStats)
+        #expect(stats["treble.F5"] == NoteStat(attempts: 11, correct: 8, recent: [true]))
+        #expect(stats["treble.G4"] == NoteStat(attempts: 1, correct: 0, recent: [false]))
+
+        // …and the same dashboard, every number of it.
+        let week = report(old)
+        #expect(week.totals.rounds == 4 && week.totals.answers == 6 && week.totals.correct == 5)
+        #expect(week.totals.practiceSeconds == 210)
+        // Only Recent Rounds tells them apart: the sprints keep their name, and had no limit.
+        #expect(week.recentRounds.map(\.modeLabel) == ["60s Sprint", "Practice · 5 min", "60s Sprint", "60s Sprint"])
+        #expect(report(new).recentRounds.map(\.modeLabel) == ["Practice · 100 notes", "Practice · 5 min", "Practice", "Practice"])
+        let filters = [ProgressFilter(range: .week), ProgressFilter(range: .all), ProgressFilter(range: .all, clef: .treble)]
+        for filter in filters {
+            var fromOld = report(old, filter)
+            let fromNew = report(new, filter)
+            try #require(fromOld.recentRounds.count == fromNew.recentRounds.count)
+            for index in fromOld.recentRounds.indices {
+                fromOld.recentRounds[index].id = fromNew.recentRounds[index].id
+                fromOld.recentRounds[index].wasSprint = false
+                fromOld.recentRounds[index].practiceLength = fromNew.recentRounds[index].practiceLength
+            }
+            #expect(fromOld == fromNew, "\(filter)")
+        }
+    }
+
     // MARK: - Staves
 
     @Test func runsBroughtInFromTheLogTakeTheirStavesFromThisMacsLog() throws {

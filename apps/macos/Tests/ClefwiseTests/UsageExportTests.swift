@@ -17,10 +17,15 @@ import Testing
         let questions = (0..<4).map { _ in UUID() }
     }
 
-    private func settings(_ change: (inout Game.Settings) -> Void) -> JSONValue {
+    /// The default settings as changed by `change`, as logged; with `mode` (`sprint` or `practice`)
+    /// as versions until 2026-11-07 logged it.
+    private func settings(mode: String? = nil, _ change: (inout Game.Settings) -> Void) -> JSONValue {
         var settings = Game.Settings()
         change(&settings)
-        return JSONValue(encoding: settings)
+        var values: [String: JSONValue] = [:]
+        if case .object(let saved) = JSONValue(encoding: settings) { values = saved }
+        if let mode { values["mode"] = .string(mode) }
+        return .object(values)
     }
 
     private func question(_ script: Script, _ number: Int, round: UUID, index: Int, _ pitch: Pitch, position: Int,
@@ -43,7 +48,8 @@ import Testing
                                  scoreAfter: score, streakAfter: streak))
     }
 
-    /// A sprint typed in G major, a stretch in another app, then a piece answered on the piano.
+    /// A sprint typed in G major, a stretch in another app, then a piece answered on the piano, as a
+    /// version until 2026-11-07 logged them.
     private func recordSession(into log: UsageLog, clock: UsageTestClock) -> Script {
         let script = Script()
         let piece = PieceContext(title: pieceTitle, path: "/Users/me/Für Elise.musicxml", part: "Piano", partIndex: 0,
@@ -54,7 +60,7 @@ import Testing
                                          locale: "en_GB", timeZone: "Europe/Bucharest", screen: nil))),
             (0, .appActivity(AppActivity(active: true))),
             (1, .settingChanged(SettingChanged(setting: "answerInput", from: .string("buttons"), to: .string("keyboard")))),
-            (2, .roundStarted(RoundStarted(round: script.round1, via: .button, settings: settings {
+            (2, .roundStarted(RoundStarted(round: script.round1, via: .button, settings: settings(mode: "sprint") {
                 $0.answerInput = .keyboard
                 $0.key = .fixed(KeySignature(fifths: 1))
                 $0.addsAccidentals = true
@@ -75,8 +81,7 @@ import Testing
             (62, .roundEnded(RoundEnded(round: script.round1, reason: .timeUp, durationMs: 60_000, score: 1, attempts: 2,
                                         bestStreak: 1, averageResponseMs: 1500, bestScore: 12, isNewBest: false,
                                         notesToReview: ["B♭4"]))),
-            (70, .roundStarted(RoundStarted(round: script.round2, via: .key, settings: settings {
-                $0.mode = .practice
+            (70, .roundStarted(RoundStarted(round: script.round2, via: .key, settings: settings(mode: "practice") {
                 $0.naming = .solfege
                 $0.answerInput = .piano
             }, keyFifths: 0, piece: piece))),
@@ -90,8 +95,7 @@ import Testing
             (72, answer(script, 3, round: script.round2, ms: 800, source: .piano, "D", 1, name: "Re♯", piano: Pitch(.d, 5, .sharp),
                         correct: true, wrongOctave: false, score: 1, streak: 1)),
             (80, .roundEnded(RoundEnded(round: script.round2, reason: .pieceComplete, durationMs: 10_000, score: 1, attempts: 2,
-                                        bestStreak: 1, averageResponseMs: 800, bestScore: nil, isNewBest: false,
-                                        notesToReview: ["E5"]))),
+                                        bestStreak: 1, averageResponseMs: 800, notesToReview: ["E5"]))),
             (85, .uiAction(UIAction(name: "exportUsage", detail: nil))),
             (90, .appTerminated(AppTerminated(sessionSeconds: 90))),
         ]
@@ -195,7 +199,7 @@ import Testing
         let (_, log, top) = try exportScriptedSession()
         #expect(top.lastPathComponent.hasPrefix("Clefwise usage 20"))
         let files = try FileManager.default.subpathsOfDirectory(atPath: top.path).sorted()
-        #expect(files == ["SCHEMA.md", "answers.csv", "best-scores.json", "events", "events/usage-2026-10-30.jsonl",
+        #expect(files == ["SCHEMA.md", "answers.csv", "events", "events/usage-2026-10-30.jsonl",
                           "note-stats.json", "piece-library.json", "rounds.csv", "sessions.csv", "settings.json"])
         // No library folder given: an empty list.
         #expect(try String(contentsOf: top.appendingPathComponent("piece-library.json"), encoding: .utf8) == "[]\n")
@@ -210,7 +214,6 @@ import Testing
         #expect(settings["naming"] as? String == "solfege")
         let stats = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: top.appendingPathComponent("note-stats.json"))) as? [String: Any])
         #expect((stats["treble.F♯4"] as? [String: Any])?["attempts"] as? Int == 2)
-        #expect(try String(contentsOf: top.appendingPathComponent("best-scores.json"), encoding: .utf8) == "{}\n")
         #expect(try String(contentsOf: top.appendingPathComponent("settings.json"), encoding: .utf8).contains("\n  \""),
                 "pretty-printed")
 
@@ -352,14 +355,17 @@ import Testing
         try FileManager.default.createDirectory(at: temporary.url, withIntermediateDirectories: true)
         let defaults = try defaultsWithStats()
         let namespace = "journal.6f9619ff-8b86-4011-b42d-00c04fc964ff."
+        defaults.set(try JSONEncoder().encode(["bass.G2": NoteStat(attempts: 1, correct: 1, recent: [true])]),
+                     forKey: namespace + "noteStats")
+        // Best sprint scores a version until 2026-11-07 kept: no longer exported.
         defaults.set(try JSONEncoder().encode(["bass.staff": 7]), forKey: namespace + "bestScores")
         try UsageExport.export(UsageLog(folder: logFolder), to: destination, defaults: defaults, namespace: namespace)
         let top = try unzip(destination)
-        #expect(try String(contentsOf: top.appendingPathComponent("best-scores.json"), encoding: .utf8)
-                == "{\n  \"bass.staff\" : 7\n}\n")
-        // Nothing saved in the journal's namespace yet: not the values under the plain keys.
+        let stats = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: top.appendingPathComponent("note-stats.json"))) as? [String: Any])
+        #expect(Array(stats.keys) == ["bass.G2"])
+        #expect(!FileManager.default.fileExists(atPath: top.appendingPathComponent("best-scores.json").path))
+        // No settings saved in the journal's namespace yet: not the ones under the plain keys.
         #expect(try String(contentsOf: top.appendingPathComponent("settings.json"), encoding: .utf8) == "{}\n")
-        #expect(try String(contentsOf: top.appendingPathComponent("note-stats.json"), encoding: .utf8) == "{}\n")
     }
 
     @Test func replacesAnExistingFile() throws {
@@ -392,21 +398,22 @@ import Testing
     @Test func roundsSayTheirPracticeLimit() throws {
         try FileManager.default.createDirectory(at: temporary.url, withIntermediateDirectories: true)
         let log = UsageLog(folder: logFolder)
-        func round(_ change: (inout Game.Settings) -> Void) {
-            var settings = Game.Settings()
-            change(&settings)
-            log.record(.roundStarted(RoundStarted(round: UUID(), via: .button, settings: JSONValue(encoding: settings),
+        func round(mode: String? = nil, _ change: (inout Game.Settings) -> Void) {
+            log.record(.roundStarted(RoundStarted(round: UUID(), via: .button, settings: settings(mode: mode, change),
                                                   keyFifths: 0, piece: nil)))
         }
-        round { $0.mode = .practice; $0.practiceLimit = .notes; $0.practiceNotes = 250 }
-        round { $0.mode = .practice; $0.practiceLimit = .time; $0.practiceMinutes = 15 }
-        round { $0.mode = .practice }
-        // A limit left in the settings means nothing to a sprint.
-        round { $0.mode = .sprint; $0.practiceLimit = .time }
+        round { $0.practiceLimit = .notes; $0.practiceNotes = 250 }
+        round { $0.practiceLimit = .time; $0.practiceMinutes = 15 }
+        round { _ in }
+        // From a version until 2026-11-07: a limit left in the settings meant nothing to a sprint.
+        round(mode: "practice") { $0.practiceLimit = .time; $0.practiceMinutes = 30 }
+        round(mode: "sprint") { $0.practiceLimit = .time }
         try UsageExport.export(log, to: destination, defaults: InMemoryDefaults())
         let rows = try table(try unzip(destination).appendingPathComponent("rounds.csv")).rows
-        #expect(rows.map { $0["practiceLimit"] } == ["notes", "time", "", ""])
-        #expect(rows.map { $0["practiceTarget"] } == ["250", "15", "", ""])
+        #expect(rows.map { $0["practiceLimit"] } == ["notes", "time", "", "time", ""])
+        #expect(rows.map { $0["practiceTarget"] } == ["250", "15", "", "30", ""])
+        // Rounds since have no mode: they're practice.
+        #expect(rows.map { $0["mode"] } == ["", "", "", "practice", "sprint"])
     }
 
     @Test func emptyLogStillExports() throws {
@@ -456,7 +463,7 @@ extension UsageExportTests {
                                      accidental: 0, name: "C", pitch: nil, correct: true, wrongOctave: nil, keystrokes: [],
                                      scoreAfter: score, streakAfter: score))
         }
-        let practice = settings { $0.mode = .practice }
+        let practice = settings { _ in }
 
         let first = launch()
         first.record(.roundStarted(RoundStarted(round: restored, via: .button, settings: practice, keyFifths: 0, piece: nil)))
@@ -475,8 +482,7 @@ extension UsageExportTests {
         clock.advance(1)
         second.record(answer(restored, 2, score: 2))
         second.record(.roundEnded(RoundEnded(round: restored, reason: .stopped, durationMs: 3_000, pausedMs: 5_000, score: 2,
-                                             attempts: 2, bestStreak: 2, averageResponseMs: 1000, bestScore: nil,
-                                             isNewBest: false, notesToReview: [])))
+                                             attempts: 2, bestStreak: 2, averageResponseMs: 1000, notesToReview: [])))
         clock.advance(10)
         second.record(.roundStarted(RoundStarted(round: interrupted, via: .key, settings: practice, keyFifths: 0, piece: nil)))
         second.record(shown(interrupted, 3, index: 0))
@@ -489,7 +495,7 @@ extension UsageExportTests {
         clock.advance(7200)
         let third = launch()
         var end = RoundEnded(round: interrupted, reason: .interrupted, durationMs: 1_000, score: 1, attempts: 1, bestStreak: 1,
-                             averageResponseMs: 1000, bestScore: nil, isNewBest: false, notesToReview: [])
+                             averageResponseMs: 1000, notesToReview: [])
         end.recordedAt = clock.now
         third.record(.roundEnded(end), at: lastEvent)
         try UsageExport.export(third, to: destination, defaults: InMemoryDefaults(), timeZone: bucharest)

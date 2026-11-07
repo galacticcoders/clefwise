@@ -61,8 +61,8 @@ import Testing
                                          pickChance: nil, naming: "letters", input: "piano",
                                          hintsVisible: false, keyNamesVisible: true, barView: true, barStaves: [1, 2])),
             .roundEnded(RoundEnded(round: UUID(), reason: .pieceComplete, durationMs: 61_000, score: 38, attempts: 38,
-                                   bestStreak: 38, averageResponseMs: 950, bestScore: nil, isNewBest: false, notesToReview: [])),
-            .statsSnapshot(StatsSnapshot(reason: "test", noteStats: ["treble.C4": NoteStat()], bestScores: ["treble.staff": 12])),
+                                   bestStreak: 38, averageResponseMs: 950, notesToReview: [])),
+            .statsSnapshot(StatsSnapshot(reason: "test", noteStats: ["treble.C4": NoteStat()])),
         ]
         for event in events {
             let (_, _, logged) = try line(event)
@@ -129,8 +129,7 @@ import Testing
 
     @Test func interruptedEndSaysWhenItWasWritten() throws {
         var ended = RoundEnded(round: UUID(), reason: .interrupted, durationMs: 95_000, score: 30, attempts: 32,
-                               bestStreak: 12, averageResponseMs: 1400, bestScore: nil, isNewBest: false,
-                               notesToReview: ["F♯4"])
+                               bestStreak: 12, averageResponseMs: 1400, notesToReview: ["F♯4"])
         var json = try line(.roundEnded(ended)).json
         #expect(json["reason"] as? String == "interrupted")
         #expect(json["recordedAt"] == nil, "left out without a value")
@@ -165,6 +164,49 @@ import Testing
         #expect(piece.chords == nil && piece.libraryID == nil)
         #expect(piece.id == nil && piece.file == nil && piece.staves == nil)
         #expect(decoded.id.uuidString == "0E3A8E52-6B8B-4E59-9C51-0E7B3E2C6B11")
+    }
+
+    @Test func sprintLinesFromBeforeItWentStillDecodeAndWriteBackAsTheyWere() throws {
+        // As versions until 2026-11-07 wrote them: a sprint's start with `mode`, its end with the
+        // best score it set, and an opening balance with the best scores.
+        let lines = [
+            #"{"id":"0E3A8E52-6B8B-4E59-9C51-0E7B3E2C6B11","keyFifths":0,"round":"5C1D2E3F-4A5B-4C6D-8E7F-9A0B1C2D3E4F","schema":1,"sequence":3,"session":"A1B2C3D4-E5F6-4711-8899-AABBCCDDEEFF","settings":{"clefChoice":"bass","mode":"sprint","naming":"solfege"},"time":"2026-11-01T10:00:00.000Z","type":"roundStarted","via":"button"}"#,
+            #"{"attempts":15,"averageResponseMs":3900,"bestScore":14,"bestStreak":9,"durationMs":60000,"id":"1F4B9F63-7C9C-4F6A-8D62-1F8C4F3D7C22","isNewBest":true,"notesToReview":["bass.F2"],"reason":"timeUp","round":"5C1D2E3F-4A5B-4C6D-8E7F-9A0B1C2D3E4F","schema":1,"score":14,"sequence":20,"session":"A1B2C3D4-E5F6-4711-8899-AABBCCDDEEFF","time":"2026-11-01T10:01:00.000Z","type":"roundEnded"}"#,
+            #"{"bestScores":{"bass.staff":14,"treble.staff":21},"id":"2A5CAF74-8DAD-4A7B-9E73-2A9D5A4E8D33","noteStats":{"bass.F2":{"attempts":3,"correct":2,"recent":[true,false,true]}},"reason":"beforeUsageLog","schema":1,"sequence":1,"session":"A1B2C3D4-E5F6-4711-8899-AABBCCDDEEFF","time":"2026-11-01T09:59:00.000Z","type":"statsSnapshot"}"#,
+        ]
+        let decoded = try lines.map { try LoggedEvent.decoder.decode(LoggedEvent.self, from: Data($0.utf8)) }
+        guard case .roundStarted(let started) = decoded[0].event, case .roundEnded(let ended) = decoded[1].event,
+              case .statsSnapshot(let snapshot) = decoded[2].event else {
+            Issue.record("should decode as a round's start and end and a snapshot")
+            return
+        }
+        #expect(started.wasSprint)
+        // The rest of the settings read as they were.
+        let settings = try JSONDecoder().decode(Game.Settings.self, from: JSONEncoder().encode(started.settings))
+        #expect(settings.clefChoice == .bass && settings.naming == .solfege)
+        #expect(ended.bestScore == 14 && ended.isNewBest == true && ended.score == 14)
+        #expect(snapshot.bestScores == ["bass.staff": 14, "treble.staff": 21])
+        #expect(snapshot.noteStats["bass.F2"] == NoteStat(attempts: 3, correct: 2, recent: [true, false, true]))
+        // Written again (an opening balance brought into a journal is), each is the line it was.
+        for (event, line) in zip(decoded, lines) {
+            #expect(String(decoding: try event.encodedLine(), as: UTF8.self) == line + "\n")
+        }
+    }
+
+    @Test func roundsSinceTheSprintWentLeaveItsFieldsOut() throws {
+        let started = RoundStarted(round: UUID(), via: .button, settings: JSONValue(encoding: Game.Settings()), keyFifths: 0)
+        var json = try line(.roundStarted(started)).json
+        #expect((json["settings"] as? [String: Any])?["mode"] == nil)
+        #expect(!started.wasSprint)
+        let practice = RoundStarted(round: UUID(), via: .button, settings: .object(["mode": .string("practice")]), keyFifths: 0)
+        #expect(!practice.wasSprint)
+
+        json = try line(.roundEnded(RoundEnded(round: UUID(), reason: .timeUp, durationMs: 300_000, score: 80,
+                                               attempts: 85, bestStreak: 40, averageResponseMs: 3500,
+                                               notesToReview: []))).json
+        #expect(json["bestScore"] == nil && json["isNewBest"] == nil)
+        json = try line(.statsSnapshot(StatsSnapshot(reason: "beforeUsageLog", noteStats: [:]))).json
+        #expect(json["bestScores"] == nil)
     }
 
     @Test func pieceJournalFieldsRoundTripAndAreLeftOutWithoutAValue() throws {

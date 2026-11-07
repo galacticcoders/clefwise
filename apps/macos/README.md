@@ -17,13 +17,12 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
 
 ## How to play
 
-- Pick a **clef** (Treble, Bass, Both) and a **mode** in the toolbar.
-  - *60s Sprint*: name as many notes as you can in a minute; best score is kept per clef/range.
-  - *Practice*: at your own pace, with no timer pressure. On the start panel, **Length** sets how a
-    round ends: *No limit* (until you stop), *Time* (2, 5, 10, 15 or 30 minutes) or *Notes* (50, 100,
-    250, 500 or 1 000 notes, right or wrong). Pieces ignore it: a piece ends with its last note.
+- Pick a **clef** (Treble, Bass, Both) in the toolbar, and practise at your own pace.
+  - On the start panel, **Length** sets how a round ends: *No limit* (until you stop), *Time* (2,
+    5, 10, 15 or 30 minutes) or *Notes* (50, 100, 250, 500 or 1 000 notes, right or wrong). Pieces
+    ignore it: a piece ends with its last note.
   - **Pause** (or Space) during a round stops the clock and hides the note until you press
-    Resume (or Space again). Paused time doesn't count towards the sprint, your response times
+    Resume (or Space again). Paused time doesn't count towards a timed round, your response times
     or your practice time. Switching to another app mid-round pauses it too; it waits for you
     to resume.
   - If Clefwise closes unexpectedly mid-round (a crash, a force quit, a flat battery), the round
@@ -62,8 +61,6 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
     waits for the sign (Return answers it as typed). Keys that can't continue any name are
     ignored with a shake, and Backspace fixes typos; neither counts as a miss. Any octave counts.
     During a round every letter types, so H and M only work as shortcuts between rounds.
-
-  Each answer method, key and accidentals setting keeps its own best scores.
 - A correct answer plays the note. A miss shows the note in red with its name and highlights the
   right key for a moment.
 - **Hints** (H) prints the name of every line and space and, with letter names, shows the
@@ -86,7 +83,7 @@ or **shuffled**, the **bar to start at**, and how to ask **chords**:
     chip to remove it. On the piano, click the keys; clicking a key again unselects it.
   - **Judging:** each note is marked right (green) or wrong (red, with its name) on its own. A
     fully right chord plays all its notes at once. Clef, key signature and range come from the piece, so
-those toolbar settings are greyed out; Mode, note names and the answer method still apply.
+those toolbar settings are greyed out; note names and the answer method still apply.
 
 - **The whole bar is on the staff**, as on the printed page:
   - **What's drawn:** engraved with the Bravura music font: note values, beams (as the score
@@ -100,7 +97,7 @@ those toolbar settings are greyed out; Mode, note names and the answer method st
 - **Order and pace:**
   - Notes come in reading order, chords bottom to top, both hands lower staff first.
   - Rests and tied-over notes are drawn but not asked.
-  - In Practice mode the round ends with the last note; a 60s Sprint wraps back to the start bar.
+  - The round ends with the last note.
 - Under an 8va/8vb line the note is drawn where it's written, with the mark; the piano answer is
   the key that actually sounds.
 - Notes in other clefs (C clefs, octave clefs) and double sharps/flats are left out, with a note
@@ -121,8 +118,8 @@ Every piece you open is kept, so you can practise it again without looking for t
 - **Remove…** in the list forgets a piece and its copy; the original file isn't touched.
 
 Notes you've missed recently come up more often (based on your last 8 tries at each note), so
-practice concentrates on what you don't know yet. History and best scores come from your practice
-journal (below); settings are stored in `UserDefaults`, one set per journal. To start afresh, make
+practice concentrates on what you don't know yet. History comes from your practice journal
+(below); settings are stored in `UserDefaults`, one set per journal. To start afresh, make
 a new journal.
 
 ## Progress dashboard
@@ -164,17 +161,20 @@ way Obsidian keeps notes in a folder. There's no account and no Clefwise server.
   from the usage log, below). Your pieces go in `pieces/`, named by their SHA-256, and changes to
   the list in `events/`. Files are only ever added, never changed. A run with no answers gets no
   file.
-- **It's the source:** the dashboard, your best scores and which notes come up more often are
-  all worked out from the journal.
+- **It's the source:** the dashboard and which notes come up more often are both worked out from
+  the journal.
 - **From your other devices:** in a folder synced by iCloud Drive, Dropbox or Syncthing, practice
   from another device comes in while Clefwise is open: the dashboard and note picking follow it,
   and a piece added, changed or removed there is here too. New stats wait for the round to end.
 - **One journal per person,** so several people can share a Mac, still with no accounts. Each
-  journal keeps its own settings, pieces and best scores; a new one starts with the default
+  journal keeps its own settings and pieces; a new one starts with the default
   settings. The window title names the journal in use.
   - **Switch** between rounds with **Journal: <name>** on the start panel or **File → Switch
     Journal**. The start panel's menu and the File menu also have **New Journal…** and **Open
     Journal…** (a folder with `clefwise.json` in it).
+  - **Rename "<name>"…** on the start panel, or **File → Rename Journal…**, renames the journal's
+    folder, as Obsidian renames a vault (between rounds). Your other devices find it again, or ask
+    you to locate it.
   - **Remove "<name>" from List…** (on the start panel) only forgets it on this Mac; the folder
     stays as it is.
 - **Practice so far:** when your first journal is made, your usage log and pieces so far are

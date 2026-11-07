@@ -29,9 +29,10 @@ enum JournalMigration {
     ///
     /// - **The record:** build 1's path and bookmark, and its piece library where it is
     ///   (`buildOne.library`), so no score moves. It's the journal in use.
-    /// - **Settings, note stats, best scores** and the note that a round is being brought back
-    ///   (`Game.Keys` `settings`, `noteStats`, `bestScores`, `restoringRound`) are copied into the
-    ///   record's namespace. The keys build 1 used stay as they were.
+    /// - **Settings, note stats** and the note that a round is being brought back (`Game.Keys`
+    ///   `settings`, `noteStats`, `restoringRound`) are copied into the record's namespace. The keys
+    ///   build 1 used stay as they were, its best sprint scores (`bestScores`) too: nothing reads
+    ///   them now.
     /// - **Device state:** everything in build 1's `Current` and `Pending` moves into the record's
     ///   (`JournalState.current(for:in:)`, `pending(for:in:)`).
     /// - **The usage log** was brought into that journal when build 1 made it, so it's marked as
@@ -48,7 +49,7 @@ enum JournalMigration {
         let record = registry.add(JournalRecord(id: UUID(), path: path,
                                                 bookmark: defaults.object(forKey: PracticeJournal.Keys.bookmark) as? Data,
                                                 libraryFolder: buildOne.library.path))
-        for name in [Game.Keys.settings, Game.Keys.noteStats, Game.Keys.bestScores, Game.Keys.restoringRound] {
+        for name in [Game.Keys.settings, Game.Keys.noteStats, Game.Keys.restoringRound] {
             guard let value = defaults.object(forKey: name) else { continue }
             defaults.set(value, forKey: Game.key(name, in: record.defaultsNamespace))
         }

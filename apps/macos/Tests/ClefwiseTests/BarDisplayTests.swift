@@ -118,7 +118,6 @@ private extension GameTestBench {
 @MainActor
 @Suite final class BarDisplayTests: GameTestBench {
     @Test func anInOrderRoundGoesThroughEachBar() throws {
-        game.settings.mode = .practice
         game.open(bars, from: barsURL)
         #expect(steps() == [Step(1, 0), Step(1, 2, [0]), Step(1, 3, [0, 2]), Step(2, 0), Step(3, 0), Step(4, 0)])
         #expect(game.summary?.finishedPiece == true)
@@ -138,7 +137,6 @@ private extension GameTestBench {
     }
 
     @Test func bothHandsDrawTheGrandStaff() throws {
-        game.settings.mode = .practice
         game.settings.piece.hand = .both
         game.open(bars, from: barsURL)
         let display = try #require(game.barDisplay)
@@ -150,7 +148,6 @@ private extension GameTestBench {
     }
 
     @Test func oneHandDrawsItsOwnStaff() {
-        game.settings.mode = .practice
         game.open(bars, from: barsURL)
         game.settings.piece.hand = .left
         #expect(game.barDisplay?.staves.map(\.number) == [2])
@@ -165,16 +162,15 @@ private extension GameTestBench {
         #expect(game.barDisplay?.staves.map(\.number) == [1])
     }
 
-    @Test func aSprintThatWrapsStartsThePassAfresh() {
-        game.settings.mode = .sprint
+    @Test func theRoundEndsAfterOnePass() {
         game.open(bars, from: barsURL)
         let pass = [Step(1, 0), Step(1, 2, [0]), Step(1, 3, [0, 2]), Step(2, 0), Step(3, 0), Step(4, 0)]
-        // Back in bar 1, the notes done are this pass's, not the last one's.
-        #expect(steps(limit: 8) == pass + [Step(1, 0), Step(1, 2, [0])])
+        // The last note ends the round: it doesn't go round again from the start bar.
+        #expect(steps(limit: 8) == pass)
+        #expect(game.phase == .finished && game.summary?.finishedPiece == true)
     }
 
     @Test func shuffledRoundsMarkOnlyTheNoteAsked() throws {
-        game.settings.mode = .practice
         game.settings.piece.order = .shuffled
         game.settings.piece.hand = .both
         game.open(bars, from: barsURL)
@@ -191,7 +187,6 @@ private extension GameTestBench {
     }
 
     @Test func betweenRoundsTheNextRoundsFirstBarShows() {
-        game.settings.mode = .practice
         game.open(bars, from: barsURL)
         #expect(step == Step(1, nil))
         game.settings.piece.startBar = 2
@@ -210,7 +205,6 @@ private extension GameTestBench {
     }
 
     @Test func stavesFitTheRoundsNotesInEveryBar() throws {
-        game.settings.mode = .practice
         game.open(bars, from: barsURL)
         // Bar 1 only goes up to G4, but the round reaches C6 in bar 3.
         #expect(game.barDisplay?.staves.map(\.positions) == [0...12])
@@ -243,7 +237,6 @@ private extension GameTestBench {
     // MARK: Signs and answers
 
     @Test func barViewQuestionsPrintTheBarsSigns() throws {
-        game.settings.mode = .practice
         game.open(bars, from: barsURL)
         game.start()
         var question = try #require(game.question)
@@ -267,7 +260,6 @@ private extension GameTestBench {
     }
 
     @Test func withTheWholeBarOffNotesComeOnTheirOwnAsBefore() throws {
-        game.settings.mode = .practice
         game.settings.piece.showsWholeBar = false
         game.open(bars, from: barsURL)
         #expect(game.barDisplay == nil)
@@ -283,7 +275,6 @@ private extension GameTestBench {
     }
 
     @Test func theSettingIsFixedForARound() {
-        game.settings.mode = .practice
         game.open(bars, from: barsURL)
         game.start()
         game.settings.piece.showsWholeBar = false
@@ -305,7 +296,6 @@ private extension GameTestBench {
         let part = bars.parts[0]
         let plain = Score(title: "No bars", parts: [ScorePart(name: "Piano", notes: part.notes, measureCount: 4,
                                                              staffCount: 2, skippedNoteCount: 0)])
-        game.settings.mode = .practice
         game.open(plain, from: barsURL)
         #expect(game.barDisplay == nil)
         game.start()
@@ -323,7 +313,6 @@ private extension GameTestBench {
             bar3,
             bar4,
         ])
-        game.settings.mode = .practice
         game.settings.piece.hand = .both
         game.open(alto, from: barsURL)
         #expect(steps() == [Step(1, 1), Step(1, 0, [1]), Step(1, 2, [0, 1]), Step(1, 3, [0, 1, 2]),
@@ -338,7 +327,6 @@ private extension GameTestBench {
     // MARK: The bar strip
 
     @Test func theStripFollowsTheRound() {
-        game.settings.mode = .practice
         game.open(bars, from: barsURL)
         #expect(game.barStrip == nil)
         game.start()
@@ -383,7 +371,6 @@ private extension GameTestBench {
     }
 
     @Test func questionsSayHowTheyWereShown() throws {
-        game.settings.mode = .practice
         game.open(bars, from: barsURL)
         game.start()
         answerRight()

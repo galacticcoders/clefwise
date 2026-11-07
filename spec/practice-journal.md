@@ -5,9 +5,9 @@
 Every version of Clefwise keeps a person's practice in a *practice journal*: a folder of plain
 files that they own, which the app works on, much as Obsidian works on a folder of notes. Files in
 the journal are only ever added, never changed or deleted. Each finished practice run is one new
-file. Everything the app shows is worked out from those files: the dashboard, note stats, best
-scores and the piece library. This approach is called event sourcing: the files are the events,
-and the rest is a projection of them.
+file. Everything the app shows is worked out from those files: the dashboard, note stats and the
+piece library. This approach is called event sourcing: the files are the events, and the rest is a
+projection of them.
 
 ## Where the journal lives
 
@@ -170,7 +170,7 @@ one event line in the usage-log format.
 
 | `type` | Fields | Meaning |
 |---|---|---|
-| `statsSnapshot` | as in the usage log | What a device knew before its usage log existed: its opening balance. Added once, when that device's old log is brought into the journal. |
+| `statsSnapshot` | as in the usage log | What a device knew before its usage log existed: its opening balance. Added once, when that device's old log is brought into the journal. Snapshots from versions until 2026-11-07 also have `bestScores`, the best scores of the 60-second sprint those versions had: a legacy field that readers ignore. |
 | `pieceAdded` | `piece`, `title`, `fileName`, and optionally `libraryID` and `originalPath` | A score joined the library. `piece` is the hash of its file in `pieces/`, which is written first. `fileName` is the original file's name, without its folder. `libraryID` is the piece's entry in the adding device's piece library, and `originalPath` where the file was first opened from: the `libraryID` and `path` the usage log knows the piece by (see Bringing in the old usage log). |
 | `pieceRevised` | `piece`, `file`, `title` | A new version of a piece, for example the score edited and exported again. `piece` is the id the piece was first added with, and `file` is the new file's hash. Both versions stay in `pieces/`. |
 | `pieceRemoved` | `piece` | The piece left the library. Its file and its runs stay. Adding it again with `pieceAdded` brings it back. |
@@ -202,8 +202,11 @@ The journal leaves these out:
   between runs. The local usage log keeps them.
 - **Where the journal is, and the device id.** Each device keeps its own. Later, any git
   credentials too, in the keychain.
-- **Projections:** the note stats, best scores and dashboard data worked out from the files. They
-  can be cached on the device, but the cache must be rebuildable at any time from the files alone.
+- **Projections:** the note stats and dashboard data worked out from the files. They can be cached
+  on the device, but the cache must be rebuildable at any time from the files alone. Best sprint
+  scores were one too, until the sprint went on 2026-11-07; they're no longer worked out, and the
+  `bestScore` and `isNewBest` of old runs' `roundEnded`, like `statsSnapshot.bestScores`, are
+  ignored.
 
 ## Several journals
 
@@ -219,6 +222,12 @@ between rounds.
   device starts with the default settings.
 - **The device knows each journal by a local id** of its own, which never goes in the journal. The
   device id in headers is the same whichever journal the device writes to.
+- **A journal's name is its folder's name.** Nothing in the journal names it, so renaming a journal
+  renames its folder, in the folder it's in, and nothing inside changes. An app renames it only
+  between rounds, and never to a name that's empty, has a `/` or `:` in it, starts with a dot, or is
+  already taken there. Every device keeps finding it as it would a folder moved or renamed by hand:
+  through what it kept to find it (on macOS a bookmark), or, failing that, by asking the user to
+  locate it.
 - **The old usage log is brought into only one journal:** the first one the device makes or uses
   (see Bringing in the old usage log). Its practice is one person's; a journal added later starts
   without it.

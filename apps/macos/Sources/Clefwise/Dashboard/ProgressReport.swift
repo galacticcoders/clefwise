@@ -201,8 +201,10 @@ struct RecentRound: Equatable, Identifiable {
     var id: UUID
     var started: Date
     var durationMs: Int?
-    /// `Game.Mode`, `Game.AnswerInput` and `NamingSystem` raw values.
-    var mode: String
+    /// The round was a 60-second sprint, which versions until 2026-11-07 had beside practice
+    /// rounds (`RoundStarted.wasSprint`); every other round is a practice round.
+    var wasSprint = false
+    /// `Game.AnswerInput` and `NamingSystem` raw values.
     var input: String
     var naming: String
     /// What was practised: "Treble · On the staff · G major", or a piece's title and hand.
@@ -216,6 +218,13 @@ struct RecentRound: Equatable, Identifiable {
     var practiceLength: String? = nil
 
     var accuracy: Double? { attempts > 0 ? Double(score) / Double(attempts) : nil }
+
+    /// What Recent Rounds calls it: "Practice", "Practice · 5 min", or for a sprint from before
+    /// 2026-11-07 "60s Sprint", as the app called it then.
+    var modeLabel: String {
+        let label = wasSprint ? "60s Sprint" : "Practice"
+        return practiceLength.map { "\(label) · \($0)" } ?? label
+    }
 }
 
 // MARK: - Sample data
@@ -276,12 +285,16 @@ extension ProgressReport {
         }
         let rounds: [RecentRound] = (0..<24).map { index in
             let attempts = 15 + Int(random.next() * 30)
-            return RecentRound(id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index))!, started: now.addingTimeInterval(-Double(index) * 5400), durationMs: 60_000,
-                            mode: index % 3 == 0 ? "practice" : "sprint", input: ["buttons", "piano", "keyboard"][index % 3],
+            let isPiece = index % 5 == 0
+            // Some rounds of random notes are timed; pieces end with their last note.
+            let isTimed = !isPiece && index % 3 != 0
+            return RecentRound(id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index))!, started: now.addingTimeInterval(-Double(index) * 5400),
+                            durationMs: isTimed ? 120_000 : 60_000, input: ["buttons", "piano", "keyboard"][index % 3],
                             naming: index % 4 == 0 ? "solfege" : "letters",
-                            description: index % 5 == 0 ? "Minuet in G · Right hand" : "Treble · On the staff · G major",
+                            description: isPiece ? "Minuet in G · Right hand" : "Treble · On the staff · G major",
                             score: Int(Double(attempts) * (0.7 + random.next() * 0.28)), attempts: attempts,
-                            endReason: index % 3 == 0 ? .stopped : .timeUp)
+                            endReason: isTimed ? .timeUp : isPiece ? .pieceComplete : .stopped,
+                            practiceLength: isTimed ? "2 min" : nil)
         }
         let bars = (1...16).map { BarProgress(bar: $0, attempts: 6 + Int(random.next() * 10), correct: 0) }
             .map { BarProgress(bar: $0.bar, attempts: $0.attempts, correct: Int(Double($0.attempts) * (0.55 + random.next() * 0.45))) }

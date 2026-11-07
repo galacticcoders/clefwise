@@ -322,7 +322,7 @@ private struct TimesLog {
         var log = TimesLog()
         log.add(.statsSnapshot(StatsSnapshot(reason: "beforeUsageLog", noteStats: [
             "treble.E4": NoteStat(attempts: 50, correct: 50), "treble.D4": NoteStat(attempts: 5, correct: 4),
-        ], bestScores: [:])), at: at(10, 8))
+        ])), at: at(10, 8))
         let before = log.round(at: at(10, 9)) // before the week: not in its "now"
         log.answer(before, at: at(10, 9, 1), Pitch(.e, 4), ms: 100)
         let round = log.round(at: at(0, 9))

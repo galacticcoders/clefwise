@@ -27,13 +27,10 @@ struct StaffNote: Hashable {
 }
 
 struct RoundSummary {
-    let mode: Game.Mode
     let score: Int
     let attempts: Int
     let bestStreak: Int
     let averageSeconds: Double?
-    let bestScore: Int?
-    let isNewBest: Bool
     let timeRanOut: Bool
     let notesToReview: [StaffNote]
     /// Whether the round mixed clefs, so review notes need their clef spelled out.
@@ -42,7 +39,7 @@ struct RoundSummary {
     let pieceTitle: String?
     /// The round ended because the piece (from the start bar) was played through.
     let finishedPiece: Bool
-    /// The round was a practice round with a limit, reached or not.
+    /// The round had a practice limit, reached or not.
     var hadLimit = false
     /// The round ended on the last of its set number of notes.
     var finishedNotes = false
@@ -55,15 +52,7 @@ struct RoundSummary {
 @MainActor
 @Observable
 final class Game {
-    enum Mode: String, CaseIterable, Identifiable, Codable {
-        case sprint, practice
-
-        var id: Self { self }
-        var label: String { self == .sprint ? "60s Sprint" : "Practice" }
-    }
-
-    /// How a practice round of random notes ends. A sprint has its own clock, and a piece ends with
-    /// its last note, so neither takes a limit.
+    /// How a round of random notes ends. A piece ends with its last note, so it takes no limit.
     enum PracticeLimit: String, CaseIterable, Identifiable, Codable {
         /// Only when stopped.
         case endless
@@ -123,7 +112,6 @@ final class Game {
     struct Settings: Codable {
         var clefChoice = ClefChoice.treble
         var range = NoteRange.staff
-        var mode = Mode.sprint
         var practiceLimit = PracticeLimit.endless
         /// Each kind of limit keeps its own length, so switching between them loses neither.
         var practiceMinutes = 5
@@ -151,12 +139,13 @@ final class Game {
 
         init() {}
 
-        /// Missing keys fall back to defaults, so settings saved by older versions still load.
+        /// Missing keys fall back to defaults, so settings saved by older versions still load, and
+        /// keys no longer used are ignored: versions until 2026-11-07 saved `mode`, `sprint` for a
+        /// 60-second sprint or `practice`, and every round is a practice round now.
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             clefChoice = try container.decodeIfPresent(ClefChoice.self, forKey: .clefChoice) ?? clefChoice
             range = try container.decodeIfPresent(NoteRange.self, forKey: .range) ?? range
-            mode = try container.decodeIfPresent(Mode.self, forKey: .mode) ?? mode
             practiceLimit = try container.decodeIfPresent(PracticeLimit.self, forKey: .practiceLimit) ?? practiceLimit
             practiceMinutes = try container.decodeIfPresent(Int.self, forKey: .practiceMinutes) ?? practiceMinutes
             practiceNotes = try container.decodeIfPresent(Int.self, forKey: .practiceNotes) ?? practiceNotes
@@ -352,7 +341,6 @@ final class Game {
         let accidental: Accidental
     }
 
-    static let sprintLength: TimeInterval = 60
     private static let missPause: Duration = .milliseconds(1200)
     private static let correctFlash: Duration = .milliseconds(250)
 
@@ -409,7 +397,6 @@ final class Game {
     private(set) var streak = 0
     private(set) var elapsed: TimeInterval = 0
     private(set) var summary: RoundSummary?
-    private var bestScores: [String: Int]
     /// Key signature every question of the round is written in, picked at `start()`. Kept after
     /// the round so the staff still shows it, until the key setting changes.
     private var roundKey: KeySignature?
@@ -576,7 +563,7 @@ final class Game {
     /// The question on screen, from `questionShown` until it's answered.
     @ObservationIgnored private var questionLog: QuestionLog?
 
-    /// `defaults` is where settings, note stats and best scores are kept, each under its key in
+    /// `defaults` is where settings and note stats are kept, each under its key in
     /// `Keys` with `namespace` in front (`Game.key(_:in:)`): the empty namespace keeps the keys the
     /// app has always used; a journal's own (`JournalRecord.defaultsNamespace`) keeps its values
     /// apart from every other journal's, and a namespace with nothing saved yet starts from the
@@ -592,7 +579,6 @@ final class Game {
         self.library = library
         settings = Self.load(Settings.self, from: Self.key(Keys.settings, in: namespace), in: defaults) ?? Settings()
         noteStats = Self.load([String: NoteStat].self, from: Self.key(Keys.noteStats, in: namespace), in: defaults) ?? [:]
-        bestScores = Self.load([String: Int].self, from: Self.key(Keys.bestScores, in: namespace), in: defaults) ?? [:]
         settingsAsLogged = JSONValue(encoding: settings)
         recordStatsSnapshotOnce()
         reopenLastPiece(via: reopeningVia)
@@ -603,15 +589,14 @@ final class Game {
     var displayedClef: Clef { question?.clef ?? leadingPieceNote?.clef ?? settings.clefChoice.clefs[0] }
     var timeRemaining: TimeInterval { max(0, (roundTimeLimit ?? 0) - elapsed) }
 
-    /// The limit on a round started now: only practice rounds of random notes take one.
+    /// The limit on a round started now: only rounds of random notes take one.
     private var practiceRoundLimit: PracticeLimit {
-        settings.mode == .practice && !isPractisingPiece ? settings.practiceLimit : .endless
+        isPractisingPiece ? .endless : settings.practiceLimit
     }
 
     /// How long a round may run; nil when its clock only counts up.
     var roundTimeLimit: TimeInterval? {
-        if settings.mode == .sprint { return Self.sprintLength }
-        return practiceRoundLimit == .time ? TimeInterval(settings.practiceMinutes * 60) : nil
+        practiceRoundLimit == .time ? TimeInterval(settings.practiceMinutes * 60) : nil
     }
 
     /// How many notes a round asks; nil when it isn't a set number.
@@ -623,26 +608,6 @@ final class Game {
         return max(0, limit - attempts)
     }
     var accuracy: Double? { attempts > 0 ? Double(score) / Double(attempts) : nil }
-    /// Pieces don't keep best scores: a score on one piece says little about another.
-    var bestScore: Int? { isPractisingPiece ? nil : bestScores[bestScoreKey] }
-    /// The current settings' best-score key.
-    private var bestScoreKey: String { Self.bestScoreKey(for: settings) }
-
-    /// The key `settings` keep their best sprint score under. Each answer method plays differently
-    /// (the piano needs the octave, typing takes keystrokes), and so do key signatures and printed
-    /// accidentals, so each setup keeps its own best scores. Plain C major adds nothing, so scores
-    /// saved before keys existed still count.
-    nonisolated static func bestScoreKey(for settings: Settings) -> String {
-        var key = "\(settings.clefChoice.rawValue).\(settings.range.key)"
-            + (settings.answerInput == .buttons ? "" : ".\(settings.answerInput.rawValue)")
-        switch settings.key {
-        case .fixed(let signature) where signature != .cMajor: key += ".key\(signature.fifths)"
-        case .fixed: break
-        case .random: key += ".keyRandom"
-        }
-        if settings.addsAccidentals { key += ".acc" }
-        return key
-    }
 
     /// Key signature on the staff: the current or last round's, or the chosen one before any
     /// round (C major when the choice is random). With a piece, the key the next round starts in.
@@ -696,8 +661,7 @@ final class Game {
     }
 
     /// Where a piece round is up to; nil outside piece rounds. In order, `done` counts the notes
-    /// before the current one in this pass (a sprint starts again from 0 when it wraps); shuffled,
-    /// it counts answers, so it can pass `total`.
+    /// before the current one; shuffled, it counts answers, so it can pass `total`.
     var pieceProgress: PieceProgress? {
         guard phase == .playing, let pieceRound else { return nil }
         return PieceProgress(bar: pieceRound.note.measure, bars: pieceRound.bars,
@@ -1677,7 +1641,7 @@ final class Game {
         }
     }
 
-    /// The round clock, ten times a second. Tests pass a later `now` to run a sprint out.
+    /// The round clock, ten times a second. Tests pass a later `now` to run a timed round out.
     func tick(at now: ContinuousClock.Instant = .now) {
         guard phase == .playing, !isPaused else { return }
         let seconds = Self.seconds(from: roundStart, to: now)
@@ -1703,34 +1667,22 @@ final class Game {
         let pieceRound = pieceRound
         self.pieceRound = nil
 
-        // Only sprints keep best scores and the guard below only turns away practice rounds, so
-        // this can come first, and every round's end is logged with it.
-        var isNewBest = false
-        if pieceRound == nil, settings.mode == .sprint, score > (bestScores[bestScoreKey] ?? 0) {
-            bestScores[bestScoreKey] = score
-            save(bestScores, as: Keys.bestScores)
-            isNewBest = true
-        }
         // While a pause can still be left out of it.
         let seconds = Double(activeMilliseconds(since: roundStart)) / 1000
-        recordRoundEnd(timeRanOut ? .timeUp : finishedPiece ? .pieceComplete : finishedNotes ? .notesDone : .stopped,
-                       isNewBest: isNewBest)
+        recordRoundEnd(timeRanOut ? .timeUp : finishedPiece ? .pieceComplete : finishedNotes ? .notesDone : .stopped)
         clearPause()
-        // A practice round stopped before any answer has nothing to sum up; one that ran out of
-        // time does: nothing named is a result.
-        guard attempts > 0 || settings.mode == .sprint || timeRanOut else {
+        // A round stopped before any answer has nothing to sum up; one that ran out of time does:
+        // nothing named is a result.
+        guard attempts > 0 || timeRanOut else {
             phase = .idle
             return
         }
 
         summary = RoundSummary(
-            mode: settings.mode,
             score: score,
             attempts: attempts,
             bestStreak: bestStreak,
             averageSeconds: averageResponseTime,
-            bestScore: pieceRound == nil && settings.mode == .sprint ? bestScores[bestScoreKey] : nil,
-            isNewBest: isNewBest,
             timeRanOut: timeRanOut,
             notesToReview: notesToReview,
             mixedClefs: pieceRound.map { round in round.notes.contains { $0.clef != round.notes[0].clef } }
@@ -1952,11 +1904,6 @@ final class Game {
     private func endInterrupted(_ round: UUID, _ replay: RoundReplay) {
         forgetRestoring(round)
         guard let time = replay.lastEventTime else { return }
-        let saved = replay.started.flatMap { Self.settings(from: $0.settings) }
-        // As other ends have it: sprints on random notes say the best score for their settings.
-        let bestScore = saved.flatMap { saved in
-            saved.mode == .sprint && replay.started?.piece == nil ? bestScores[Self.bestScoreKey(for: saved)] : nil
-        }
         let unanswered = replay.unansweredQuestion.first.map {
             UnansweredQuestion(question: $0.question, shownMs: replay.lastQuestionShownMs, keystrokes: [],
                                pausedMs: replay.lastQuestionPausedMs > 0 ? replay.lastQuestionPausedMs : nil,
@@ -1966,7 +1913,7 @@ final class Game {
             round: round, reason: .interrupted, durationMs: replay.activeMs,
             pausedMs: replay.pausedMs > 0 ? replay.pausedMs : nil,
             score: replay.score, attempts: replay.attempts, bestStreak: replay.bestStreak,
-            averageResponseMs: replay.averageResponseMs, bestScore: bestScore, isNewBest: false,
+            averageResponseMs: replay.averageResponseMs,
             notesToReview: Self.notesToReview(from: replay.misses).map { Self.statKey($0.clef, $0.pitch) },
             unansweredQuestion: unanswered, recordedAt: Date())), at: time)
         if replay.attempts > 0 { noteRoundEnded(round) }
@@ -1999,9 +1946,10 @@ final class Game {
 
     /// `a` and `b` make the same round: what it asks, how it ends, and the piece open. Naming, the
     /// answer input, hints, sound and looks don't come into it, nor the piece settings: a piece
-    /// round is rebuilt from its own.
+    /// round is rebuilt from its own. A 60-second sprint from a version until 2026-11-07 comes
+    /// back as a practice round: its settings read without their `mode`.
     private static func shapeRoundsAlike(_ a: Settings, _ b: Settings) -> Bool {
-        a.mode == b.mode && a.clefChoice == b.clefChoice && a.range == b.range && a.key == b.key
+        a.clefChoice == b.clefChoice && a.range == b.range && a.key == b.key
             && a.addsAccidentals == b.addsAccidentals && a.practiceLimit == b.practiceLimit
             && a.practiceMinutes == b.practiceMinutes && a.practiceNotes == b.practiceNotes
             && a.pieceID == b.pieceID && a.piecePath == b.piecePath
@@ -2063,8 +2011,8 @@ final class Game {
         }
     }
 
-    /// Moves on to the next note (or notes asked together), or ends an in-order practice round on
-    /// a piece after its last one.
+    /// Moves on to the next note (or notes asked together), or ends an in-order round on a piece
+    /// after its last one.
     private func nextQuestion() {
         guard var pieceRound else {
             if let limit = roundNoteLimit, attempts >= limit {
@@ -2080,12 +2028,11 @@ final class Game {
         case .inOrder:
             // No question yet means the round is just starting.
             let next = question == nil ? 0 : pieceRound.groupIndex + 1
-            if next == pieceRound.groups.count, settings.mode == .practice {
+            if next == pieceRound.groups.count {
                 finish(timeRanOut: false, finishedPiece: true)
                 return
             }
-            // A sprint goes round again from the start bar until time's up.
-            pieceRound.groupIndex = next % pieceRound.groups.count
+            pieceRound.groupIndex = next
         case .shuffled:
             let pick = shuffledGroup(in: pieceRound)
             pieceRound.groupIndex = pick.index
@@ -2202,14 +2149,13 @@ final class Game {
         var keyPending = false
     }
 
-    /// Once per defaults store: the note stats and best scores kept from before there was a log.
+    /// Once per defaults store: the note stats kept from before there was a log.
     /// Only under the keys the app has always used (the empty namespace): a journal's own values
     /// all come after the log began, so there's nothing from before to record, and an empty
     /// snapshot in the log would hide the real one from the dashboard.
     private func recordStatsSnapshotOnce() {
         guard namespace.isEmpty, defaults.object(forKey: key(Keys.usageLogStarted)) == nil else { return }
-        recorder.record(.statsSnapshot(StatsSnapshot(reason: "beforeUsageLog", noteStats: noteStats,
-                                                     bestScores: bestScores)))
+        recorder.record(.statsSnapshot(StatsSnapshot(reason: "beforeUsageLog", noteStats: noteStats)))
         defaults.set(Date(), forKey: key(Keys.usageLogStarted))
     }
 
@@ -2360,8 +2306,8 @@ final class Game {
         recorder.record(.inputIgnored(InputIgnored(round: roundLog?.id, reason: reason, source: source, detail: detail)))
     }
 
-    /// Ends the round being logged, if there is one. `isNewBest`: a finished sprint set a best score.
-    private func recordRoundEnd(_ reason: RoundEndReason, isNewBest: Bool = false) {
+    /// Ends the round being logged, if there is one.
+    private func recordRoundEnd(_ reason: RoundEndReason) {
         guard let roundLog else { return }
         if attempts > 0 { noteRoundEnded(roundLog.id) }
         let unanswered = questionLog.map {
@@ -2374,7 +2320,6 @@ final class Game {
             round: roundLog.id, reason: reason, durationMs: activeMilliseconds(since: roundStart), pausedMs: pausedMilliseconds(roundPaused),
             score: score, attempts: attempts, bestStreak: bestStreak,
             averageResponseMs: averageResponseTime.map { Int(($0 * 1000).rounded()) },
-            bestScore: settings.mode == .sprint ? bestScore : nil, isNewBest: isNewBest,
             notesToReview: notesToReview.map { Self.statKey($0.clef, $0.pitch) },
             unansweredQuestion: unanswered)))
     }
@@ -2415,17 +2360,14 @@ final class Game {
 
     // MARK: - Persistence
 
-    /// Takes the note stats and best scores worked out from the journal in place of the ones kept
-    /// here, and saves them: they're a cache of the journal, which is the source of truth. Nothing
-    /// else changes, even in a round in progress: it carries on, its answers from
-    /// now on counting on top of the new stats, and a sprint's score is checked against the new
-    /// best scores when it ends. The round's own answers come back into the stats once its run is
-    /// in the journal and it's read again.
+    /// Takes the note stats worked out from the journal in place of the ones kept here, and saves
+    /// them: they're a cache of the journal, which is the source of truth. Nothing else changes,
+    /// even in a round in progress: it carries on, its answers from now on counting on top of the
+    /// new stats. The round's own answers come back into the stats once its run is in the journal
+    /// and it's read again.
     func apply(projection: JournalProjection) {
         noteStats = projection.noteStats
-        bestScores = projection.bestScores
         save(noteStats, as: Keys.noteStats)
-        save(bestScores, as: Keys.bestScores)
     }
 
     /// What one refresh read: the journal folded, and the ids of the runs it holds.
@@ -2449,13 +2391,13 @@ final class Game {
     /// True while stats read from the journal wait for the round playing to end.
     var hasStatsWaitingForRoundEnd: Bool { statsAfterRound != nil }
 
-    /// Brings the note stats and best scores up to date with the journal `reader` reads: folds what
+    /// Brings the note stats up to date with the journal `reader` reads: folds what
     /// it reads (`JournalProjection(contents:)`) off the main thread, then takes the result with
     /// `apply(projection:)` here. For when a game is made, and whenever the journal changes.
     ///
     /// - **Never behind this game:** a result is taken only if the journal it read holds the run of
     ///   every round this game has ended with an answer (a round without one gets no run). One read
-    ///   before such a run reached the journal would take that round's answers and best score away
+    ///   before such a run reached the journal would take that round's answers away
     ///   again, so it's dropped: the refresh that follows the run into the journal brings it.
     /// - **Never mid-round:** a result that comes in while a round is playing (paused or not) waits
     ///   until the round ends: stopped, finished, closed or quit. Starting over goes straight into
@@ -2529,11 +2471,11 @@ final class Game {
     }
 
     /// The names `Game` keeps its values under in the defaults, before any namespace
-    /// (`key(_:in:)`). The data export reads `settings`, `noteStats` and `bestScores`.
+    /// (`key(_:in:)`). The data export reads `settings` and `noteStats`. Versions until 2026-11-07
+    /// also kept `bestScores`, the best 60-second sprint scores: it's left where it is, unread.
     enum Keys {
         static let settings = "settings"
         static let noteStats = "noteStats"
-        static let bestScores = "bestScores"
         /// When the usage log first saw this store (and took its stats snapshot).
         static let usageLogStarted = "usageLogStarted"
         /// The device's note that a round is being brought back after a crash: its id, from just

@@ -6,7 +6,9 @@ import Foundation
 /// one too; rounds use both clefs, every answer input and naming system, C, G major and random
 /// keys, added sharps, and a piece practised by bar with an 8va passage. Answers get righter and
 /// faster over the days. The stats snapshot comes first, and now and then the app crashes,
-/// leaving a round without an end and a session without a quit.
+/// leaving a round without an end and a session without a quit. It's written as versions until
+/// 2026-11-07 wrote it, when most rounds of random notes were 60-second sprints: `mode` in the
+/// settings, best scores in the snapshot and in sprints' ends.
 enum SyntheticUsage {
     static let pieceTitle = "Minuet in G"
     static let piecePath = "/Users/me/Music/Minuet in G.musicxml"
@@ -68,6 +70,8 @@ private struct Writer {
     private var sessionID = UUID()
     private var time = Date()
     private var settings = Game.Settings()
+    /// The rounds are sprints: the settings' `mode` then. A sprint was the default.
+    private var isSprint = true
     private var bestScores: [String: Int] = [:]
     private var loggedSnapshot = false
 
@@ -127,7 +131,7 @@ private struct Writer {
         next.clefChoice = pick([.treble, .treble, .treble, .bass, .bass, .both])
         next.range = pick([.staff, .staff, .staff, .oneLedgerLine, .oneLedgerLine, .threeLedgerLines,
                            NoteRange(above: true, ledgerLines: 2), NoteRange(below: true, onStaff: false, ledgerLines: 4)])
-        next.mode = onPiece || chance(0.3) ? .practice : .sprint
+        let nextIsSprint = !(onPiece || chance(0.3))
         next.naming = pick([.letters, .letters, .letters, .letters, .letters, .letters, .letters, .solfege, .solfege, .sargam])
         next.answerInput = pick([.buttons, .buttons, .buttons, .piano, .piano, .keyboard])
         next.key = chance(0.6) ? .fixed(.cMajor) : chance(0.6) ? .fixed(KeySignature(fifths: 1)) : .random
@@ -142,8 +146,9 @@ private struct Writer {
                 pieceOpen = true
             }
         }
-        logChanges(to: next)
+        logChanges(to: next, sprint: nextIsSprint)
         settings = next
+        isSprint = nextIsSprint
 
         let notes = SyntheticUsage.pieceNotes.filter { $0.bar >= settings.piece.startBar }
         let piece = onPiece ? PieceContext(title: SyntheticUsage.pieceTitle, path: SyntheticUsage.piecePath, part: "Piano",
@@ -156,17 +161,20 @@ private struct Writer {
         case .random: key = onPiece ? KeySignature(fifths: 1) : pick(KeySignature.all.filter { $0 != .cMajor })
         }
         let round = id(), start = time
+        var logged: [String: JSONValue] = [:]
+        if case .object(let values) = JSONValue(encoding: settings) { logged = values }
+        logged["mode"] = .string(isSprint ? "sprint" : "practice")
         log(.roundStarted(RoundStarted(round: round, via: pick([.button, .key, .key, .playAgain]),
-                                       settings: JSONValue(encoding: settings), keyFifths: key.fifths, piece: piece)))
+                                       settings: .object(logged), keyFifths: key.fifths, piece: piece)))
 
         var score = 0, attempts = 0, streak = 0, bestStreak = 0, correctMs: [Int] = [], missed: [String] = []
-        let questions = onPiece ? notes.count : settings.mode == .practice ? 12 + number(below: 20) : Int.max
+        let questions = onPiece ? notes.count : !isSprint ? 12 + number(below: 20) : Int.max
         // A crash comes some way into the round, before a practice round would end.
         let crashAfter = crashes ? 3 + number(below: 8) : Int.max
         var index = 0
         while index < questions {
             // The sprint clock can run out in the pause after a miss.
-            if settings.mode == .sprint, time.timeIntervalSince(start) >= 60 {
+            if isSprint, time.timeIntervalSince(start) >= 60 {
                 time = max(start.addingTimeInterval(60), session.last?.time ?? time)
                 end(round, .timeUp, start: start, score: score, attempts: attempts, bestStreak: bestStreak, correctMs: correctMs,
                     missed: missed, unanswered: nil)
@@ -176,7 +184,7 @@ private struct Writer {
             let (shown, pitch) = makeQuestion(round: round, id: question, index: index, key: key,
                                               piece: onPiece ? notes[index] : nil)
             var response = answer(to: shown, pitch: pitch, progress: progress)
-            if settings.mode == .sprint, time.timeIntervalSince(start) * 1000 + Double(response.responseMs) > 60_000 {
+            if isSprint, time.timeIntervalSince(start) * 1000 + Double(response.responseMs) > 60_000 {
                 log(.questionShown(shown))
                 let shownMs = 60_000 - Int((time.timeIntervalSince(start) * 1000).rounded())
                 time = start.addingTimeInterval(60)
@@ -281,7 +289,7 @@ private struct Writer {
     private mutating func end(_ round: UUID, _ reason: RoundEndReason, start: Date, score: Int, attempts: Int, bestStreak: Int,
                               correctMs: [Int], missed: [String], unanswered: UnansweredQuestion?) {
         var bestScore: Int?, isNewBest = false
-        if settings.mode == .sprint, settings.piecePath == nil {
+        if isSprint, settings.piecePath == nil {
             let key = "\(settings.clefChoice.rawValue).\(settings.range.key)"
             isNewBest = score > (bestScores[key] ?? 0)
             bestScores[key] = max(bestScores[key] ?? 0, score)
@@ -296,11 +304,12 @@ private struct Writer {
             unansweredQuestion: unanswered)))
     }
 
-    /// One `settingChanged` per setting the toolbar changed since the last round.
-    private mutating func logChanges(to next: Game.Settings) {
+    /// One `settingChanged` per setting the toolbar changed since the last round; `sprint`: the next
+    /// round is a sprint.
+    private mutating func logChanges(to next: Game.Settings, sprint: Bool) {
         let pairs: [(String, String, String)] = [
             ("clefChoice", settings.clefChoice.rawValue, next.clefChoice.rawValue),
-            ("mode", settings.mode.rawValue, next.mode.rawValue),
+            ("mode", isSprint ? "sprint" : "practice", sprint ? "sprint" : "practice"),
             ("naming", settings.naming.rawValue, next.naming.rawValue),
             ("answerInput", settings.answerInput.rawValue, next.answerInput.rawValue),
         ]

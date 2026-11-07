@@ -24,6 +24,22 @@ struct Log {
         return id
     }
 
+    /// A round as versions until 2026-11-07 logged its start, with `mode` in its settings: `sprint`
+    /// for a 60-second sprint, or `practice`; otherwise the default settings as changed by `change`.
+    @discardableResult
+    mutating func oldRound(at time: Date, mode: String, keyFifths: Int = 0, piece: PieceContext? = nil,
+                           _ change: (inout Game.Settings) -> Void = { _ in }) -> UUID {
+        var settings = Game.Settings()
+        change(&settings)
+        var values: [String: JSONValue] = [:]
+        if case .object(let saved) = JSONValue(encoding: settings) { values = saved }
+        values["mode"] = .string(mode)
+        let id = UUID()
+        add(.roundStarted(RoundStarted(round: id, via: .button, settings: .object(values), keyFifths: keyFifths,
+                                       piece: piece)), at: time)
+        return id
+    }
+
     /// A question on `written` shown `ms` before `time` (unless `logQuestion` is false, as when the
     /// log lost it), and its answer at `time`.
     mutating func answer(_ round: UUID, at time: Date, _ written: Pitch, clef: Clef = .treble, correct: Bool = true,
@@ -48,8 +64,7 @@ struct Log {
     mutating func end(_ round: UUID, at time: Date, durationMs: Int, score: Int, attempts: Int,
                       reason: RoundEndReason = .stopped) {
         add(.roundEnded(RoundEnded(round: round, reason: reason, durationMs: durationMs, score: score, attempts: attempts,
-                                   bestStreak: 0, averageResponseMs: nil, bestScore: nil, isNewBest: false,
-                                   notesToReview: [])), at: time)
+                                   bestStreak: 0, averageResponseMs: nil, notesToReview: [])), at: time)
     }
 }
 
@@ -147,9 +162,9 @@ struct Log {
                                               lowerQuartileMs: 1500, upperQuartileMs: 2500))
         #expect(week.days.dropFirst().dropLast().allSatisfy { $0.answers == 0 && $0.practiceSeconds == 0 && $0.medianResponseMs == nil })
         #expect(week.recentRounds == [
-            RecentRound(id: f, started: at(0, 15, 50), durationMs: 600_000, mode: "sprint", input: "buttons", naming: "letters",
+            RecentRound(id: f, started: at(0, 15, 50), durationMs: 600_000, input: "buttons", naming: "letters",
                         description: "Treble · On the staff · C major", score: 2, attempts: 3, endReason: nil),
-            RecentRound(id: e, started: at(6, 9), durationMs: 90_000, mode: "sprint", input: "buttons", naming: "letters",
+            RecentRound(id: e, started: at(6, 9), durationMs: 90_000, input: "buttons", naming: "letters",
                         description: "Treble · On the staff · C major", score: 1, attempts: 1, endReason: .stopped),
         ])
         #expect(streaks(week) == [1, 2])
@@ -316,7 +331,7 @@ struct Log {
             "bass.G2": NoteStat(attempts: 6, correct: 6), "treble.E4": NoteStat(),
             "treble.H9": NoteStat(attempts: 5, correct: 5), "alto.C4": NoteStat(attempts: 3, correct: 3),
             "treble.C": NoteStat(attempts: 2, correct: 2), "trebleF5": NoteStat(attempts: 1, correct: 1),
-        ], bestScores: [:])), at: at(20, 9))
+        ])), at: at(20, 9))
         let round = log.round(at: at(0, 10))
         log.answer(round, at: at(0, 10, 1), Pitch(.f, 5), ms: 1000)
 
@@ -403,13 +418,16 @@ struct Log {
 
     @Test func recentRoundsDescribeWhatWasPractised() {
         var log = Log()
-        let gMajor = log.round(at: at(3, 10), keyFifths: 1) { $0.key = .fixed(KeySignature(fifths: 1)) }
+        // A sprint from before 2026-11-07, whose settings kept a practice limit it didn't have.
+        let gMajor = log.oldRound(at: at(3, 10), mode: "sprint", keyFifths: 1) {
+            $0.key = .fixed(KeySignature(fifths: 1))
+            $0.practiceLimit = .time
+        }
         log.end(gMajor, at: at(3, 10, 1), durationMs: 60_000, score: 20, attempts: 22, reason: .timeUp)
         let random = log.round(at: at(3, 11), keyFifths: -3) {
             $0.clefChoice = .bass
             $0.range = .oneLedgerLine
             $0.key = .random
-            $0.mode = .practice
             $0.answerInput = .piano
             $0.naming = .solfege
         }
@@ -422,7 +440,7 @@ struct Log {
         }
         log.answer(crashed, at: at(2, 10, 1), Pitch(.c, 5))
         log.answer(crashed, at: at(2, 10, 3), Pitch(.d, 5), correct: false)
-        let minuet = log.round(at: at(1, 10), piece: piece("Minuet in G", path: "/minuet.musicxml", hand: "left"))
+        let minuet = log.oldRound(at: at(1, 10), mode: "sprint", piece: piece("Minuet in G", path: "/minuet.musicxml", hand: "left"))
         log.end(minuet, at: at(1, 10, 5), durationMs: 300_000, score: 18, attempts: 20, reason: .pieceComplete)
         log.add(.pieceOpened(PieceOpened(path: "/clarinet.musicxml", title: "Clarinet Tune", via: .drop,
                                          parts: [PartInfo(name: "Clarinet", notes: 40, measures: 16, staves: 1, skipped: 0)])),
@@ -438,21 +456,24 @@ struct Log {
 
         let rounds = report(log).recentRounds
         #expect(rounds == [
-            RecentRound(id: unanswered, started: at(0, 10), durationMs: nil, mode: "sprint", input: "buttons",
+            RecentRound(id: unanswered, started: at(0, 10), durationMs: nil, input: "buttons",
                         naming: "letters", description: "Treble · On the staff · C major", score: 0, attempts: 0, endReason: nil),
-            RecentRound(id: older, started: at(0, 9), durationMs: 30_000, mode: "practice", input: "buttons", naming: "letters",
+            RecentRound(id: older, started: at(0, 9), durationMs: 30_000, input: "buttons", naming: "letters",
                         description: "Treble · On the staff · C major", score: 3, attempts: 4, endReason: .appQuit),
-            RecentRound(id: clarinet, started: at(1, 11), durationMs: 45_000, mode: "sprint", input: "buttons", naming: "letters",
+            RecentRound(id: clarinet, started: at(1, 11), durationMs: 45_000, input: "buttons", naming: "letters",
                         description: "Clarinet Tune", score: 9, attempts: 9, endReason: .stopped),
-            RecentRound(id: minuet, started: at(1, 10), durationMs: 300_000, mode: "sprint", input: "buttons", naming: "letters",
+            RecentRound(id: minuet, started: at(1, 10), durationMs: 300_000, wasSprint: true, input: "buttons", naming: "letters",
                         description: "Minuet in G · Left hand", score: 18, attempts: 20, endReason: .pieceComplete),
-            RecentRound(id: crashed, started: at(2, 10), durationMs: 180_000, mode: "sprint", input: "keyboard", naming: "sargam",
+            RecentRound(id: crashed, started: at(2, 10), durationMs: 180_000, input: "keyboard", naming: "sargam",
                         description: "Both · +3 ledger lines · C major", score: 1, attempts: 2, endReason: nil),
-            RecentRound(id: random, started: at(3, 11), durationMs: 120_000, mode: "practice", input: "piano", naming: "solfege",
+            RecentRound(id: random, started: at(3, 11), durationMs: 120_000, input: "piano", naming: "solfege",
                         description: "Bass · +1 ledger line · Random key (E♭ major)", score: 8, attempts: 10, endReason: .stopped),
-            RecentRound(id: gMajor, started: at(3, 10), durationMs: 60_000, mode: "sprint", input: "buttons", naming: "letters",
+            RecentRound(id: gMajor, started: at(3, 10), durationMs: 60_000, wasSprint: true, input: "buttons", naming: "letters",
                         description: "Treble · On the staff · G major", score: 20, attempts: 22, endReason: .timeUp),
         ])
+        // Sprints keep the name they had; every other round is practice, `mode` or not.
+        #expect(rounds.map(\.modeLabel) == ["Practice", "Practice", "Practice", "60s Sprint", "Practice", "Practice",
+                                            "60s Sprint"])
         // The crashed round counts up to its last answer; the one with no answers, not at all.
         #expect(report(log).totals.practiceSeconds == 60 + 120 + 180 + 300 + 45 + 30)
     }

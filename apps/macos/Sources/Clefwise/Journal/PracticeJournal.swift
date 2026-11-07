@@ -1,7 +1,8 @@
 import Foundation
 
-// The practice journal's folder: where it is, making it, and adding files to it without ever
-// changing one. See spec/practice-journal.md, "Where the journal lives", "Layout" and "Principles".
+// The practice journal's folder: where it is, making and renaming it, and adding files to it
+// without ever changing one. See spec/practice-journal.md, "Where the journal lives", "Layout",
+// "Principles" and "Several journals".
 
 /// Why something couldn't go into the journal, or the journal couldn't be made or found.
 enum JournalError: LocalizedError, Equatable {
@@ -18,6 +19,12 @@ enum JournalError: LocalizedError, Equatable {
     case invalidName(String)
     /// Something that isn't a journal already has the chosen name there.
     case folderInUse(URL)
+    /// A file or folder beside the journal already has the name it was to be renamed to: a folder
+    /// when the URL is a directory's, otherwise a file.
+    case nameTaken(URL)
+    /// The file system wouldn't rename the journal's folder (no permission, the disk gone): `code`
+    /// is the `errno` it gave.
+    case renameFailed(URL, code: Int32)
     /// The folder picked to locate the journal doesn't hold `clefwise.json`.
     case notAJournal(URL)
     /// The folder picked to locate a journal is another journal this Mac knows already.
@@ -29,9 +36,16 @@ enum JournalError: LocalizedError, Equatable {
         case .notARun: "The run file doesn't say which run it is."
         case .clash(let path): "A different file is already in the journal at \(path)."
         case .damagedScore(let hash): "The score doesn't match its name, \(hash)."
-        case .invalidName: "Give the journal a name without a slash or colon, not starting with a dot."
+        case .invalidName(let name):
+            name.isEmpty ? "Give the journal a name." : "Give the journal a name without a slash or colon, not starting with a dot."
         case .folderInUse(let url):
             "There's already a folder called “\(url.lastPathComponent)” there, with other things in it. Choose another name."
+        case .nameTaken(let url):
+            "There's already a \(url.hasDirectoryPath ? "folder" : "file") called “\(url.lastPathComponent)” there."
+        case .renameFailed(let url, let code) where code == EACCES || code == EPERM:
+            "You don't have permission to rename “\(url.lastPathComponent)”."
+        case .renameFailed(let url, let code):
+            "“\(url.lastPathComponent)” couldn't be renamed: \(String(cString: strerror(code)))."
         case .notAJournal(let url): "“\(url.lastPathComponent)” isn't a Clefwise journal: it has no clefwise.json."
         case .listedAlready(let url):
             "“\(url.lastPathComponent)” is another of your journals. Switch to it from the Journal menu instead."
@@ -62,8 +76,8 @@ final class PracticeJournal: JournalWriting, @unchecked Sendable {
     private var storedPath: String?
     private var storedBookmark: Data?
     /// Told the journal's new path and bookmark each time it's kept somewhere new (found elsewhere
-    /// through its bookmark, made, or located by the user): on the thread that found it, once the
-    /// lock is let go.
+    /// through its bookmark, made, renamed, or located by the user): on the thread that found it,
+    /// once the lock is let go.
     private let onRelocated: (@Sendable (_ path: String, _ bookmark: Data?) -> Void)?
     /// What `remember` kept while the lock was held, for `onRelocated` once it's let go.
     private var relocation: (path: String, bookmark: Data?)?
@@ -224,11 +238,7 @@ final class PracticeJournal: JournalWriting, @unchecked Sendable {
             if let existing = Self.existingJournal(named: name, in: parent) {
                 folder = existing
             } else {
-                let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !name.isEmpty, !name.hasPrefix("."), !name.contains("/"), !name.contains(":") else {
-                    throw JournalError.invalidName(name)
-                }
-                folder = parent.appendingPathComponent(name, isDirectory: true)
+                folder = parent.appendingPathComponent(try Self.checkedName(name), isDirectory: true)
                 try Self.makeJournal(at: folder)
             }
             remember(folder)
@@ -254,6 +264,94 @@ final class PracticeJournal: JournalWriting, @unchecked Sendable {
             remember(folder)
             found = folder
         }
+    }
+
+    /// `name` trimmed of spaces and new lines, if a journal can have it: not empty, without a slash
+    /// or colon, and not starting with a dot (Finder would hide it). Throws
+    /// `JournalError.invalidName` otherwise.
+    static func checkedName(_ name: String) throws -> String {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !name.hasPrefix("."), !name.contains("/"), !name.contains(":") else {
+            throw JournalError.invalidName(name)
+        }
+        return name
+    }
+
+    // MARK: - Renaming it
+
+    /// Renames the journal's folder to `name`, trimmed, in the folder it's in, and keeps it as the
+    /// journal there (`onRelocated` hears of it): a journal's name is its folder's. Under the lock,
+    /// so it never races a run or a piece being placed. The same name changes nothing, and a change
+    /// of case only ("anna" to "Anna") works on a volume that ignores case too. Returns the folder
+    /// as it is now.
+    ///
+    /// Throws, changing nothing: `JournalError.invalidName` for a name that's empty, has a slash or
+    /// colon in it, or starts with a dot; `.nameTaken` when a file or folder beside it already has
+    /// it; `.missing` when the journal can't be found; `.renameFailed` when the file system won't
+    /// (no permission, the disk gone).
+    @discardableResult
+    func rename(to name: String) throws -> URL {
+        let name = try Self.checkedName(name)
+        return try locked {
+            guard let folder = locate() else { throw JournalError.missing }
+            guard name != folder.lastPathComponent else { return folder }
+            let renamed = folder.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
+            try Self.renameFolder(folder, to: renamed)
+            remember(renamed)
+            found = renamed
+            return renamed
+        }
+    }
+
+    /// Renames the folder `source` to `destination` beside it, unless something there already has
+    /// that name. On a volume that ignores case, a change of case only finds the folder itself
+    /// under the new name: that goes through a temporary name when renaming straight away doesn't
+    /// take (APFS takes it).
+    private static func renameFolder(_ source: URL, to destination: URL) throws {
+        let isCaseOnly = isSameItem(source, destination)
+        if renamex_np(source.path, destination.path, UInt32(RENAME_EXCL)) == 0 {
+            if !isCaseOnly || hasExactName(destination) { return }
+        } else {
+            let code = errno
+            guard code == EEXIST else { throw JournalError.renameFailed(source, code: code) }
+            guard isCaseOnly else { throw nameTaken(destination) }
+        }
+        try renameThroughTemporaryName(source, to: destination)
+    }
+
+    /// Renames `source` to `destination` by way of a hidden name beside them, for a change of case
+    /// that a volume won't make in one go. When the second step fails, `source` is put back.
+    static func renameThroughTemporaryName(_ source: URL, to destination: URL) throws {
+        let temporary = temporaryURL(in: source.deletingLastPathComponent())
+        guard renamex_np(source.path, temporary.path, UInt32(RENAME_EXCL)) == 0 else {
+            throw JournalError.renameFailed(source, code: errno)
+        }
+        guard renamex_np(temporary.path, destination.path, UInt32(RENAME_EXCL)) == 0 else {
+            let code = errno
+            renamex_np(temporary.path, source.path, UInt32(RENAME_EXCL))
+            throw code == EEXIST ? nameTaken(destination) : JournalError.renameFailed(source, code: code)
+        }
+    }
+
+    /// `JournalError.nameTaken` for what's at `url`, telling a folder from a file.
+    private static func nameTaken(_ url: URL) -> JournalError {
+        var isFolder: ObjCBool = false
+        _ = FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder)
+        return .nameTaken(URL(fileURLWithPath: url.path, isDirectory: isFolder.boolValue))
+    }
+
+    /// Whether `a` and `b` are the same file or folder: on a volume that ignores case, "Anna" and
+    /// "anna" are.
+    private static func isSameItem(_ a: URL, _ b: URL) -> Bool {
+        var first = stat(), second = stat()
+        return lstat(a.path, &first) == 0 && lstat(b.path, &second) == 0
+            && first.st_dev == second.st_dev && first.st_ino == second.st_ino
+    }
+
+    /// Whether the folder `url` is in lists its name exactly, case and all.
+    private static func hasExactName(_ url: URL) -> Bool {
+        let names = try? FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path)
+        return names?.contains(url.lastPathComponent) ?? false
     }
 
     /// Makes the folder (or takes an empty one) and writes the root files. `clefwise.json` goes
@@ -321,7 +419,7 @@ final class PracticeJournal: JournalWriting, @unchecked Sendable {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let temporary = temporaryURL(in: directory)
         try writeSynced(piece.data, to: temporary)
-        guard rename(temporary.path, destination.path) == 0 else {
+        guard Darwin.rename(temporary.path, destination.path) == 0 else {
             let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             try? FileManager.default.removeItem(at: temporary)
             throw error

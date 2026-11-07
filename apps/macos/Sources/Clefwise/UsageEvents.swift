@@ -91,6 +91,14 @@ struct RoundStarted: Codable, Equatable {
     /// The key signature the round is in (random keys resolved); for pieces, the first note's.
     var keyFifths: Int
     var piece: PieceContext?
+
+    /// The round was a 60-second sprint. Versions until 2026-11-07 offered sprints beside practice
+    /// rounds and saved which in the settings' `mode` (`sprint` or `practice`); rounds logged since
+    /// have no `mode` and are all practice rounds.
+    var wasSprint: Bool {
+        guard case .object(let values) = settings else { return false }
+        return values["mode"] == .string("sprint")
+    }
 }
 
 struct PieceContext: Codable, Equatable {
@@ -279,8 +287,10 @@ struct RoundEnded: Codable, Equatable {
     var attempts: Int
     var bestStreak: Int
     var averageResponseMs: Int?
-    var bestScore: Int?
-    var isNewBest: Bool
+    /// Sprints only, so only in rounds logged by versions until 2026-11-07: the best score for the
+    /// round's setup, and whether this round set it. Read so old lines still decode, never written.
+    var bestScore: Int? = nil
+    var isNewBest: Bool? = nil
     var notesToReview: [String]
     /// The question still on screen when the round ended (time up, stopped, quit…), if any.
     var unansweredQuestion: UnansweredQuestion? = nil
@@ -383,12 +393,14 @@ struct UIAction: Codable, Equatable {
     var detail: String?
 }
 
-/// The per-note history and best scores kept before the usage log existed, recorded once so the
-/// log starts from everything the app knew.
+/// The per-note history kept before the usage log existed, recorded once so the log starts from
+/// everything the app knew.
 struct StatsSnapshot: Codable, Equatable {
     var reason: String
     var noteStats: [String: NoteStat]
-    var bestScores: [String: Int]
+    /// The best 60-second sprint scores, in snapshots recorded by versions until 2026-11-07. Kept
+    /// so an old snapshot reads, and is copied into a journal, as it is; nothing uses it now.
+    var bestScores: [String: Int]? = nil
 }
 
 enum StartSource: String, Codable, Equatable {
@@ -412,8 +424,8 @@ enum KeystrokeResult: String, Codable, Equatable {
 }
 
 enum RoundEndReason: String, Codable, Equatable {
-    /// A sprint's or timed practice round's clock ran out; Stop/Esc; the last note of a piece; the
-    /// last of a practice round's set number of notes; replaced by opening or closing a piece or
+    /// A timed round's clock ran out (or, until 2026-11-07, a sprint's); Stop/Esc; the last note of
+    /// a piece; the last of a round's set number of notes; replaced by opening or closing a piece or
     /// starting over; the app quit mid-round; the round couldn't be brought back after a crash
     /// (ended at a later launch, with `RoundEnded.recordedAt`).
     case timeUp, stopped, pieceComplete, notesDone, abandoned, appQuit, interrupted

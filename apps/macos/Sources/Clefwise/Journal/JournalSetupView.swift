@@ -3,12 +3,12 @@ import SwiftUI
 
 // The practice journals in the window: the sheet that makes one (at first launch, and for New
 // Journal…), the alert when the one in use can't be found, the one when a folder picked to open
-// isn't a journal, and the question before one leaves the list.
+// isn't a journal, the question before one leaves the list, and the one asking for a new name.
 
 /// What the main window shows about the journals: a sheet asking to make one, an alert when the
-/// one in use can't be found, and the confirmations and refusals that go with them. The app model
-/// makes one, kept for the app's life, and makes every change to the journals itself
-/// (`AppModel`); this is what's on screen about them.
+/// one in use can't be found, a dialog asking for its new name, and the confirmations and refusals
+/// that go with them. The app model makes one, kept for the app's life, and makes every change to
+/// the journals itself (`AppModel`); this is what's on screen about them.
 @MainActor @Observable
 final class JournalSetup {
     @ObservationIgnored let registry: JournalRegistry
@@ -30,6 +30,12 @@ final class JournalSetup {
     /// The journal waiting for the user to confirm it's to leave the list; its question is up
     /// meanwhile.
     var removing: JournalRecord?
+    /// The journal whose new name is being asked for; its dialog is up meanwhile.
+    var renaming: JournalRecord?
+    /// The name in the rename dialog's field: the journal's own at first, then what's typed.
+    var newName = ""
+    /// Why the name typed wasn't taken, said in the rename dialog shown again.
+    private(set) var renameError: String?
     /// The journal in use's folder as last found; nil while there's none or it can't be found
     /// (File ▸ Show Journal in Finder is greyed out).
     private(set) var folder: URL?
@@ -104,6 +110,22 @@ final class JournalSetup {
         guard folder == nil, registry.current != nil else { return }
         Task { isReportingMissing = true }
     }
+
+    // MARK: - Renaming
+
+    /// The dialog asking for `record`'s new name, its name now in the field.
+    func askToRename(_ record: JournalRecord) {
+        newName = record.name
+        renameError = nil
+        renaming = record
+    }
+
+    /// The name typed wasn't taken, or the folder couldn't be renamed: the dialog again, once this
+    /// one has gone, saying why, with the name as typed.
+    func renameFailed(_ reason: String, for record: JournalRecord) {
+        renameError = reason
+        Task { renaming = record }
+    }
 }
 
 extension View {
@@ -151,7 +173,39 @@ private struct JournalSetupPresenter: ViewModifier {
             } message: { record in
                 Text(removalMessage(for: record))
             }
+            // A text field in an alert: the name selected, Return renames, Escape cancels.
+            .alert(renameTitle, isPresented: isRenaming, presenting: setup.renaming) { record in
+                TextField("Name", text: $setup.newName)
+                Button("Rename") { rename(record) }
+                Button("Cancel", role: .cancel) { model.log.recordUIAction("renameJournalCancelled") }
+            } message: { record in
+                Text(renameMessage(for: record))
+            }
             .onAppear { setup.checkAtLaunch() }
+    }
+
+    private var isRenaming: Binding<Bool> {
+        Binding(get: { setup.renaming != nil }, set: { if !$0 { setup.renaming = nil } })
+    }
+
+    private var renameTitle: String {
+        setup.renaming.map { "Rename “\($0.name)”" } ?? ""
+    }
+
+    /// Why the name typed last wasn't taken, if it wasn't, then what renaming does.
+    private func renameMessage(for record: JournalRecord) -> String {
+        let place = (URL(fileURLWithPath: record.path).deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath
+        return [setup.renameError, "This renames its folder in \(place)."].compactMap { $0 }.joined(separator: "\n\n")
+    }
+
+    /// The dialog's Rename. A name that won't do, or a folder that won't be renamed, brings the
+    /// dialog back saying why.
+    private func rename(_ record: JournalRecord) {
+        do {
+            try model.renameJournal(to: setup.newName)
+        } catch {
+            setup.renameFailed(error.localizedDescription, for: record)
+        }
     }
 
     private var isRefusingFolder: Binding<Bool> {
