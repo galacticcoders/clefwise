@@ -11,12 +11,53 @@ enum ProgressAnalyzer {
     /// (rounds, practice time, days, pieces, recent rounds) when it started in the window and, with
     /// one clef chosen, has at least one answer in that clef; its time, score and attempts are then
     /// the whole round's, both clefs included. Streaks ignore the filter.
+    ///
+    /// Besides the rounds' own events, it uses two kinds from outside them: `statsSnapshot` (the
+    /// opening balances: several, one per device, add up) and `pieceOpened` (each part's staves, for
+    /// rounds that don't say). Pieces go by their journal id (`piece.id`) when a round has one,
+    /// otherwise by path; the usage log has no `pieceAdded` to link the two.
     static func report(from events: [LoggedEvent], filter: ProgressFilter, unreadableLines: Int = 0,
                        now: Date = Date(), calendar: Calendar = .current) -> ProgressReport {
-        var analysis = Analysis(filter: filter, now: now, calendar: calendar)
+        var analysis = Analysis(filter: filter, now: now, calendar: calendar, pieceIDs: PieceIDs())
         for event in events { analysis.add(event) }
         var report = analysis.report()
         report.unreadableLines = unreadableLines
+        return report
+    }
+
+    /// Works out the dashboard for `filter` from a practice journal, as `JournalReader.read()` gives
+    /// it, by the rules of `report(from:filter:…)`: the opening balances (`journal.snapshots`, one per
+    /// device, added up), then the runs by start time. `unreadableLines` is the journal's.
+    ///
+    /// Pieces go by their journal id, so a piece practised on several Macs, or before and after the
+    /// journal began, is one piece: a round's `piece.id`; for a run brought in from the old usage log
+    /// (which has none), the piece its `libraryID` was added as (`pieceAdded` in
+    /// `journal.pieceEvents`), failing that the one whose `originalPath` is its path; failing both,
+    /// its path stands in.
+    ///
+    /// `pieceOpenings` are this Mac's `pieceOpened` events from its usage log: they say how many
+    /// staves each part has for runs that don't (those brought in from the log), so a single-staff
+    /// piece isn't described with a hand. Each counts from its time on, as in the log, and for
+    /// nothing else; any other event among them is ignored.
+    static func report(from journal: JournalReader.Contents, pieceOpenings: [LoggedEvent] = [], filter: ProgressFilter,
+                       now: Date = Date(), calendar: Calendar = .current) -> ProgressReport {
+        var analysis = Analysis(filter: filter, now: now, calendar: calendar, pieceIDs: PieceIDs(journal.pieceEvents))
+        for snapshot in journal.snapshots { analysis.add(snapshot) }
+        let openings = pieceOpenings
+            .filter { if case .pieceOpened = $0.event { true } else { false } }
+            .enumerated()
+            .sorted { ($0.element.time, $0.offset) < ($1.element.time, $1.offset) }
+            .map(\.element)
+        var nextOpening = openings.startIndex
+        for run in journal.runs {
+            while nextOpening < openings.endIndex, openings[nextOpening].time <= run.startedAt {
+                analysis.add(openings[nextOpening])
+                nextOpening += 1
+            }
+            for event in run.events { analysis.add(event) }
+        }
+        var report = analysis.report()
+        report.unreadableLines = journal.unreadableLines
         return report
     }
 
@@ -65,6 +106,34 @@ enum ProgressAnalyzer {
     }
 }
 
+// MARK: - Pieces
+
+/// Which piece in the journal a round practised, from the piece library's `pieceAdded` events:
+/// runs brought in from the old usage log name their piece only by `libraryID` and path. When the
+/// events disagree, the latest wins (they come in time order).
+private struct PieceIDs {
+    private var byLibraryID: [UUID: String] = [:]
+    private var byOriginalPath: [String: String] = [:]
+
+    init(_ pieceEvents: [LoggedEvent] = []) {
+        for logged in pieceEvents {
+            guard case .pieceAdded(let added) = logged.event else { continue }
+            let id = added.piece.lowercased()
+            if let libraryID = added.libraryID { byLibraryID[libraryID] = id }
+            if let path = added.originalPath { byOriginalPath[path] = id }
+        }
+    }
+
+    /// `piece.id`; failing that, the piece added with its `libraryID`, then the one first opened
+    /// from its path; nil when none says (the path then stands in). Ids are hashes, kept in
+    /// lowercase.
+    func id(of piece: PieceContext) -> String? {
+        if let id = piece.id { return id.lowercased() }
+        if let libraryID = piece.libraryID, let id = byLibraryID[libraryID] { return id }
+        return byOriginalPath[piece.path]
+    }
+}
+
 // MARK: - Gathering
 
 /// Everything gathered in the one pass over the log, then turned into the report.
@@ -76,6 +145,7 @@ private struct Analysis {
     let periodStart: Date?
     let previousStart: Date?
     private var days: LocalDays
+    private let pieceIDs: PieceIDs
 
     /// Questions waiting for their answer.
     private var questions: [UUID: WaitingQuestion] = [:]
@@ -83,9 +153,11 @@ private struct Analysis {
     private var lastShown: [UUID: ShownNote] = [:]
     private var rounds: [RoundRecord] = []
     private var roundIndex: [UUID: Int] = [:]
-    /// Staves in each part of each piece as last opened, so single-staff parts don't name a hand.
+    /// Staves in each part of each piece as last opened, so single-staff parts don't name a hand,
+    /// for rounds that don't say themselves (`PieceContext.staves`).
     private var partStaves: [String: [Int]] = [:]
-    private var snapshot: StatsSnapshot?
+    /// The opening balances, added up as the journal's projection adds them.
+    private var openingBalance = JournalProjection()
 
     /// Every day with an answer, by its start, with its end: for the streaks.
     private var practised: [Date: Date] = [:]
@@ -102,10 +174,11 @@ private struct Analysis {
     private var times = TimesTally()
     private var previousTimes = SpreadTally()
 
-    init(filter: ProgressFilter, now: Date, calendar: Calendar) {
+    init(filter: ProgressFilter, now: Date, calendar: Calendar, pieceIDs: PieceIDs) {
         self.filter = filter
         self.now = now
         self.calendar = calendar
+        self.pieceIDs = pieceIDs
         days = LocalDays(calendar)
         if let count = filter.range.days {
             let today = calendar.startOfDay(for: now)
@@ -146,8 +219,14 @@ private struct Analysis {
             rounds[index].started = logged.time
             rounds[index].start = start
             rounds[index].clock = RoundClock(time: logged.time, activeMs: 0, running: true)
-            if let piece = start.piece, let staves = partStaves[piece.path], staves.indices.contains(piece.partIndex) {
-                rounds[index].singleStaff = staves[piece.partIndex] == 1
+            if let piece = start.piece {
+                let id = pieceIDs.id(of: piece)
+                rounds[index].piece = (key: id ?? piece.path, id: id)
+                if let staves = piece.staves {
+                    rounds[index].singleStaff = staves == 1
+                } else if let staves = partStaves[piece.path], staves.indices.contains(piece.partIndex) {
+                    rounds[index].singleStaff = staves[piece.partIndex] == 1
+                }
             }
         case .questionShown(let question):
             questions[question.question] = WaitingQuestion(shown: question, stepsFromPrevious: stepsFromPrevious(to: question))
@@ -170,7 +249,7 @@ private struct Analysis {
         case .pieceOpened(let opened):
             partStaves[opened.path] = opened.parts.map(\.staves)
         case .statsSnapshot(let snapshot):
-            self.snapshot = snapshot
+            openingBalance.apply(snapshot)
         default:
             break
         }
@@ -222,9 +301,9 @@ private struct Analysis {
                 pitches[ClefKey(clef: clef, value: pitch), default: Tally()].add(answer)
             }
         }
-        if let started = rounds[index].started, let piece = rounds[index].start?.piece {
-            pieces[piece.path, default: PieceTally()].add(answer, at: time, bar: question.pieceNote?.measure,
-                                                          in: piece, startedAt: started)
+        if let started = rounds[index].started, let piece = rounds[index].start?.piece, let key = rounds[index].piece {
+            pieces[key.key, default: PieceTally(id: key.id)].add(answer, at: time, bar: question.pieceNote?.measure,
+                                                                 in: piece, startedAt: started)
         }
     }
 
@@ -246,8 +325,8 @@ private struct Analysis {
             current.practiceSeconds += seconds
             dayTallies[roundDays.day(of: started).start, default: DayTally()].practiceSeconds += seconds
             recent.append(index)
-            if let piece = round.start?.piece {
-                pieces[piece.path, default: PieceTally()].addRound(piece, startedAt: started)
+            if let piece = round.start?.piece, let key = round.piece {
+                pieces[key.key, default: PieceTally(id: key.id)].addRound(piece, startedAt: started)
             }
         }
         recent.sort { (rounds[$0].started!, $0) > (rounds[$1].started!, $1) }
@@ -276,20 +355,20 @@ private struct Analysis {
                         < ($1.clef.order, $1.pitch.diatonicIndex, $1.pitch.accidental.rawValue)
                 },
             byInput: Self.breakdown(inputs), byNaming: Self.breakdown(namings),
-            pieces: pieces
-                .compactMap { path, piece in piece.summary(path: path) }
-                .sorted { ($0.lastPractised, $1.path) > ($1.lastPractised, $0.path) },
+            pieces: pieces.values
+                .compactMap { $0.summary() }
+                .sorted { ($0.lastPractised, $1.id) > ($1.lastPractised, $0.id) },
             recentRounds: recent.prefix(50).map { Self.recentRound(rounds[$0]) },
             responseTimes: times.responseTimes(previous: periodStart == nil ? nil : previousTimes),
             answersBeforeTracking: answersBeforeTracking, unreadableLines: 0)
     }
 
-    /// Adds the stats kept before the log to the note map and pitch lists; returns how many answers
-    /// they hold. The snapshot keys notes as played, so an 8va note lands an octave up.
+    /// Adds the stats kept before the log (every device's opening balance) to the note map and pitch
+    /// lists; returns how many answers they hold. The snapshot keys notes as played, so an 8va note
+    /// lands an octave up.
     private mutating func addSnapshot() -> Int {
-        guard let snapshot else { return 0 }
         var total = 0
-        for (key, stat) in snapshot.noteStats where stat.attempts > 0 {
+        for (key, stat) in openingBalance.noteStats where stat.attempts > 0 {
             guard let (clef, pitch) = ProgressAnalyzer.parseStatKey(key), inClef(clef.rawValue) else { continue }
             let correct = max(0, min(stat.correct, stat.attempts))
             positions[ClefKey(clef: clef, value: clef.position(of: pitch)), default: PositionTally()]
@@ -581,7 +660,9 @@ private struct ClefKey<Value: Hashable>: Hashable {
 }
 
 private struct PieceTally {
-    /// From the latest round, for its title and bar count.
+    /// The piece's journal id; nil when its path stands in.
+    let id: String?
+    /// From the latest round, for its title, path and bar count.
     var context: PieceContext?
     var contextStart = Date.distantPast
     var rounds = 0, answers = 0, correct = 0
@@ -611,11 +692,11 @@ private struct PieceTally {
         contextStart = start
     }
 
-    func summary(path: String) -> PieceProgressSummary? {
+    func summary() -> PieceProgressSummary? {
         guard let context, let lastPractised = lastAnswer ?? lastRoundStart else { return nil }
-        return PieceProgressSummary(title: context.title, path: path, lastPractised: lastPractised, rounds: rounds,
+        return PieceProgressSummary(title: context.title, path: context.path, lastPractised: lastPractised, rounds: rounds,
                                     answers: answers, correct: correct, measureCount: context.measureCount,
-                                    bars: bars.values.sorted { $0.bar < $1.bar })
+                                    bars: bars.values.sorted { $0.bar < $1.bar }, pieceID: id)
     }
 }
 
@@ -634,6 +715,9 @@ private struct RoundRecord {
     var activeMsAtLastAnswer: Int?
     var hasAnswerInClef = false
     var singleStaff = false
+    /// A piece round's piece: its key in the report (its journal id, or failing that its path),
+    /// and its journal id.
+    var piece: (key: String, id: String?)?
 
     /// From `roundEnded`; a round that never ended (the app crashed, or it's still going) runs to
     /// its last answer, pauses left out, and the time before it came back after a crash too.

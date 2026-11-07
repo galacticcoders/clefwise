@@ -498,8 +498,13 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
         third.restore(second.run)
         let end = try expectInterrupted(third, second, logged: latest)
         #expect(end.score == 3 && end.attempts == 3 && end.bestStreak == 3)
-        // Up to the run's last event, the note asked again: the time after it is lost.
-        #expect(second.activeMs >= first.activeMs + 100)
+        // Up to the run's last event, the note asked again: the time after it is lost. The second
+        // game ran on for 100 ms from the round time it was brought back with: the first run's up
+        // to its last event, which can be a millisecond or so short of what the first game measured
+        // when it stopped, so that's the time to count the 100 ms from.
+        let broughtBack = try #require(payloads(RoundRestored.self, in: later.events).last).activeMs
+        #expect(abs(broughtBack - first.activeMs) < Self.toleranceMs)
+        #expect(second.activeMs >= broughtBack + 100)
         #expect(abs(end.durationMs - first.activeMs) < Self.toleranceMs)
         #expect(end.unansweredQuestion?.question == askedAgain.id)
         #expect(try #require(end.unansweredQuestion?.shownMs) < Self.toleranceMs)

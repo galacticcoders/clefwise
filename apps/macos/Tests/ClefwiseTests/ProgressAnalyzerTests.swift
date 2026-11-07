@@ -2,8 +2,9 @@ import Foundation
 import Testing
 @testable import Clefwise
 
-/// A usage log written by hand, in one session: rounds, and answers with their questions.
-private struct Log {
+/// A usage log written by hand, in one session: rounds, and answers with their questions. The
+/// journal's dashboard tests write its rounds into journals too.
+struct Log {
     private(set) var events: [LoggedEvent] = []
     private let session = UUID()
 
@@ -310,8 +311,6 @@ private struct Log {
 
     @Test func snapshotCountsInAllTimeOnly() {
         var log = Log()
-        log.add(.statsSnapshot(StatsSnapshot(reason: "older", noteStats: ["treble.C4": NoteStat(attempts: 99, correct: 99)],
-                                             bestScores: [:])), at: at(20, 9))
         log.add(.statsSnapshot(StatsSnapshot(reason: "beforeUsageLog", noteStats: [
             "treble.F5": NoteStat(attempts: 10, correct: 7), "treble.F♯5": NoteStat(attempts: 4, correct: 1),
             "bass.G2": NoteStat(attempts: 6, correct: 6), "treble.E4": NoteStat(),

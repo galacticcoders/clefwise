@@ -1966,6 +1966,7 @@ final class Game {
             averageResponseMs: replay.averageResponseMs, bestScore: bestScore, isNewBest: false,
             notesToReview: Self.notesToReview(from: replay.misses).map { Self.statKey($0.clef, $0.pitch) },
             unansweredQuestion: unanswered, recordedAt: Date())), at: time)
+        if replay.attempts > 0 { noteRoundEnded(round) }
     }
 
     /// Clears the device's note that `round` is being brought back, if it's still about that round.
@@ -2359,6 +2360,7 @@ final class Game {
     /// Ends the round being logged, if there is one. `isNewBest`: a finished sprint set a best score.
     private func recordRoundEnd(_ reason: RoundEndReason, isNewBest: Bool = false) {
         guard let roundLog else { return }
+        if attempts > 0 { noteRoundEnded(roundLog.id) }
         let unanswered = questionLog.map {
             UnansweredQuestion(question: $0.id, shownMs: activeMilliseconds(since: questionStart), keystrokes: $0.keystrokes,
                                pausedMs: pausedMilliseconds(questionPaused), group: $0.group)
@@ -2421,6 +2423,106 @@ final class Game {
         bestScores = projection.bestScores
         save(noteStats, as: Keys.noteStats)
         save(bestScores, as: Keys.bestScores)
+    }
+
+    /// What one refresh read: the journal folded, and the ids of the runs it holds.
+    private typealias StatsRead = (projection: JournalProjection, runs: Set<UUID>)
+
+    /// The refresh from the journal under way (`refreshStats(from:)`), if any.
+    @ObservationIgnored private var statsRefresh: Task<Void, Never>?
+    /// The journal to read once the refresh under way is done: the latest one asked for.
+    @ObservationIgnored private var nextStatsReader: JournalReader?
+    /// Stats read from the journal while a round was playing, to take once it ends if they still
+    /// hold every round this game ended (`roundsEnded`).
+    @ObservationIgnored private var statsAfterRound: StatsRead?
+    /// The rounds this game has ended with at least one answer, so with a run on its way to the
+    /// journal: stats read from the journal are taken only once they hold all of them.
+    @ObservationIgnored private var roundsEnded: Set<UUID> = []
+
+    /// True from `refreshStats(from:)` until its result is in (taken, dropped, or waiting for the
+    /// round to end), refreshes asked for meanwhile included.
+    var isRefreshingStats: Bool { statsRefresh != nil }
+
+    /// True while stats read from the journal wait for the round playing to end.
+    var hasStatsWaitingForRoundEnd: Bool { statsAfterRound != nil }
+
+    /// Brings the note stats and best scores up to date with the journal `reader` reads: folds what
+    /// it reads (`JournalProjection(contents:)`) off the main thread, then takes the result with
+    /// `apply(projection:)` here. For when a game is made, and whenever the journal changes.
+    ///
+    /// - **Never behind this game:** a result is taken only if the journal it read holds the run of
+    ///   every round this game has ended with an answer (a round without one gets no run). One read
+    ///   before such a run reached the journal would take that round's answers and best score away
+    ///   again, so it's dropped: the refresh that follows the run into the journal brings it.
+    /// - **Never mid-round:** a result that comes in while a round is playing (paused or not) waits
+    ///   until the round ends: stopped, finished, closed or quit. Starting over goes straight into
+    ///   another round, so it waits for that one's end. A newer result replaces one waiting. At the
+    ///   end it's held to the rule above, so after a round with an answer it's dropped: the round's
+    ///   run isn't in it.
+    /// - **One at a time:** refreshes asked for while one is under way become one after it, from
+    ///   the latest `reader`; the result of the one under way is then dropped, as the next is newer.
+    func refreshStats(from reader: JournalReader) {
+        guard statsRefresh == nil else {
+            nextStatsReader = reader
+            return
+        }
+        statsRefresh = Task { [weak self] in
+            let read: StatsRead = await Task.detached(priority: .utility) {
+                let contents = reader.read()
+                return (JournalProjection(contents: contents), Set(contents.runs.map(\.id)))
+            }.value
+            self?.finishRefreshingStats(with: read)
+        }
+    }
+
+    /// Notes that this game ended `round`, with at least one answer: its run is on its way to the
+    /// journal, and stats from the journal without it are out of date.
+    private func noteRoundEnded(_ round: UUID) {
+        roundsEnded.insert(round)
+    }
+
+    /// Whether `read` holds every round this game has ended with an answer.
+    private func isUpToDate(_ read: StatsRead) -> Bool {
+        roundsEnded.isSubset(of: read.runs)
+    }
+
+    private func finishRefreshingStats(with read: StatsRead) {
+        statsRefresh = nil
+        if let next = nextStatsReader {
+            nextStatsReader = nil
+            refreshStats(from: next)
+        } else if !isUpToDate(read) {
+            return
+        } else if phase == .playing {
+            // One already waiting is already watched for the round's end.
+            let isWatching = statsAfterRound != nil
+            statsAfterRound = read
+            if !isWatching { takeStatsWhenRoundEnds() }
+        } else {
+            statsAfterRound = nil
+            apply(projection: read.projection)
+        }
+    }
+
+    /// Takes `statsAfterRound` once the round playing ends. A round's end takes `phase` from
+    /// `playing`, so this watches `phase`, and looks once the change is made (the watch is told just
+    /// before it), watching again if a round is still playing.
+    private func takeStatsWhenRoundEnds() {
+        withObservationTracking {
+            _ = phase
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.roundMayHaveEnded() }
+        }
+    }
+
+    private func roundMayHaveEnded() {
+        guard let read = statsAfterRound else { return }
+        if phase == .playing {
+            takeStatsWhenRoundEnds()
+            return
+        }
+        statsAfterRound = nil
+        if isUpToDate(read) { apply(projection: read.projection) }
     }
 
     /// The names `Game` keeps its values under in the defaults, before any namespace

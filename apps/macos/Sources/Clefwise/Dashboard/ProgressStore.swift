@@ -1,9 +1,9 @@
 import Foundation
 import Observation
 
-/// What the Progress window shows: the filter, and the report worked out for it from the usage
-/// log. Reading and analysing the log happens off the main thread, so practice carries on, and
-/// the last report stays on screen until the new one is ready.
+/// What the Progress window shows: the filter, and the report worked out for it from the practice
+/// journal (or, the old way, from the usage log). Reading and analysing happen off the main thread,
+/// so practice carries on, and the last report stays on screen until the new one is ready.
 @MainActor
 @Observable
 final class ProgressStore {
@@ -29,7 +29,26 @@ final class ProgressStore {
 
     private static let filterKey = "dashboardFilter"
 
-    /// The app's store: reads `log`, keeps the filter in `defaults`.
+    /// The app's store for a practice journal: reads what `reader` reads, and keeps the filter in
+    /// `defaults`. The reader keeps the files it has read, so a reload reads only the new ones. With
+    /// no reader (no journal) every report is empty.
+    ///
+    /// Runs brought in from the old usage log don't say how many staves their part has, which
+    /// Recent rounds needs so a single-staff piece isn't described with a hand. For those, the
+    /// `pieceOpened` events in this Mac's usage log (`log`) stand in: read once, at the first
+    /// report, decoding only their own lines, and used for nothing else. Runs since the journal
+    /// began carry their staves, so later `pieceOpened` events aren't needed.
+    convenience init(reader: JournalReader?, defaults: UserDefaults = .standard, log: UsageLog = .shared) {
+        let openings = LoggedPieceOpenings(log: log.folder)
+        self.init(defaults: defaults) { filter in
+            guard let reader else { return .empty(filter) }
+            return ProgressAnalyzer.report(from: reader.read(), pieceOpenings: openings.events, filter: filter)
+        }
+    }
+
+    /// The store the old way, before the journal: reads `log` whole at each report (pieces by their
+    /// journal id when a round has one, otherwise by path), and keeps the filter in `defaults`. For
+    /// the app until it hands the store its journal's reader (`init(reader:…)`).
     convenience init(defaults: UserDefaults = .standard, log: UsageLog = .shared) {
         self.init(defaults: defaults) { filter in
             // Events still on their way to disk (the round that just ended) count too.
@@ -94,5 +113,53 @@ final class ProgressStore {
 
     private func saveFilter() {
         defaults?.set(try? JSONEncoder().encode(filter), forKey: Self.filterKey)
+    }
+}
+
+/// The `pieceOpened` events in a usage log, read the first time they're asked for and then kept:
+/// all the journal's dashboard needs from the log (see `ProgressStore.init(reader:…)`). Safe to
+/// use from any thread.
+final class LoggedPieceOpenings: @unchecked Sendable {
+    private let folder: URL
+    /// Guards `read`.
+    private let lock = NSLock()
+    private var read: [LoggedEvent]?
+
+    /// Reads nothing yet.
+    init(log folder: URL) {
+        self.folder = folder
+    }
+
+    /// The log's `pieceOpened` events, in time order, as first read.
+    var events: [LoggedEvent] {
+        lock.withLock {
+            if let read { return read }
+            let events = Self.read(in: folder)
+            read = events
+            return events
+        }
+    }
+
+    /// Every `pieceOpened` event in the usage log in `folder`, in time order (ties as written).
+    /// Only lines holding `"type":"pieceOpened"` are decoded, so a long log is read quickly; lines
+    /// that don't parse are skipped.
+    static func read(in folder: URL) -> [LoggedEvent] {
+        let marker = Data(#""type":"pieceOpened""#.utf8)
+        var events: [LoggedEvent] = []
+        for url in UsageLog.eventFiles(in: folder) {
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { continue }
+            var from = data.startIndex
+            while from < data.endIndex, let found = data.range(of: marker, in: from..<data.endIndex) {
+                let start = data[..<found.lowerBound].lastIndex(of: 0x0A).map { $0 + 1 } ?? data.startIndex
+                let end = data[found.upperBound...].firstIndex(of: 0x0A) ?? data.endIndex
+                if let logged = UsageLog.event(in: data[start..<end]), case .pieceOpened = logged.event {
+                    events.append(logged)
+                }
+                from = end
+            }
+        }
+        return events.enumerated()
+            .sorted { ($0.element.time, $0.offset) < ($1.element.time, $1.offset) }
+            .map(\.element)
     }
 }

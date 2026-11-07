@@ -65,7 +65,7 @@ struct DashboardView: View {
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
-            .help("Read the usage log again")
+            .help("Read the journal again")
 
             if store.hasLoaded {
                 Text("Updated \(store.report.generatedAt.formatted(date: .omitted, time: .shortened))")
@@ -219,8 +219,8 @@ private struct DashboardNotes: View {
         VStack(alignment: .leading, spacing: 4) {
             if report.unreadableLines > 0 {
                 note(report.unreadableLines == 1
-                     ? "1 line of the usage log couldn't be read and is left out."
-                     : "\(report.unreadableLines.formatted()) lines of the usage log couldn't be read and are left out.")
+                     ? "1 line in the journal couldn't be read and is left out."
+                     : "\(report.unreadableLines.formatted()) lines in the journal couldn't be read and are left out.")
             }
             if report.answersBeforeTracking > 0 {
                 note("\(report.answersBeforeTracking.formatted()) answers from before detailed tracking began count in the note map and notes to work on only: they have no dates or times.")

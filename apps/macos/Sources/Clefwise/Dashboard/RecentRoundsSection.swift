@@ -152,7 +152,7 @@ struct RecentRoundsSection: View {
         } else {
             Text("—")
                 .foregroundStyle(DashboardTheme.textMuted)
-                .help("The round never ended in the log, so the app probably closed unexpectedly")
+                .help("The round never ended, so the app probably closed unexpectedly")
         }
     }
 
