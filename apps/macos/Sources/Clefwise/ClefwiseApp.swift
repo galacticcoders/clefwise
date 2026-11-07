@@ -144,7 +144,8 @@ private struct PieceLibraryCommands: View {
 }
 
 /// File ▸ New Journal…, Open Journal…, Switch Journal ▸ and Show Journal in Finder. Like the start
-/// panel's Journal menu, they wait for the round to end: a run goes into the journal it started in.
+/// panel's Journal menu, the first three wait for the round to end: a run goes into the journal it
+/// started in. Show Journal in Finder doesn't, as it leaves the game alone.
 private struct JournalCommands: View {
     let model: AppModel
 
@@ -164,7 +165,7 @@ private struct JournalCommands: View {
             .disabled(!isBetweenRounds)
         }
         Button("Show Journal in Finder") { model.showJournalInFinder(from: "fileMenu") }
-            .disabled(!isBetweenRounds || model.setup.folder == nil)
+            .disabled(!model.canShowJournal)
     }
 
     /// The journal in use, ticked; picking another switches to it.
@@ -260,6 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Lets `swift run` (no .app bundle) show a Dock icon and take keyboard focus.
         NSApp.setActivationPolicy(.regular)
+        // From now on the journal in use is watched, and read again as files arrive.
         model.didFinishLaunching()
         NSApp.activate()
     }

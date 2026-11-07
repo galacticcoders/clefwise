@@ -2,8 +2,8 @@ import AppKit
 import Observation
 
 // The app across journals: the one in use and, for it, the game, the piece library and the
-// progress store; switching to another between rounds. See spec/practice-journal.md, "Several
-// journals".
+// progress store, all brought up to date as files arrive in it; switching to another between
+// rounds. See spec/practice-journal.md, "Several journals" and "Folder sync".
 
 /// What the app works on: the journals this Mac knows (`registry`) and, for the one in use, its
 /// game, piece library and progress store, made afresh each time the journal in use changes. The
@@ -12,6 +12,11 @@ import Observation
 ///
 /// Every run's lines reach the journal in use through `router`, the usage log's one line sink,
 /// and each journal has its own run-file writer, with its own `Current` and `Pending`.
+///
+/// The journal in use is read through one `JournalReader`, which the progress store, the game's
+/// note stats and best scores, and the library's pieces share, so each file is read once between
+/// them. From launch on it's watched (`JournalWatching`): whenever files arrive, from this Mac's
+/// runs or through a sync service, all three are brought up to date (`readJournal()`).
 ///
 /// With no journal in use (before the first is made, or once the last is removed) the game and
 /// library are the ones from before there were several journals (build 1's keys and folder), on
@@ -26,6 +31,9 @@ final class AppModel {
         let journal: PracticeJournal
         /// Takes the journal's runs; its `outbox` places them, and the library's events.
         let writer: RunFileWriter
+        /// Reads the journal where it was last found (`folder`, or the record's path while it can't
+        /// be found), for the progress store, the game's stats and the library's pieces.
+        let reader: JournalReader
         let game: Game
         let library: PieceLibrary
         let progressStore: ProgressStore
@@ -54,12 +62,15 @@ final class AppModel {
     /// `appLaunched` first, go on in it. `Game.restore` has brought the round back or ended it.
     @ObservationIgnored let pendingRun: PendingRun?
     /// Called after launch (`didFinishLaunching()`), after each switch, and when the journal in
-    /// use is made or found again, with what the app now keeps for it; nil once no journal is in
-    /// use. Does nothing until the app sets it.
+    /// use is made or found again (moved and found by its bookmark too), with what the app now
+    /// keeps for it; nil once no journal is in use. By then the journal is watched and being read
+    /// again. Does nothing until the app sets it.
     @ObservationIgnored var onJournalChanged: (Context?) -> Void = { _ in }
+    /// Shows a folder in Finder, for Show Journal in Finder; tests put their own.
+    @ObservationIgnored var revealInFinder: (URL) -> Void = { NSWorkspace.shared.open($0) }
     /// The usage log's one line sink, which sends each run to the writer of the journal in use.
     @ObservationIgnored let router: JournalRunRouter
-    /// Makes the game, library, store and writer for a journal.
+    /// Makes the game, library, store, reader and writer for a journal, and has the watcher.
     @ObservationIgnored let factory: Factory
     @ObservationIgnored let log: UsageLog
     @ObservationIgnored let defaults: UserDefaults
@@ -67,6 +78,13 @@ final class AppModel {
     @ObservationIgnored private var writers: [UUID: RunFileWriter] = [:]
     /// The journal the game, library and store are for; nil for none.
     @ObservationIgnored private var activeID: UUID?
+    /// Reads the journal in use where it was last found, for the store, the game and the library;
+    /// nil while there's none.
+    @ObservationIgnored private var reader: JournalReader?
+    /// The bringing-in of the journal's pieces under way (`adoptPieces()`), if any.
+    @ObservationIgnored private var pieceAdoption: Task<Void, Never>?
+    /// The journal changed again while its pieces were being brought in: once more afterwards.
+    @ObservationIgnored private var adoptsPiecesAgain = false
     /// The latest bringing-in of the usage log, for tests to wait on.
     @ObservationIgnored private(set) var usageLogImport: Task<Void, Never>?
     @ObservationIgnored private var isBringingInUsageLog = false
@@ -75,15 +93,18 @@ final class AppModel {
     /// the journal in use's working file looked at (`RunFileWriting.inspectAtLaunch()`) and the
     /// router set as `log`'s line sink, both before anything is logged; the library; `appLaunched`
     /// logged; the game made (it reopens last time's piece), and the unfinished run restored; the
-    /// progress store. `stateRoot` holds each journal's state folder (`JournalState`); `buildOne`
-    /// is where build 1 kept its state; `device` and `launch` go in the journal's file headers.
+    /// journal's reader and the progress store. Nothing is read or watched until
+    /// `didFinishLaunching()`. `stateRoot` holds each journal's state folder (`JournalState`);
+    /// `buildOne` is where build 1 kept its state; `device` and `launch` go in the journal's file
+    /// headers; `watcher` watches the journal in use (tests pass a fake).
     init(defaults: UserDefaults = .standard, log: UsageLog = .shared, stateRoot: URL = JournalState.root,
-         buildOne: BuildOneFolders = .app, device: UUID, launch: AppLaunched) {
+         buildOne: BuildOneFolders = .app, device: UUID, launch: AppLaunched,
+         watcher: JournalWatching = FSEventsJournalWatcher()) {
         let registry = JournalRegistry(defaults: defaults)
         // Before anything is logged: build 1's unfinished run moves with the rest.
         JournalMigration.migrateIfNeeded(registry, from: buildOne, stateRoot: stateRoot)
         let factory = Factory(defaults: defaults, log: log, registry: registry, stateRoot: stateRoot,
-                              buildOne: buildOne, device: device, launch: launch)
+                              buildOne: buildOne, device: device, launch: launch, watcher: watcher)
         let record = registry.current
         let writer = record.map(factory.makeWriter(for:))
         // The journal's side first, before anything is logged: a run the last launch left
@@ -99,9 +120,10 @@ final class AppModel {
         // Before the game exists, so the session's log starts with the launch: making the game
         // reopens last time's piece, which is logged too.
         log.record(.appLaunched(launch))
-        let game = factory.makeGame(for: record, library: library)
+        let game = factory.makeGame(for: record, library: library, reopeningVia: .launch)
         // A round the last launch left unfinished comes back paused, or ends as `interrupted`.
         if let pendingRun { game.restore(pendingRun) }
+        let reader = record.map(factory.makeReader(for:))
         self.registry = registry
         self.factory = factory
         self.log = log
@@ -110,7 +132,8 @@ final class AppModel {
         self.pendingRun = pendingRun
         self.library = library
         self.game = game
-        progressStore = factory.makeStore(for: record)
+        self.reader = reader
+        progressStore = factory.makeStore(for: reader)
         if let record, let writer { writers[record.id] = writer }
         activeID = record?.id
     }
@@ -130,16 +153,24 @@ final class AppModel {
         game.phase != .playing
     }
 
-    /// What the app keeps for the journal in use; nil while there's none.
-    var context: Context? {
-        guard let activeID, let record = registry.record(id: activeID), let writer = writers[activeID] else { return nil }
-        return Context(record: record, folder: registry.folder(for: record), journal: registry.journal(for: record),
-                       writer: writer, game: game, library: library, progressStore: progressStore)
+    /// Show Journal in Finder works whenever the journal in use was found when last looked for, a
+    /// round playing or not: it leaves the game alone.
+    var canShowJournal: Bool {
+        setup.folder != nil
     }
 
-    /// Once the app has launched: `onJournalChanged` hears of the journal in use.
+    /// What the app keeps for the journal in use; nil while there's none.
+    var context: Context? {
+        guard let activeID, let record = registry.record(id: activeID), let writer = writers[activeID],
+              let reader else { return nil }
+        return Context(record: record, folder: registry.folder(for: record), journal: registry.journal(for: record),
+                       writer: writer, reader: reader, game: game, library: library, progressStore: progressStore)
+    }
+
+    /// Once the app has launched: the journal in use is watched and read (`journalInUseChanged()`),
+    /// and `onJournalChanged` hears of it.
     func didFinishLaunching() {
-        onJournalChanged(context)
+        journalInUseChanged()
     }
 
     // MARK: - Switching
@@ -272,8 +303,8 @@ final class AppModel {
         journalFound(record)
     }
 
-    /// File ▸ Show Journal in Finder and the start panel's. A journal gone since it was last
-    /// found brings up the alert.
+    /// File ▸ Show Journal in Finder and the start panel's; also mid-round, as it leaves the game
+    /// alone (`canShowJournal`). A journal gone since it was last found brings up the alert.
     func showJournalInFinder(from source: String) {
         log.recordUIAction("showJournal", detail: source)
         setup.lookAgain()
@@ -281,7 +312,7 @@ final class AppModel {
             setup.isReportingMissing = current != nil
             return
         }
-        NSWorkspace.shared.open(folder)
+        revealInFinder(folder)
     }
 
     /// The start panel's Remove "<name>" from List…: asks first (`remove(_:)`).
@@ -303,15 +334,16 @@ final class AppModel {
             activate(next)
             return
         }
-        // No journal left: runs get no file until a new one is made. The game stays on screen
-        // behind the sheet.
+        // No journal left: runs get no file until a new one is made, and nothing is watched. The
+        // game stays on screen behind the sheet.
         log.flush()
         router.retarget(to: nil)
         activeID = nil
+        reader = nil
         setup.lookAgain()
         // Once the question has gone: one presentation at a time.
         Task { setup.askToCreate(cancellable: false) }
-        onJournalChanged(nil)
+        journalInUseChanged()
     }
 
     /// At quit: waits up to `timeout`, all told, for every journal's records to be in the journal
@@ -324,7 +356,7 @@ final class AppModel {
     }
 
     /// Makes `record` the journal in use: its writer takes the next run, what waited for it goes
-    /// in, and its library, game and progress store are made afresh.
+    /// in, its library, game, reader and progress store are made afresh, and it's watched and read.
     private func activate(_ record: JournalRecord) {
         // Never drops a round unseen (one brought back after a crash, its journal missing): it
         // ends, and its run goes to the journal it started in.
@@ -336,18 +368,20 @@ final class AppModel {
         router.retarget(to: writer)
         writer.outbox.placePending()
         library = factory.makeLibrary(for: record, writer: writer)
-        game = factory.makeGame(for: record, library: library)
-        progressStore = factory.makeStore(for: record)
+        game = factory.makeGame(for: record, library: library, reopeningVia: .journalSwitch)
+        reader = factory.makeReader(for: record)
+        progressStore = factory.makeStore(for: reader)
         activeID = record.id
         setup.lookAgain(reportingMissing: true)
-        onJournalChanged(context)
+        journalInUseChanged()
     }
 
-    /// The journal in use was made, opened or located again: what waited for it goes in.
+    /// The journal in use was made, opened or located again: what waited for it goes in, and it's
+    /// watched and read where it is now.
     private func journalFound(_ record: JournalRecord) {
         writer(for: record).outbox.placePending()
         setup.lookAgain(reportingMissing: true)
-        onJournalChanged(context)
+        journalInUseChanged()
     }
 
     private func writer(for record: JournalRecord) -> RunFileWriter {
@@ -355,6 +389,94 @@ final class AppModel {
         let writer = factory.makeWriter(for: record)
         writers[record.id] = writer
         return writer
+    }
+
+    // MARK: - Watching and reading the journal
+
+    /// True while the journal's pieces are being brought into the library (`adoptPieces()`), more
+    /// asked for meanwhile included.
+    var isAdoptingPieces: Bool {
+        pieceAdoption != nil
+    }
+
+    /// From launch on, after each switch, and when the journal in use is made or found again: the
+    /// journal is watched where it is now (one folder at a time, so the last one watched no longer
+    /// is), and read (`readJournal()`); then `onJournalChanged` hears of it. With no journal in
+    /// use, nothing is watched.
+    private func journalInUseChanged() {
+        if let record = activeID.flatMap(registry.record(id:)) {
+            let reader = follow(record)
+            factory.watcher.start(watching: reader.folder) { [weak self] in self?.journalDidChange() }
+            readJournal()
+        } else {
+            factory.watcher.stop()
+        }
+        onJournalChanged(context)
+    }
+
+    /// The reader of `record`'s journal, the one in use, where the journal is now: the reader there
+    /// is, or when the journal is now somewhere else (found elsewhere with Locate…, or moved and
+    /// found by its bookmark), a new one, with a progress store reading through it. The game and
+    /// library stay: they don't read the folder themselves.
+    private func follow(_ record: JournalRecord) -> JournalReader {
+        if let reader, PracticeJournal.isSameFolder(reader.folder, factory.folder(for: record)) { return reader }
+        let reader = factory.makeReader(for: record)
+        self.reader = reader
+        progressStore = factory.makeStore(for: reader)
+        return reader
+    }
+
+    /// The watcher saw something change in the journal in use: files arriving (this Mac's runs and
+    /// pieces, or another device's through a sync service), or the folder itself appearing, going
+    /// or moving. Looks for the journal again, so Show Journal in Finder is up to date. One moved
+    /// and found by its bookmark is watched and read where it is now; otherwise it's read again.
+    private func journalDidChange() {
+        guard let record = activeID.flatMap(registry.record(id:)), let watched = reader else { return }
+        setup.lookAgain()
+        if follow(record) !== watched {
+            journalInUseChanged()
+        } else {
+            readJournal()
+        }
+    }
+
+    /// Brings the dashboard, the game's note stats and best scores, and the library's pieces up to
+    /// date with the journal in use, all through its one reader, each off the main thread: the
+    /// progress store reloads, the game refreshes (`Game.refreshStats(from:)`, which never takes
+    /// them mid-round or without its own latest rounds), and the pieces are adopted
+    /// (`adoptPieces()`). Not while the journal can't be found: reading nothing there would take
+    /// the note stats and the dashboard away until it's back.
+    private func readJournal() {
+        guard let reader, setup.folder != nil else { return }
+        progressStore.reload()
+        game.refreshStats(from: reader)
+        adoptPieces()
+    }
+
+    /// Brings the journal's pieces into the library in use (`PieceLibrary.adopt(from:journalFolder:)`):
+    /// reads the journal off the main thread, then adopts here. One at a time, so an older read
+    /// never lands after a newer one: asked for meanwhile, it runs once more afterwards. A read that
+    /// finishes after a switch, or after the journal was found elsewhere, is dropped: it's for the
+    /// library or folder before.
+    private func adoptPieces() {
+        guard pieceAdoption == nil else {
+            adoptsPiecesAgain = true
+            return
+        }
+        guard let reader else { return }
+        let library = library
+        pieceAdoption = Task { [weak self] in
+            let contents = await Task.detached(priority: .utility) { reader.read() }.value
+            guard let self else { return }
+            if library === self.library, reader === self.reader {
+                library.adopt(from: contents, journalFolder: reader.folder)
+            }
+            pieceAdoption = nil
+            if adoptsPiecesAgain {
+                adoptsPiecesAgain = false
+                adoptPieces()
+            }
+        }
     }
 
     // MARK: - The usage log so far
@@ -389,8 +511,8 @@ final class AppModel {
 }
 
 extension AppModel {
-    /// Makes what the app keeps for a journal. Each is one call, to change in one place (a harness,
-    /// or a progress store that reads the journal).
+    /// Makes what the app keeps for a journal, and has the one watcher, moved from journal to
+    /// journal. Each is one call, to change in one place (a harness, or a test).
     @MainActor
     struct Factory {
         let defaults: UserDefaults
@@ -402,6 +524,21 @@ extension AppModel {
         /// For the journal's file headers.
         let device: UUID
         let launch: AppLaunched
+        /// Watches the journal in use, one folder at a time: `FSEventsJournalWatcher` in the app,
+        /// a fake in tests.
+        let watcher: JournalWatching
+
+        /// Where `record`'s journal is read and watched: where it's found now, or while it can't be
+        /// found, its path, where the watcher sees it come back.
+        func folder(for record: JournalRecord) -> URL {
+            registry.folder(for: record) ?? URL(fileURLWithPath: record.path, isDirectory: true)
+        }
+
+        /// Reads `record`'s journal in `folder(for:)`, for its progress store, game and library.
+        /// It keeps every file it has read, so it's made once for the journal while in use.
+        func makeReader(for record: JournalRecord) -> JournalReader {
+            JournalReader(folder: folder(for: record))
+        }
 
         /// The writer of `record`'s runs, with its `Current` and `Pending` in the journal's state
         /// folder.
@@ -421,14 +558,16 @@ extension AppModel {
 
         /// `record`'s game: its settings, note stats and best scores are under its namespace, so a
         /// journal new to this Mac starts from the default settings. With no journal, the keys
-        /// from before there were several.
-        func makeGame(for record: JournalRecord?, library: PieceLibrary) -> Game {
-            Game(defaults: defaults, namespace: record?.defaultsNamespace ?? "", recorder: log, library: library)
+        /// from before there were several. The piece it reopens is logged with `reopeningVia`.
+        func makeGame(for record: JournalRecord?, library: PieceLibrary, reopeningVia source: PieceOpenSource) -> Game {
+            Game(defaults: defaults, namespace: record?.defaultsNamespace ?? "", recorder: log, library: library,
+                 reopeningVia: source)
         }
 
-        /// The Progress window's data for `record`.
-        func makeStore(for record: JournalRecord?) -> ProgressStore {
-            ProgressStore(defaults: defaults, log: log)
+        /// The Progress window's data, from the journal `reader` reads; every report is empty with
+        /// no reader (no journal).
+        func makeStore(for reader: JournalReader?) -> ProgressStore {
+            ProgressStore(reader: reader, defaults: defaults, log: log)
         }
     }
 }

@@ -421,8 +421,9 @@ enum RoundEndReason: String, Codable, Equatable {
 
 enum PieceOpenSource: String, Codable, Equatable {
     /// File ▸ Open Piece…, the start panel's button, a dropped file, the piece panel's Open
-    /// another…, reopening last session's piece at launch, or picking one from the piece library.
-    case menu, button, drop, openAnother, launch, library
+    /// another…, reopening last session's piece at launch, picking one from the piece library, or
+    /// reopening the piece a journal last had open when the app switches to it.
+    case menu, button, drop, openAnother, launch, library, journalSwitch
 }
 
 // MARK: - Envelope

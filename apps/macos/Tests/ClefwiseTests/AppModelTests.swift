@@ -2,11 +2,49 @@ import Foundation
 import Testing
 @testable import Clefwise
 
+/// Stands in for the FSEvents watcher: says what it watches, and calls back when a test says files
+/// changed (`fire()`), as the real one does once the folder has been quiet.
+final class FakeJournalWatcher: JournalWatching {
+    /// The folder watched now; nil when none is.
+    private(set) var folder: URL?
+    /// Every folder watched, in order.
+    private(set) var started: [URL] = []
+    /// How many watches have ended, by `stop()` or by starting another.
+    private(set) var stopped = 0
+    private var onChange: (@MainActor @Sendable () -> Void)?
+
+    func start(watching folder: URL, onChange: @escaping @MainActor @Sendable () -> Void) {
+        stop()
+        self.folder = folder
+        started.append(folder)
+        self.onChange = onChange
+    }
+
+    func stop() {
+        guard folder != nil else { return }
+        folder = nil
+        onChange = nil
+        stopped += 1
+    }
+
+    /// Files changed in the folder watched.
+    @MainActor func fire() {
+        onChange?()
+    }
+
+    /// Whether `journal` is the folder watched now.
+    func isWatching(_ journal: URL) -> Bool {
+        folder.map { PracticeJournal.isSameFolder($0, journal) } ?? false
+    }
+}
+
 /// An app model launched on folders and defaults of its own: never the real ones.
 @MainActor
 final class AppModelTestBench {
     let temporary = UsageTestFolder()
     let defaults = InMemoryDefaults()
+    /// The watcher of the app model launched last: a fake, so nothing watches real folders.
+    private(set) var watcher = FakeJournalWatcher()
 
     var usageFolder: URL { temporary.url.appendingPathComponent("Usage", isDirectory: true) }
     var stateRoot: URL { temporary.url.appendingPathComponent("Clefwise/Journals", isDirectory: true) }
@@ -24,10 +62,12 @@ final class AppModelTestBench {
         if !bringsInUsageLog { defaults.set(true, forKey: AppModel.Keys.usageLogBroughtIn) }
     }
 
-    /// The app launching (again) on this bench's defaults and folders, with its own session.
+    /// The app launching (again) on this bench's defaults and folders, with its own session and a
+    /// watcher of its own (`watcher`).
     func launch() -> AppModel {
-        AppModel(defaults: defaults, log: UsageLog(folder: usageFolder), stateRoot: stateRoot, buildOne: buildOne,
-                 device: JournalFixture.device, launch: JournalFixture.launch)
+        watcher = FakeJournalWatcher()
+        return AppModel(defaults: defaults, log: UsageLog(folder: usageFolder), stateRoot: stateRoot, buildOne: buildOne,
+                        device: JournalFixture.device, launch: JournalFixture.launch, watcher: watcher)
     }
 
     /// Makes the journal `name` in `documents` with the sheet's button, and returns it.
@@ -68,6 +108,47 @@ final class AppModelTestBench {
         let deadline = ContinuousClock.now + .seconds(5)
         while !condition(), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    /// Waits until the journal in use has been read into the dashboard, the game's stats and the
+    /// library.
+    func waitForReading(_ model: AppModel) async throws {
+        try await waitUntil { !model.progressStore.isLoading && !model.game.isRefreshingStats && !model.isAdoptingPieces }
+    }
+
+    /// Another Mac's practice arriving in the journal in `folder`, as a sync service brings it: a
+    /// minute's sprint on the default settings in which `score` notes were named right, and the
+    /// piece `title` added there, with its score. Returns the piece's id (its score's hash).
+    @discardableResult
+    func practiseElsewhere(in folder: URL, scoring score: Int, piece title: String) throws -> String {
+        let start = Date(timeIntervalSinceNow: -600)
+        var log = Log()
+        let round = log.round(at: start)
+        for index in 0..<score { log.answer(round, at: start.addingTimeInterval(Double(index + 1)), Pitch(.e, 4)) }
+        log.end(round, at: start.addingTimeInterval(60), durationMs: 60_000, score: score, attempts: score, reason: .timeUp)
+        let file = JournalPieceFile(data: Data("<score-partwise>\(title)</score-partwise>".utf8), fileExtension: "musicxml")
+        let url = folder.appendingPathComponent(JournalLayout.piecePath(hash: file.hash, fileExtension: "musicxml"))
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try file.data.write(to: url)
+        log.add(.pieceAdded(PieceAdded(piece: file.hash, title: title, fileName: "\(title).musicxml", libraryID: UUID(),
+                                       originalPath: "/Scores/\(title).musicxml")), at: start)
+        try TestJournal(folder: folder).write(log.events, device: UUID())
+        return file.hash
+    }
+
+    /// The note stats `record`'s game keeps, as saved.
+    func noteStats(of record: JournalRecord) -> [String: NoteStat]? {
+        defaults.data(forKey: Game.key(Game.Keys.noteStats, in: record.defaultsNamespace))
+            .flatMap { try? JSONDecoder().decode([String: NoteStat].self, from: $0) }
+    }
+
+    /// How each piece opened so far was opened (`pieceOpened`'s `via`), in order.
+    func piecesOpened(_ model: AppModel) -> [PieceOpenSource] {
+        model.log.flush()
+        return UsageLog.readEvents(in: usageFolder).events.compactMap {
+            guard case .pieceOpened(let opened) = $0.event else { return nil }
+            return opened.via
         }
     }
 
@@ -380,5 +461,165 @@ final class AppModelTestBench {
         #expect(model.setup.isAskingToCreate && !model.setup.canCancelCreate)
         #expect(changes == [anna.id, nil])
         #expect(bench.actions(model).filter { $0 == "removeJournal" }.count == 2)
+    }
+
+    @Test func showJournalInFinderWorksMidRound() throws {
+        let model = bench.launch()
+        let anna = try bench.makeJournal("Anna", in: model)
+        let folder = URL(fileURLWithPath: anna.path, isDirectory: true)
+        var shown: [URL] = []
+        model.revealInFinder = { shown.append($0) }
+        model.game.settings.isMuted = true
+        model.game.start()
+        #expect(!model.canChangeJournal && model.canShowJournal)
+        model.showJournalInFinder(from: "fileMenu")
+        #expect(shown.count == 1 && shown.allSatisfy { PracticeJournal.isSameFolder($0, folder) })
+        #expect(model.game.phase == .playing && !model.setup.isReportingMissing)
+        #expect(bench.actions(model).contains("showJournal fileMenu"))
+
+        // Greyed out only while the journal can't be found.
+        model.game.stop()
+        try FileManager.default.removeItem(at: folder)
+        model.setup.lookAgain()
+        #expect(!model.canShowJournal)
+    }
+
+    // MARK: - A piece reopened by a switch
+
+    @Test func switchingBackReopensTheJournalsPieceAsASwitch() throws {
+        let model = bench.launch()
+        let anna = try bench.makeJournal("Anna", in: model)
+        let scores = bench.temporary.url.appendingPathComponent("Scores", isDirectory: true)
+        try FileManager.default.createDirectory(at: scores, withIntermediateDirectories: true)
+        let tune = scores.appendingPathComponent("clarinet-tune.musicxml")
+        try FileManager.default.copyItem(at: try #require(Fixtures.url("clarinet-tune.musicxml")), to: tune)
+        model.game.openPiece(at: tune)
+        #expect(model.game.isPractisingPiece)
+
+        try bench.makeJournal("Ben", in: model)
+        #expect(!model.game.isPractisingPiece)
+        model.switchJournal(to: anna, from: "test")
+        #expect(model.game.isPractisingPiece)
+        #expect(bench.piecesOpened(model) == [.menu, .journalSwitch])
+    }
+
+    // MARK: - Watching the journal
+
+    @Test func launchingWatchesAndReadsTheJournalInUse() async throws {
+        let anna = try bench.makeJournal("Anna", in: bench.launch())
+        let folder = URL(fileURLWithPath: anna.path, isDirectory: true)
+        let piece = try bench.practiseElsewhere(in: folder, scoring: 6, piece: "Gymnopédie")
+
+        let model = bench.launch()
+        #expect(bench.watcher.folder == nil, "nothing is watched until the app has launched")
+        model.didFinishLaunching()
+        #expect(bench.watcher.isWatching(folder))
+        #expect(model.context.map { PracticeJournal.isSameFolder($0.reader.folder, folder) } == true)
+        // Read once straight away, without waiting for a change.
+        try await bench.waitForReading(model)
+        #expect(model.progressStore.report.totals.answers == 6)
+        #expect(model.game.bestScore == 6 && bench.noteStats(of: anna) == JournalProjection.read(journal: folder).noteStats)
+        #expect(model.library.entries.map(\.pieceID) == [piece])
+    }
+
+    @Test func filesArrivingAreReadIntoTheDashboardTheStatsAndTheLibrary() async throws {
+        let model = bench.launch()
+        let anna = try bench.makeJournal("Anna", in: model)
+        let folder = URL(fileURLWithPath: anna.path, isDirectory: true)
+        #expect(bench.watcher.isWatching(folder))
+        // Made, the journal is read once straight away: there's nothing in it yet.
+        try await bench.waitForReading(model)
+        #expect(model.progressStore.hasLoaded && model.progressStore.report.isEmpty)
+
+        // Another Mac's sprint and piece arrive through the sync service: read once the watcher
+        // says files changed.
+        let piece = try bench.practiseElsewhere(in: folder, scoring: 7, piece: "Gymnopédie")
+        #expect(model.library.isEmpty && model.game.bestScore == nil)
+        bench.watcher.fire()
+        #expect(model.progressStore.isLoading && model.game.isRefreshingStats && model.isAdoptingPieces)
+        try await bench.waitForReading(model)
+
+        #expect(model.progressStore.report.totals.answers == 7 && model.progressStore.report.totals.rounds == 1)
+        #expect(model.game.bestScore == 7)
+        let stats = bench.noteStats(of: anna)
+        #expect(stats == JournalProjection.read(journal: folder).noteStats && stats?.isEmpty == false)
+        let entry = try #require(model.library.entries.first)
+        #expect(model.library.entries.count == 1 && entry.pieceID == piece && entry.title == "Gymnopédie")
+        #expect(PieceLibrary(folder: model.library.folder).entries.map(\.pieceID) == [piece])
+    }
+
+    @Test func switchingMovesTheWatchToTheJournalSwitchedTo() async throws {
+        let model = bench.launch()
+        let watcher = bench.watcher
+        let anna = try bench.makeJournal("Anna", in: model)
+        let ben = try bench.makeJournal("Ben", in: model)
+        let annasFolder = URL(fileURLWithPath: anna.path, isDirectory: true)
+        let bensFolder = URL(fileURLWithPath: ben.path, isDirectory: true)
+        #expect(watcher.isWatching(bensFolder) && watcher.started.count == 2 && watcher.stopped == 1)
+
+        #expect(model.switchJournal(to: anna, from: "test"))
+        #expect(watcher.isWatching(annasFolder) && watcher.started.count == 3 && watcher.stopped == 2)
+        let context = try #require(model.context)
+        #expect(PracticeJournal.isSameFolder(context.reader.folder, annasFolder))
+
+        // What arrives in Anna's journal goes to her game, library and dashboard.
+        try await bench.waitForReading(model)
+        let piece = try bench.practiseElsewhere(in: annasFolder, scoring: 4, piece: "Arabesque")
+        watcher.fire()
+        try await bench.waitForReading(model)
+        #expect(model.game.bestScore == 4 && model.library.entries.map(\.pieceID) == [piece])
+        #expect(model.progressStore.report.totals.answers == 4)
+        #expect(bench.noteStats(of: ben)?.isEmpty != false)
+
+        // With no journal left, nothing is watched.
+        model.remove(anna)
+        #expect(watcher.isWatching(bensFolder))
+        model.remove(ben)
+        #expect(watcher.folder == nil && watcher.started.count == 4 && watcher.stopped == 4)
+    }
+
+    @Test func aJournalMovedWhileInUseIsFollowed() async throws {
+        let model = bench.launch()
+        let anna = try bench.makeJournal("Anna", in: model)
+        try await bench.waitForReading(model)
+        let store = model.progressStore
+        var changes: [URL?] = []
+        model.onJournalChanged = { changes.append($0?.folder) }
+
+        let moved = bench.temporary.url.appendingPathComponent("Moved", isDirectory: true)
+        try FileManager.default.moveItem(at: URL(fileURLWithPath: anna.path, isDirectory: true), to: moved)
+        bench.watcher.fire()
+        // Found by its bookmark: watched and read where it is now.
+        #expect(bench.watcher.isWatching(moved))
+        #expect(model.context.map { PracticeJournal.isSameFolder($0.reader.folder, moved) } == true)
+        #expect(model.progressStore !== store && model.canShowJournal)
+        #expect(changes.count == 1 && changes.allSatisfy { $0.map { PracticeJournal.isSameFolder($0, moved) } == true })
+        try await bench.waitForReading(model)
+    }
+
+    @Test func aJournalThatCannotBeFoundIsReadOnceItsBack() async throws {
+        let model = bench.launch()
+        let anna = try bench.makeJournal("Anna", in: model)
+        let folder = URL(fileURLWithPath: anna.path, isDirectory: true)
+        try bench.practiseElsewhere(in: folder, scoring: 5, piece: "Arabesque")
+        bench.watcher.fire()
+        try await bench.waitForReading(model)
+        #expect(model.game.bestScore == 5)
+
+        // Gone (a disk unplugged): reading nothing there would take the stats away, so it isn't
+        // read; it's still watched by its path.
+        let elsewhere = bench.temporary.url.appendingPathComponent("Copy", isDirectory: true)
+        try FileManager.default.copyItem(at: folder, to: elsewhere)
+        try FileManager.default.removeItem(at: folder)
+        bench.watcher.fire()
+        #expect(!model.canShowJournal && !model.game.isRefreshingStats && !model.progressStore.isLoading)
+        #expect(bench.watcher.isWatching(folder) && model.game.bestScore == 5)
+
+        // Back where it was.
+        try FileManager.default.copyItem(at: elsewhere, to: folder)
+        bench.watcher.fire()
+        #expect(model.canShowJournal && model.game.isRefreshingStats)
+        try await bench.waitForReading(model)
+        #expect(model.game.bestScore == 5 && model.progressStore.report.totals.answers == 5)
     }
 }

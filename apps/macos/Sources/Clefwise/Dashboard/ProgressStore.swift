@@ -2,8 +2,9 @@ import Foundation
 import Observation
 
 /// What the Progress window shows: the filter, and the report worked out for it from the practice
-/// journal (or, the old way, from the usage log). Reading and analysing happen off the main thread,
-/// so practice carries on, and the last report stays on screen until the new one is ready.
+/// journal. Reading and analysing happen off the main thread, so practice carries on, and the last
+/// report stays on screen until the new one is ready. The app reloads it whenever files arrive in
+/// the journal (`AppModel`), so it follows along without Refresh.
 @MainActor
 @Observable
 final class ProgressStore {
@@ -43,18 +44,6 @@ final class ProgressStore {
         self.init(defaults: defaults) { filter in
             guard let reader else { return .empty(filter) }
             return ProgressAnalyzer.report(from: reader.read(), pieceOpenings: openings.events, filter: filter)
-        }
-    }
-
-    /// The store the old way, before the journal: reads `log` whole at each report (pieces by their
-    /// journal id when a round has one, otherwise by path), and keeps the filter in `defaults`. For
-    /// the app until it hands the store its journal's reader (`init(reader:…)`).
-    convenience init(defaults: UserDefaults = .standard, log: UsageLog = .shared) {
-        self.init(defaults: defaults) { filter in
-            // Events still on their way to disk (the round that just ended) count too.
-            log.flush()
-            let read = UsageLog.readEvents(in: log.folder)
-            return ProgressAnalyzer.report(from: read.events, filter: filter, unreadableLines: read.unreadableLines)
         }
     }
 

@@ -31,11 +31,9 @@ struct DashboardView: View {
         .background(DashboardTheme.page)
         .frame(minWidth: 720, minHeight: 520)
         .navigationTitle("Progress")
+        // A round that ends in the main window reaches the journal a moment later, and the app
+        // reloads the store then, as for any file arriving (`AppModel`).
         .onAppear { store.reload() }
-        // A round just ended in the main window: it's in the log now.
-        .onChange(of: game.phase) { old, new in
-            if old == .playing, new != .playing { store.reload() }
-        }
     }
 
     // MARK: - Filters

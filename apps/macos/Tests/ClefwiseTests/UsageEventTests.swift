@@ -28,6 +28,18 @@ import Testing
         #expect(!text.contains("\n"), "one event per line")
     }
 
+    @Test func aPieceReopenedBySwitchingJournalsSaysSo() throws {
+        let parts = [PartInfo(name: "Clarinet", notes: 40, measures: 16, staves: 1, skipped: 0)]
+        let opened = PieceOpened(path: "/Scores/clarinet-tune.musicxml", title: "Clarinet Tune", via: .journalSwitch,
+                                 parts: parts, libraryID: UUID(), restoredSettings: true)
+        let failed = PieceOpenFailed(path: "/Scores/gone.musicxml", via: .journalSwitch, error: "The file is gone.")
+        for event in [UsageEvent.pieceOpened(opened), .pieceOpenFailed(failed)] {
+            let (text, json, logged) = try line(event)
+            #expect(json["via"] as? String == "journalSwitch")
+            #expect(try LoggedEvent.decoder.decode(LoggedEvent.self, from: Data(text.utf8)).event == logged.event)
+        }
+    }
+
     @Test func timesKeepMilliseconds() throws {
         let (_, json, _) = try line(.appActivity(AppActivity(active: true)))
         let time = try #require(json["time"] as? String)

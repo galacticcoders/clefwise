@@ -582,9 +582,10 @@ final class Game {
     /// apart from every other journal's, and a namespace with nothing saved yet starts from the
     /// default settings. `recorder` is where usage events go, `library` where opened pieces are
     /// kept; tests pass their own. The library has no default, so nothing can reach the real one by
-    /// accident.
+    /// accident. The piece open last time is reopened, logged with `reopeningVia`: `launch`, or
+    /// `journalSwitch` for a game made when the app switches journals.
     init(defaults: UserDefaults = .standard, namespace: String = "", recorder: UsageRecorder = UsageLog.shared,
-         library: PieceLibrary) {
+         library: PieceLibrary, reopeningVia: PieceOpenSource = .launch) {
         self.defaults = defaults
         self.namespace = namespace
         self.recorder = recorder
@@ -594,7 +595,7 @@ final class Game {
         bestScores = Self.load([String: Int].self, from: Self.key(Keys.bestScores, in: namespace), in: defaults) ?? [:]
         settingsAsLogged = JSONValue(encoding: settings)
         recordStatsSnapshotOnce()
-        reopenLastPiece()
+        reopenLastPiece(via: reopeningVia)
     }
 
     /// The clef on screen: the current question's, or between rounds the first selected clef
@@ -974,35 +975,37 @@ final class Game {
         settings = newSettings
     }
 
-    /// At launch, picks up last session's piece: the library entry last open, from its copy (or,
-    /// should the copy be gone, from the original file). Settings from before the library have
-    /// only the file's path: that file if it still reads, which adds it to the library, otherwise
-    /// the library's copy of it. A piece that can't be reopened, or was taken out of the library,
-    /// is quietly forgotten (only the log hears why): nobody just asked to open it.
-    private func reopenLastPiece() {
+    /// At launch, or when a switch to its journal makes this game (`source` says which), picks up
+    /// the piece open last time: the library entry last open, from its copy (or, should the copy be
+    /// gone, from the original file). Settings from before the library have only the file's path:
+    /// that file if it still reads, which adds it to the library, otherwise the library's copy of
+    /// it. A piece that can't be reopened, or was taken out of the library, is quietly forgotten
+    /// (only the log hears why): nobody just asked to open it.
+    private func reopenLastPiece(via source: PieceOpenSource) {
         if let id = settings.pieceID {
             if let entry = library.entry(id: id) {
-                if openCopy(of: entry, via: .launch) == nil || reopenFile(at: entry.originalPath) { return }
+                if openCopy(of: entry, via: source) == nil || reopenFile(at: entry.originalPath, via: source) { return }
             } else {
-                recordPieceOpenFailed(settings.piecePath ?? "", libraryID: id, via: .launch,
+                recordPieceOpenFailed(settings.piecePath ?? "", libraryID: id, via: source,
                                       "The piece is no longer in the library.")
             }
         } else if let path = settings.piecePath {
-            if reopenFile(at: path) { return }
-            if let entry = library.entry(originalPath: path), openCopy(of: entry, via: .launch) == nil { return }
+            if reopenFile(at: path, via: source) { return }
+            if let entry = library.entry(originalPath: path), openCopy(of: entry, via: source) == nil { return }
         } else {
             return
         }
         forgetLastPiece()
     }
 
-    /// At launch, opens the file at `path` when it's still there and reads, and says whether it did.
-    private func reopenFile(at path: String) -> Bool {
+    /// Reopening the piece open last time: opens the file at `path` when it's still there and
+    /// reads, and says whether it did.
+    private func reopenFile(at path: String, via source: PieceOpenSource) -> Bool {
         guard FileManager.default.isReadableFile(atPath: path) else {
-            recordPieceOpenFailed(path, via: .launch, "The file is gone or can't be read.")
+            recordPieceOpenFailed(path, via: source, "The file is gone or can't be read.")
             return false
         }
-        return openFile(at: URL(fileURLWithPath: path), via: .launch) == nil
+        return openFile(at: URL(fileURLWithPath: path), via: source) == nil
     }
 
     /// `options` with the part and start bar brought within what `score` has.

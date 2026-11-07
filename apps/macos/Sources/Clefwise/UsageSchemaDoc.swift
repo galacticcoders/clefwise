@@ -277,7 +277,7 @@ extension UsageExport {
         |---|---|
         | `path` | The file, as first opened: a piece opened from the library, or from another copy of the same file, keeps the path it was first opened from, so its rounds and its progress stay together. |
         | `title` | The piece's title. |
-        | `via` | `menu`, `button`, `drop` (dropped on the window), `openAnother`, `launch` (reopened at launch), `library` (picked from the pieces opened before). |
+        | `via` | `menu`, `button`, `drop` (dropped on the window), `openAnother`, `launch` (reopened at launch), `library` (picked from the pieces opened before), `journalSwitch` (reopened when the app switched to the journal that last had it open: another one picked, made or opened, or the one in use removed from the list). |
         | `parts` | Each part's `name`, `notes`, `measures` (bars), `staves`, and `skipped`: notes left out because they can't be shown (other clefs, double sharps, microtones…). |
         | `libraryID` | The piece's entry in the piece library, the same each time it's opened. Absent when it couldn't be kept there (see `libraryError`), and in events logged before the library. |
         | `restoredSettings` | `true` when the piece came back with the settings it was last practised with; `false` when it took the settings in use (a piece opened for the first time, from bar 1 unless it was already the open piece). Absent in events logged before the library. |
