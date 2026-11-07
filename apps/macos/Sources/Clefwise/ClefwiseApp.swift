@@ -5,51 +5,68 @@ import SwiftUI
 struct ClefwiseApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-    private var game: Game { appDelegate.game }
+    /// The journals, and the game, library and progress store of the one in use: each replaced
+    /// when the journal changes, so windows and menus read them from here in their own bodies.
+    private var model: AppModel { appDelegate.model }
 
     var body: some Scene {
         Window("Clefwise", id: "main") {
-            ContentView(game: game)
-                .tint(Theme.accent)
-                // For the whole app: both windows, menus, alerts and the open panel.
-                .onChange(of: game.settings.appearance, initial: true) { _, appearance in
-                    NSApp.appearance = appearance.nsAppearance
-                }
-                .background(WindowSizeRecorder(recorder: game.recorder))
-                .background(WindowReader { appDelegate.mainWindow = $0 })
-                // Asks for a journal at first launch, or says when it can't be found.
-                .journalSetup(appDelegate.journalSetup)
+            MainWindowContent(model: model) { appDelegate.mainWindow = $0 }
         }
         .defaultSize(width: 1000, height: 780)
         .windowResizability(.contentMinSize)
         .commands {
             // One window, so nothing to make new: File starts with opening a piece instead.
             CommandGroup(replacing: .newItem) {
-                // Like the toolbar settings, a new piece waits for the round to end.
-                Button("Open Piece…") { PieceFile.choose(for: game, via: .menu) }
-                    .keyboardShortcut("o")
-                    .disabled(game.phase == .playing)
-                PieceLibraryCommands(game: game)
-                Divider()
-                Button("Export Usage Data…") { UsageData.export() }
-                    .keyboardShortcut("e", modifiers: [.command, .shift])
-                Button("Show Usage Data in Finder") { UsageData.showInFinder() }
-                Button("Show Journal in Finder") { appDelegate.journalSetup.showInFinder() }
-                    .disabled(appDelegate.journalSetup.folder == nil)
+                FileCommands(model: model)
             }
-            ProgressCommands(game: game)
-            AppearanceCommands(game: game)
+            ProgressCommands(model: model)
+            AppearanceCommands(model: model)
         }
 
         // Its own window, so it can stay open beside the game and follow along round by round.
         Window("Progress", id: ProgressWindow.id) {
-            DashboardView(game: game, store: appDelegate.progressStore)
-                .tint(Theme.accent)
+            ProgressWindowContent(model: model)
         }
         .defaultSize(width: 1150, height: 900)
         .windowResizability(.contentMinSize)
         // Without the Window menu item SwiftUI adds for it: Window ▸ Progress below opens it and logs that.
         .commandsRemoved()
+    }
+}
+
+/// The game's window: the journal in use's game, everything in it made afresh (its key monitor
+/// included) when the journal changes.
+private struct MainWindowContent: View {
+    let model: AppModel
+    let onWindow: (NSWindow) -> Void
+
+    var body: some View {
+        let game = model.game
+        ContentView(game: game)
+            .id(ObjectIdentifier(game))
+            .tint(Theme.accent)
+            // For the whole app: both windows, menus, alerts and the open panel.
+            .onChange(of: game.settings.appearance, initial: true) { _, appearance in
+                NSApp.appearance = appearance.nsAppearance
+            }
+            .background(WindowSizeRecorder(recorder: game.recorder))
+            .background(WindowReader(onWindow: onWindow))
+            // Asks for a journal at first launch, or says when it can't be found.
+            .journalSetup(model)
+            // The title and the start panel's Journal menu.
+            .environment(model)
+    }
+}
+
+/// The Progress window: the journal in use's, made afresh (and read again) when it changes.
+private struct ProgressWindowContent: View {
+    let model: AppModel
+
+    var body: some View {
+        DashboardView(game: model.game, store: model.progressStore)
+            .id(ObjectIdentifier(model.progressStore))
+            .tint(Theme.accent)
     }
 }
 
@@ -67,15 +84,35 @@ enum ProgressWindow {
 
 /// Window ▸ Progress (⇧⌘P).
 private struct ProgressCommands: Commands {
-    let game: Game
+    let model: AppModel
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         CommandGroup(before: .windowList) {
-            Button("Progress") { ProgressWindow.open(from: "menu", game: game, with: openWindow) }
+            Button("Progress") { ProgressWindow.open(from: "menu", game: model.game, with: openWindow) }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
             Divider()
         }
+    }
+}
+
+/// The File menu's own items, for the journal in use's game.
+private struct FileCommands: View {
+    let model: AppModel
+
+    var body: some View {
+        let game = model.game
+        // Like the toolbar settings, a new piece waits for the round to end.
+        Button("Open Piece…") { PieceFile.choose(for: game, via: .menu) }
+            .keyboardShortcut("o")
+            .disabled(game.phase == .playing)
+        PieceLibraryCommands(game: game)
+        Divider()
+        JournalCommands(model: model)
+        Divider()
+        Button("Export Usage Data…") { UsageData.export(namespace: game.namespace, libraryFolder: model.library.folder) }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+        Button("Show Usage Data in Finder") { UsageData.showInFinder() }
     }
 }
 
@@ -106,16 +143,59 @@ private struct PieceLibraryCommands: View {
     }
 }
 
+/// File ▸ New Journal…, Open Journal…, Switch Journal ▸ and Show Journal in Finder. Like the start
+/// panel's Journal menu, they wait for the round to end: a run goes into the journal it started in.
+private struct JournalCommands: View {
+    let model: AppModel
+
+    var body: some View {
+        let isBetweenRounds = model.canChangeJournal
+        Button("New Journal…") { model.newJournal(from: "fileMenu") }
+            .disabled(!isBetweenRounds)
+        Button("Open Journal…") { model.openJournal(from: "fileMenu") }
+            .disabled(!isBetweenRounds)
+        if !model.registry.records.isEmpty {
+            let names = model.registry.displayNames
+            Picker("Switch Journal", selection: selection) {
+                ForEach(model.registry.records) { record in
+                    Text(names[record.id] ?? record.name).tag(Optional(record.id))
+                }
+            }
+            .disabled(!isBetweenRounds)
+        }
+        Button("Show Journal in Finder") { model.showJournalInFinder(from: "fileMenu") }
+            .disabled(!isBetweenRounds || model.setup.folder == nil)
+    }
+
+    /// The journal in use, ticked; picking another switches to it.
+    private var selection: Binding<UUID?> {
+        Binding(get: { model.registry.currentID }, set: { id in
+            guard let record = id.flatMap(model.registry.record(id:)) else { return }
+            model.switchJournal(to: record, from: "fileMenu")
+        })
+    }
+}
+
 /// View ▸ Appearance: Match System, Light or Dark.
 private struct AppearanceCommands: Commands {
-    @Bindable var game: Game
+    let model: AppModel
 
     var body: some Commands {
         CommandGroup(before: .toolbar) {
-            Picker("Appearance", selection: $game.settings.appearance) {
-                ForEach(Appearance.allCases) { Text($0.label).tag($0) }
-            }
+            AppearancePicker(model: model)
             Divider()
+        }
+    }
+}
+
+/// View ▸ Appearance's choices. It's one of each journal's settings, so it follows the game in use.
+private struct AppearancePicker: View {
+    let model: AppModel
+
+    var body: some View {
+        @Bindable var game = model.game
+        Picker("Appearance", selection: $game.settings.appearance) {
+            ForEach(Appearance.allCases) { Text($0.label).tag($0) }
         }
     }
 }
@@ -148,22 +228,11 @@ struct WindowReader: NSViewRepresentable {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// The app's one game, kept here rather than in the app's state so quitting can end its round.
-    let game: Game
-    /// Kept for the app's life, so reopening the Progress window shows the last numbers while it
-    /// reads the log again.
-    let progressStore: ProgressStore
-    /// The practice journal in the window: the sheet that makes it at first launch, the alert when
-    /// it can't be found, and File ▸ Show Journal in Finder. Its `onJournalCreated` is where the
-    /// usage log so far is to be brought in.
-    let journalSetup: JournalSetup
-    /// The run the last launch left unfinished (a crash, a force quit, the battery running out),
-    /// found before this launch logged anything; nil when there was none. Its working file stays
-    /// open, so this launch's lines, its `appLaunched` first, go on in it. `Game.restore` brings
-    /// the round back or ends it as `interrupted`.
-    let pendingRun: PendingRun?
-    /// Tees each run's lines into its working file and hands finished runs to the journal.
-    private let runWriter: RunFileWriter
+    /// The journals and, for the one in use, its game, piece library and progress store; kept here
+    /// rather than in the app's state so quitting can end the round. Its progress store lives as
+    /// long as the journal is in use, so reopening the Progress window shows the last numbers while
+    /// it reads again.
+    let model: AppModel
     private let launchDate = Date()
 
     /// The game's window. Closing it still quits, as when it was the only window: the Progress
@@ -181,48 +250,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor override init() {
-        // The journal's side first, before anything is logged: a run the last launch left
-        // unfinished takes this launch's lines, from its `appLaunched` on.
-        let writer = RunFileWriter.shared
-        pendingRun = writer.inspectAtLaunch()
-        UsageLog.shared.lineSink = writer
-        runWriter = writer
-        // The library's changes go only to the journal, numbered in this session's order.
-        PieceLibrary.shared.journal = JournalEventRecorder(outbox: writer.outbox, device: writer.device,
-                                                          launch: writer.launch, log: UsageLog.shared)
-        journalSetup = JournalSetup(journal: .shared, outbox: writer.outbox, usageFolder: UsageLog.shared.folder,
-                                    recorder: UsageLog.shared)
-        // A new journal (or one taken over from before) gets everything practised so far. This
-        // session is left out: its runs reach the journal through the writer.
-        let libraryFolder = PieceLibrary.shared.folder
-        journalSetup.onJournalCreated = { _ in
-            Task {
-                let detail: String
-                do {
-                    let summary = try await LogImport.bringIn(
-                        usageLog: UsageLog.shared.folder, pieceLibrary: libraryFolder, device: writer.device,
-                        launch: writer.launch, into: PracticeJournal.shared, skippingSession: UsageLog.shared.session)
-                    detail = "runs \(summary.runsWritten), already there \(summary.runsAlreadyPresent), "
-                        + "pieces \(summary.piecesWritten), events \(summary.eventsWritten)"
-                } catch {
-                    detail = "failed: \(error.localizedDescription)"
-                }
-                UsageLog.shared.recordUIAction("broughtInUsageLog", detail: detail)
-            }
-        }
-        // Before the game exists, so the session's log starts with the launch: making the game
-        // reopens last time's piece, which is logged too.
-        UsageLog.shared.record(.appLaunched(.current))
-        game = Game(library: .shared)
-        // A round the last launch left unfinished comes back paused, or ends as `interrupted`.
-        if let pendingRun { game.restore(pendingRun) }
-        progressStore = ProgressStore()
+        // Brings build 1's journal over, wires the journal in use (its unfinished run first, before
+        // anything is logged), logs the launch, then makes the game and restores the run: see
+        // `AppModel.init`. A new journal brings in the usage log so far, if it's the first.
+        model = AppModel(defaults: .standard, log: .shared, device: DeviceID.current(in: .standard), launch: .current)
         super.init()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Lets `swift run` (no .app bundle) show a Dock icon and take keyboard focus.
         NSApp.setActivationPolicy(.regular)
+        model.didFinishLaunching()
         NSApp.activate()
     }
 
@@ -241,17 +279,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidResignActive(_ notification: Notification) {
         UsageLog.shared.record(.appActivity(AppActivity(active: false)))
-        game.appDidResignActive()
+        model.game.appDidResignActive()
     }
 
     /// ⌘Q and closing the game's window (which quits the app) both end here.
     func applicationWillTerminate(_ notification: Notification) {
-        game.appWillTerminate()
+        model.game.appWillTerminate()
         UsageLog.shared.record(.appTerminated(AppTerminated(sessionSeconds: Date().timeIntervalSince(launchDate))))
         // Written before the process goes, or the session's last events are lost.
         UsageLog.shared.flush()
-        // The round just ended goes into the journal; should that take long (a slow network
+        // The round just ended goes into its journal; should that take long (a slow network
         // drive), the next launch places it instead.
-        runWriter.outbox.waitUntilDone(timeout: 2)
+        model.waitForJournals(timeout: 2)
     }
 }

@@ -20,6 +20,8 @@ enum JournalError: LocalizedError, Equatable {
     case folderInUse(URL)
     /// The folder picked to locate the journal doesn't hold `clefwise.json`.
     case notAJournal(URL)
+    /// The folder picked to locate a journal is another journal this Mac knows already.
+    case listedAlready(URL)
 
     var errorDescription: String? {
         switch self {
@@ -31,41 +33,66 @@ enum JournalError: LocalizedError, Equatable {
         case .folderInUse(let url):
             "There's already a folder called “\(url.lastPathComponent)” there, with other things in it. Choose another name."
         case .notAJournal(let url): "“\(url.lastPathComponent)” isn't a Clefwise journal: it has no clefwise.json."
+        case .listedAlready(let url):
+            "“\(url.lastPathComponent)” is another of your journals. Switch to it from the Journal menu instead."
         }
     }
 }
 
 /// The practice journal on disk: a folder of plain files the user owns and only ever added to.
-/// Where it is comes only from the defaults, as a path and a bookmark, so a folder moved in Finder
-/// is still found (and the path follows it). Every disk change goes through one lock, so it's safe
-/// to use from any thread: finished runs come from the journal outbox's queue, making and locating
-/// it from the main thread.
+/// Where it is comes from a path and a bookmark, so a folder moved in Finder is still found (and
+/// the path follows it). The app has one for each journal it knows, its location kept in the
+/// journal's `JournalRecord` (`JournalRegistry`); build 1's one journal kept its location in the
+/// defaults (`init(defaults:)`). Every disk change goes through one lock, so it's safe to use from
+/// any thread: finished runs come from the journal outbox's queue, making and locating it from the
+/// main thread.
 final class PracticeJournal: JournalWriting, @unchecked Sendable {
-    static let shared = PracticeJournal(defaults: .standard)
-
-    /// Where the defaults keep the journal's location. A harness can preset it with
+    /// Where build 1 kept its one journal's location in the defaults. Build 2 keeps each journal's
+    /// in its `JournalRecord`, and reads these only to bring build 1's journal over
+    /// (`JournalMigration`). A harness can still preset the first journal with
     /// `defaults write <domain> journalPath -string <folder>`: a path alone is enough.
     enum Keys {
         static let path = "journalPath"
         static let bookmark = "journalBookmark"
     }
 
-    private let defaults: UserDefaults
-    /// Guards `found` and serialises every change on disk.
+    /// Build 1's journal keeps its location in these defaults, under `Keys`, read each time. Nil
+    /// for a journal of the registry's, which keeps it here (`storedPath`, `storedBookmark`).
+    private let defaults: UserDefaults?
+    private var storedPath: String?
+    private var storedBookmark: Data?
+    /// Told the journal's new path and bookmark each time it's kept somewhere new (found elsewhere
+    /// through its bookmark, made, or located by the user): on the thread that found it, once the
+    /// lock is let go.
+    private let onRelocated: (@Sendable (_ path: String, _ bookmark: Data?) -> Void)?
+    /// What `remember` kept while the lock was held, for `onRelocated` once it's let go.
+    private var relocation: (path: String, bookmark: Data?)?
+    /// Guards `found`, the location kept here and `relocation`, and serialises every change on disk.
     private let lock = NSLock()
     /// The folder last found, checked again (one look for `clefwise.json`) before each use.
     private var found: URL?
 
-    /// `defaults` keeps where the journal is; tests pass their own.
+    /// Build 1's journal: `defaults` keeps where it is, under `Keys`; tests pass their own.
     init(defaults: UserDefaults) {
         self.defaults = defaults
+        onRelocated = nil
+    }
+
+    /// A journal last known at `path` (nil until it's made or located), with `bookmark` to find it
+    /// should it move. `onRelocated` gets the new path and bookmark each time they change, on any
+    /// thread: the registry keeps them in the journal's record.
+    init(path: String?, bookmark: Data?, onRelocated: @escaping @Sendable (_ path: String, _ bookmark: Data?) -> Void) {
+        defaults = nil
+        storedPath = path
+        storedBookmark = bookmark
+        self.onRelocated = onRelocated
     }
 
     // MARK: - Where it is
 
     /// The journal's folder; nil while none is set, or when it can't be found.
     var folder: URL? {
-        lock.withLock { locate() }
+        locked { locate() }
     }
 
     /// Whether a journal has been set, found or not: without one, the app asks to make it.
@@ -75,7 +102,25 @@ final class PracticeJournal: JournalWriting, @unchecked Sendable {
 
     /// Where the journal was last known to be, for telling the user when it can't be found.
     var lastKnownPath: String? {
-        defaults.object(forKey: Keys.path) as? String
+        lock.withLock { knownPath }
+    }
+
+    /// The bookmark kept to find the journal should it move; nil until it's made or located, or
+    /// when none could be made.
+    var lastKnownBookmark: Data? {
+        lock.withLock { knownBookmark }
+    }
+
+    /// Called with the lock held.
+    private var knownPath: String? {
+        if let defaults { return defaults.object(forKey: Keys.path) as? String }
+        return storedPath
+    }
+
+    /// Called with the lock held.
+    private var knownBookmark: Data? {
+        if let defaults { return defaults.object(forKey: Keys.bookmark) as? Data }
+        return storedBookmark
     }
 
     /// Whether `url` is a journal: it holds `clefwise.json` (or iCloud Drive's placeholder for it,
@@ -88,28 +133,30 @@ final class PracticeJournal: JournalWriting, @unchecked Sendable {
             || manager.fileExists(atPath: url.appendingPathComponent(".\(JournalLayout.markerName).icloud").path)
     }
 
-    /// The name to suggest for a new journal in `parent`: "Clefwise Journal", unless something
-    /// other than a journal already has it there; then "Clefwise Journal 2", 3 and so on.
-    static func suggestedName(in parent: URL) -> String {
+    /// The name to suggest for a journal in `parent`: "Clefwise Journal", unless something already
+    /// has it there; then "Clefwise Journal 2", 3 and so on. A journal already there is suggested
+    /// as it is, to be used, unless `fresh`: then only a name nothing has there yet, for a journal
+    /// that's to be new (File ▸ New Journal…).
+    static func suggestedName(in parent: URL, fresh: Bool = false) -> String {
         let base = "Clefwise Journal"
         for number in 1... {
             let name = number == 1 ? base : "\(base) \(number)"
             let url = parent.appendingPathComponent(name, isDirectory: true)
-            if !FileManager.default.fileExists(atPath: url.path) || isJournal(url) { return name }
+            if !FileManager.default.fileExists(atPath: url.path) || (!fresh && isJournal(url)) { return name }
         }
         return base
     }
 
-    /// The folder kept in the defaults, if it still holds a journal: by its path first (which a
-    /// harness may have set by itself), otherwise by its bookmark, which follows the folder when
-    /// it's moved or renamed (and then the path is updated). Keeps the bookmark pointing where the
-    /// path does. Called with the lock held.
+    /// The folder last known, if it still holds a journal: by its path first (which a harness may
+    /// have set by itself), otherwise by its bookmark, which follows the folder when it's moved or
+    /// renamed (and then the path is updated). Keeps the bookmark pointing where the path does.
+    /// Called with the lock held.
     private func locate() -> URL? {
         if let found, Self.isJournal(found) { return found }
         found = nil
-        guard let path = lastKnownPath else { return nil }
+        guard let path = knownPath else { return nil }
         let atPath = URL(fileURLWithPath: path, isDirectory: true)
-        let bookmarked = (defaults.object(forKey: Keys.bookmark) as? Data).flatMap(Self.resolve)
+        let bookmarked = knownBookmark.flatMap(Self.resolve)
         if Self.isJournal(atPath) {
             if bookmarked.map({ !Self.isSameFolder($0, atPath) }) ?? true { remember(atPath) }
             found = atPath
@@ -121,13 +168,34 @@ final class PracticeJournal: JournalWriting, @unchecked Sendable {
     }
 
     /// Keeps `folder` as the journal's location: its path, and a bookmark to find it if it moves.
+    /// Called with the lock held.
     private func remember(_ folder: URL) {
-        defaults.set(folder.path, forKey: Keys.path)
-        if let bookmark = try? folder.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
-            defaults.set(bookmark, forKey: Keys.bookmark)
+        let bookmark = try? folder.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        if let defaults {
+            defaults.set(folder.path, forKey: Keys.path)
+            if let bookmark {
+                defaults.set(bookmark, forKey: Keys.bookmark)
+            } else {
+                defaults.removeObject(forKey: Keys.bookmark)
+            }
         } else {
-            defaults.removeObject(forKey: Keys.bookmark)
+            storedPath = folder.path
+            storedBookmark = bookmark
+            relocation = (folder.path, bookmark)
         }
+    }
+
+    /// Runs `body` with the lock held; then, if `body` kept the journal somewhere new, tells
+    /// `onRelocated`, once the lock is let go (so it can ask the journal again).
+    private func locked<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer {
+            let moved = relocation
+            relocation = nil
+            lock.unlock()
+            if let moved { onRelocated?(moved.path, moved.bookmark) }
+        }
+        return try body()
     }
 
     /// Where a bookmark points now, without asking the user or mounting anything; nil when it
@@ -138,7 +206,8 @@ final class PracticeJournal: JournalWriting, @unchecked Sendable {
                         bookmarkDataIsStale: &isStale)
     }
 
-    private static func isSameFolder(_ a: URL, _ b: URL) -> Bool {
+    /// Whether `a` and `b` are the same folder, symbolic links and all.
+    static func isSameFolder(_ a: URL, _ b: URL) -> Bool {
         a.resolvingSymlinksInPath().standardizedFileURL.path == b.resolvingSymlinksInPath().standardizedFileURL.path
     }
 
@@ -150,7 +219,7 @@ final class PracticeJournal: JournalWriting, @unchecked Sendable {
     /// anything else in it isn't used.
     @discardableResult
     func create(named name: String, in parent: URL) throws -> URL {
-        try lock.withLock {
+        try locked {
             let folder: URL
             if let existing = Self.existingJournal(named: name, in: parent) {
                 folder = existing
@@ -180,7 +249,7 @@ final class PracticeJournal: JournalWriting, @unchecked Sendable {
 
     /// Keeps `folder`, a journal found again by the user, as the journal.
     func use(_ folder: URL) throws {
-        try lock.withLock {
+        try locked {
             guard Self.isJournal(folder) else { throw JournalError.notAJournal(folder) }
             remember(folder)
             found = folder
@@ -209,7 +278,7 @@ final class PracticeJournal: JournalWriting, @unchecked Sendable {
     /// journal outbox moves `runFile` to `Pending/kept/`.
     func place(runFile: URL, header: RunFileHeader, startedAt: Date) throws {
         guard let run = header.run else { throw JournalError.notARun }
-        try lock.withLock {
+        try locked {
             guard let folder = locate() else { throw JournalError.missing }
             let path = JournalLayout.runPath(startedAt: startedAt, run: run)
             let destination = folder.appendingPathComponent(path)
@@ -230,7 +299,7 @@ final class PracticeJournal: JournalWriting, @unchecked Sendable {
         var header = header
         header.event = event.id
         let contents = try header.encodedLine() + event.encodedLine()
-        try lock.withLock {
+        try locked {
             guard let folder = locate() else { throw JournalError.missing }
             if let piece { try Self.write(piece, in: folder) }
             let path = JournalLayout.eventPath(at: event.time, event: event.id)

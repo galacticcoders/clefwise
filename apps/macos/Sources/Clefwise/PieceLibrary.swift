@@ -29,9 +29,10 @@ final class PieceLibrary {
         var settings: Game.PieceSettings?
     }
 
-    static let shared = PieceLibrary(folder: defaultFolder)
-
-    static var defaultFolder: URL {
+    /// ~/Library/Application Support/Clefwise/Pieces: the one library before there were several
+    /// journals (`BuildOneFolders`). The first journal on a Mac that had it keeps it there; each
+    /// journal after that has its own (`JournalRecord.libraryURL(in:)`).
+    nonisolated static var defaultFolder: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Clefwise/Pieces", isDirectory: true)
     }

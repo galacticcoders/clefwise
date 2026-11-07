@@ -6,12 +6,12 @@ import Foundation
 
 /// Tees each practice run's lines from the usage log into a working file of its own in
 /// `currentFolder`, and hands the finished file to the journal through `outbox` (which keeps it in
-/// `Pending` while the journal can't be reached). See `RunFileWriting`.
+/// `Pending` while the journal can't be reached). See `RunFileWriting`. The app has one for each
+/// journal, in its state folder (`JournalState.folder(for:in:)`), and the usage log's lines reach
+/// the one in use through a `JournalRunRouter`.
 final class RunFileWriter: RunFileWriting, @unchecked Sendable {
-    @MainActor static let shared = RunFileWriter(folder: defaultFolder, journal: PracticeJournal.shared, device: DeviceID.current(in: .standard), launch: .current)
-
-    /// ~/Library/Application Support/Clefwise: the working file goes in `Current`, records waiting
-    /// for the journal in `Pending`.
+    /// ~/Library/Application Support/Clefwise, where build 1 kept its one journal's `Current` and
+    /// `Pending` (`BuildOneFolders`). Build 2 keeps them per journal.
     static var defaultFolder: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Clefwise", isDirectory: true)

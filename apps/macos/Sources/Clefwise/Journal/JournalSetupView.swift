@@ -1,185 +1,209 @@
 import AppKit
 import SwiftUI
 
-// The practice journal in the window: the sheet that makes it at first launch, the alert when it
-// can't be found, and File ▸ Show Journal in Finder.
+// The practice journals in the window: the sheet that makes one (at first launch, and for New
+// Journal…), the alert when the one in use can't be found, the one when a folder picked to open
+// isn't a journal, and the question before one leaves the list.
 
-/// What the main window shows about the journal: a sheet asking to make one while none is set,
-/// or an alert when the one set can't be found. The app delegate makes one, kept for the app's life.
+/// What the main window shows about the journals: a sheet asking to make one, an alert when the
+/// one in use can't be found, and the confirmations and refusals that go with them. The app model
+/// makes one, kept for the app's life, and makes every change to the journals itself
+/// (`AppModel`); this is what's on screen about them.
 @MainActor @Observable
 final class JournalSetup {
-    @ObservationIgnored let journal: PracticeJournal
-    /// Takes what waited for the journal once there's one; nil in tests that don't need it.
-    @ObservationIgnored private let outbox: JournalOutbox?
+    @ObservationIgnored let registry: JournalRegistry
     @ObservationIgnored private let recorder: UsageRecorder
-    /// The usage log already has practice in it, which a new journal brings in.
+    /// The usage log already has practice in it, which the first journal on this Mac brings in.
     @ObservationIgnored let hasPractice: Bool
-    /// Called with the journal's folder once the sheet has made it (or taken one already there):
-    /// where the usage log so far is brought in. Does nothing until the app sets it.
-    @ObservationIgnored var onJournalCreated: (URL) -> Void = { _ in }
 
     /// The sheet asking to make a journal is up.
     var isAskingToCreate = false
-    /// The alert saying the journal can't be found is up.
+    /// The sheet can be closed without making one (New Journal…, with a journal in use). At first
+    /// launch it can't: Clefwise keeps practice nowhere else.
+    private(set) var canCancelCreate = false
+    /// The alert saying the journal in use can't be found is up.
     var isReportingMissing = false
     /// Why the folder picked with Locate… wasn't taken, said in the alert shown again.
-    private(set) var locateError: String?
-    /// The journal's folder as last found; nil while there's none (File ▸ Show Journal in Finder
-    /// is greyed out).
+    var locateError: String?
+    /// The folder picked with Open Journal…, when it isn't a journal; its alert is up meanwhile.
+    var notAJournal: URL?
+    /// The journal waiting for the user to confirm it's to leave the list; its question is up
+    /// meanwhile.
+    var removing: JournalRecord?
+    /// The journal in use's folder as last found; nil while there's none or it can't be found
+    /// (File ▸ Show Journal in Finder is greyed out).
     private(set) var folder: URL?
 
     /// `usageFolder` is the usage log's: any day files there are the practice so far.
-    init(journal: PracticeJournal, outbox: JournalOutbox?, usageFolder: URL, recorder: UsageRecorder) {
-        self.journal = journal
-        self.outbox = outbox
+    init(registry: JournalRegistry, usageFolder: URL, recorder: UsageRecorder) {
+        self.registry = registry
         self.recorder = recorder
         hasPractice = !UsageLog.eventFiles(in: usageFolder).isEmpty
-        folder = journal.folder
+        folder = registry.current.flatMap(registry.folder(for:))
     }
 
-    /// Once the window is up: asks for a journal when none is set, and says so when it can't be
-    /// found.
+    /// Once the window is up: asks for a journal when there's none, and says so when the one in
+    /// use can't be found.
     func checkAtLaunch() {
-        folder = journal.folder
-        if !journal.isSet {
-            isAskingToCreate = true
+        lookAgain()
+        if registry.current == nil {
+            askToCreate(cancellable: false)
         } else if folder == nil {
             isReportingMissing = true
         }
     }
 
-    /// The journal's path to show when it can't be found, from the home folder.
+    /// Looks for the journal in use again. With `reportingMissing`, one that can't be found
+    /// brings up the alert, once whatever is up now has gone.
+    func lookAgain(reportingMissing: Bool = false) {
+        folder = registry.current.flatMap(registry.folder(for:))
+        if reportingMissing { reportMissingAgain() }
+    }
+
+    /// The sheet that makes a journal; `cancellable` when it can be closed without.
+    func askToCreate(cancellable: Bool) {
+        canCancelCreate = cancellable
+        isAskingToCreate = true
+    }
+
+    /// The practice so far goes into the journal the sheet makes: it's the first on this Mac to
+    /// have it.
+    var bringsInPractice: Bool {
+        hasPractice && registry.defaults.object(forKey: AppModel.Keys.usageLogBroughtIn) == nil
+    }
+
+    // MARK: - The missing alert
+
+    /// The journal in use's path to show when it can't be found, from the home folder.
     var missingPath: String {
-        (journal.lastKnownPath.map { $0 as NSString })?.abbreviatingWithTildeInPath ?? ""
+        registry.current.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? ""
     }
 
-    /// Makes the journal `name` in `parent`, or takes the one already there; then everything that
-    /// waited for it goes in, and `onJournalCreated` runs.
-    func create(named name: String, in parent: URL) throws {
-        let existing = PracticeJournal.existingJournal(named: name, in: parent) != nil
-        let made = try journal.create(named: name, in: parent)
-        recorder.recordUIAction("createJournal", detail: existing ? "existing" : "new")
-        folder = made
-        isAskingToCreate = false
-        isReportingMissing = false
-        outbox?.placePending()
-        onJournalCreated(made)
-    }
-
-    /// Keeps `chosen` as the journal, found again by the user; throws when it isn't one.
-    func use(_ chosen: URL) throws {
-        try journal.use(chosen)
-        folder = chosen
-        locateError = nil
-        outbox?.placePending()
-    }
-
-    // MARK: - The alert's buttons
-
-    /// Locate…: a folder panel on the window. A folder with `clefwise.json` becomes the journal;
-    /// anything else, or cancelling, brings the alert back.
-    func locate() {
-        recorder.recordUIAction("locateJournal")
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.message = "Find your Clefwise journal: the folder with clefwise.json in it."
-        panel.prompt = "Use Journal"
-        if let path = journal.lastKnownPath {
-            panel.directoryURL = URL(fileURLWithPath: path).deletingLastPathComponent()
-        }
-        Task {
-            let response = if let window = NSApp.mainWindow { await panel.beginSheetModal(for: window) }
-                           else { panel.runModal() }
-            guard response == .OK, let chosen = panel.url else {
-                recorder.recordUIAction("locateJournalCancelled")
-                reportMissingAgain()
-                return
-            }
-            do {
-                try use(chosen)
-            } catch {
-                locateError = error.localizedDescription
-                reportMissingAgain()
-            }
-        }
+    /// The journals the alert offers to switch to: every other one on the list.
+    var others: [JournalRecord] {
+        registry.records.filter { $0.id != registry.currentID }
     }
 
     /// Create New…: the sheet, in place of the alert.
     func createNew() {
         recorder.recordUIAction("createNewJournal")
         // Once the alert has gone: one presentation at a time.
-        Task { isAskingToCreate = true }
+        Task { askToCreate(cancellable: false) }
     }
 
-    /// The alert again, unless the journal has come back meanwhile (a disk plugged in).
-    private func reportMissingAgain() {
-        folder = journal.folder
-        guard folder == nil else { return }
+    /// Locate… found a folder that wouldn't do: the alert again, saying why.
+    func locateFailed(_ reason: String) {
+        locateError = reason
+        reportMissingAgain()
+    }
+
+    /// The alert again, once whatever is up now has gone, unless the journal in use has come back
+    /// meanwhile (a disk plugged in) or there's none.
+    func reportMissingAgain() {
+        folder = registry.current.flatMap(registry.folder(for:))
+        guard folder == nil, registry.current != nil else { return }
         Task { isReportingMissing = true }
-    }
-
-    // MARK: - File menu
-
-    /// File ▸ Show Journal in Finder. A journal gone since it was last found brings up the alert.
-    func showInFinder() {
-        recorder.recordUIAction("showJournal")
-        folder = journal.folder
-        guard let folder else {
-            isReportingMissing = journal.isSet
-            return
-        }
-        NSWorkspace.shared.open(folder)
     }
 }
 
 extension View {
-    /// The journal's sheet and alert on the main window.
-    func journalSetup(_ setup: JournalSetup) -> some View {
-        modifier(JournalSetupPresenter(setup: setup))
+    /// The journals' sheet, alerts and questions on the main window.
+    func journalSetup(_ model: AppModel) -> some View {
+        modifier(JournalSetupPresenter(model: model, setup: model.setup))
     }
 }
 
-/// Puts up the journal's sheet and alert as `setup` asks, and has it look at launch.
+/// Puts up the journals' sheet, alerts and questions as `setup` asks, and has it look at launch.
 private struct JournalSetupPresenter: ViewModifier {
+    let model: AppModel
     @Bindable var setup: JournalSetup
+
+    /// How many other journals the missing alert offers to switch to.
+    private static let switchChoices = 3
 
     func body(content: Content) -> some View {
         content
             .sheet(isPresented: $setup.isAskingToCreate) {
-                JournalCreateSheet(setup: setup)
+                JournalCreateSheet(model: model)
                     .tint(Theme.accent)
             }
             .alert("Clefwise can't find your journal", isPresented: $setup.isReportingMissing) {
-                Button("Locate…") { setup.locate() }
+                Button("Locate…") { model.locateJournal() }
                 Button("Create New…") { setup.createNew() }
+                let names = model.registry.displayNames
+                ForEach(setup.others.prefix(Self.switchChoices)) { other in
+                    Button("Switch to “\(names[other.id] ?? other.name)”") {
+                        model.switchJournal(to: other, from: "missingAlert")
+                    }
+                }
             } message: {
                 Text([setup.missingPath, setup.locateError].compactMap { $0 }.joined(separator: "\n\n"))
             }
+            .alert("That folder isn't a Clefwise journal.", isPresented: isRefusingFolder, presenting: setup.notAJournal) { _ in
+                Button("OK") {}
+            } message: { folder in
+                Text("“\(folder.lastPathComponent)” has no clefwise.json in it. Choose the folder your journal is in, "
+                     + "or make a new one with New Journal….")
+            }
+            .confirmationDialog(removalTitle, isPresented: isConfirmingRemoval, presenting: setup.removing) { record in
+                Button("Remove from List", role: .destructive) { model.remove(record) }
+                Button("Cancel", role: .cancel) { model.log.recordUIAction("removeJournalCancelled") }
+            } message: { record in
+                Text(removalMessage(for: record))
+            }
             .onAppear { setup.checkAtLaunch() }
+    }
+
+    private var isRefusingFolder: Binding<Bool> {
+        Binding(get: { setup.notAJournal != nil }, set: { if !$0 { setup.notAJournal = nil } })
+    }
+
+    private var isConfirmingRemoval: Binding<Bool> {
+        Binding(get: { setup.removing != nil }, set: { if !$0 { setup.removing = nil } })
+    }
+
+    private var removalTitle: String {
+        setup.removing.map { "Remove “\($0.name)” from your journals?" } ?? ""
+    }
+
+    private func removalMessage(for record: JournalRecord) -> String {
+        let place = (URL(fileURLWithPath: record.path).deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath
+        var text = "Clefwise stops using it on this Mac. The folder and everything in it stay as they are, in \(place): "
+            + "open it again with Open Journal…, and it starts from the default settings."
+        guard record.id == model.registry.currentID else { return text }
+        if let next = model.registry.records.first(where: { $0.id != record.id }) {
+            text += " Clefwise switches to “\(next.name)”."
+        } else {
+            text += " Clefwise then asks where to keep a new journal."
+        }
+        return text
     }
 }
 
-/// "Your practice journal": asks where to make it, at first launch or with Create New…. Its one
-/// button makes it, and nothing else closes it: Clefwise keeps practice nowhere else.
+/// Asks where to make a journal: "Your practice journal" at first launch (and with Create New…),
+/// "A new practice journal" with New Journal…. Its one button makes it; only New Journal…'s has
+/// Cancel too: Clefwise keeps practice nowhere else.
 private struct JournalCreateSheet: View {
-    let setup: JournalSetup
+    let model: AppModel
     @State private var name: String
     @State private var location: URL
     /// The name last suggested, which follows the location until the user types their own.
     @State private var suggestedName: String
     @State private var error: String?
+    /// Another journal besides the one in use, so the next free name is suggested.
+    private let isAnother: Bool
 
-    init(setup: JournalSetup) {
-        self.setup = setup
+    init(model: AppModel) {
+        self.model = model
+        isAnother = model.setup.canCancelCreate
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let suggestion = PracticeJournal.suggestedName(in: documents)
+        let suggestion = PracticeJournal.suggestedName(in: documents, fresh: isAnother)
         _location = State(initialValue: documents)
         _name = State(initialValue: suggestion)
         _suggestedName = State(initialValue: suggestion)
     }
 
+    private var setup: JournalSetup { model.setup }
     /// The location chosen is a journal already, so it's used as it is and needs no name.
     private var isJournalAlready: Bool { PracticeJournal.isJournal(location) }
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -197,10 +221,13 @@ private struct JournalCreateSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Your practice journal")
+                Text(isAnother ? "A new practice journal" : "Your practice journal")
                     .font(.title2.weight(.semibold))
-                Text("Clefwise keeps your practice in a practice journal: a folder of plain files that's yours. "
-                     + "Back it up or sync it however you like.")
+                Text(isAnother
+                     ? "Each person keeps their own journal, with their own settings and pieces on this Mac. "
+                        + "Switch between them from the Journal menu between rounds."
+                     : "Clefwise keeps your practice in a practice journal: a folder of plain files that's yours. "
+                        + "Back it up or sync it however you like.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -226,7 +253,7 @@ private struct JournalCreateSheet: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text(plan)
-                if setup.hasPractice {
+                if setup.bringsInPractice {
                     Text("Your practice so far will be copied in.")
                 }
             }
@@ -240,6 +267,10 @@ private struct JournalCreateSheet: View {
             }
             HStack {
                 Spacer()
+                if setup.canCancelCreate {
+                    Button("Cancel", role: .cancel) { model.cancelNewJournal() }
+                        .keyboardShortcut(.cancelAction)
+                }
                 Button(PracticeJournal.existingJournal(named: trimmedName, in: location) != nil
                        ? "Use Journal" : "Create Journal", action: create)
                     .keyboardShortcut(.defaultAction)
@@ -249,12 +280,12 @@ private struct JournalCreateSheet: View {
         .padding(24)
         .frame(width: 480)
         .background(Theme.paper)
-        .interactiveDismissDisabled()
+        .interactiveDismissDisabled(!setup.canCancelCreate)
     }
 
     private func create() {
         do {
-            try setup.create(named: trimmedName, in: location)
+            try model.createJournal(named: trimmedName, in: location)
         } catch {
             self.error = error.localizedDescription
         }
@@ -278,7 +309,7 @@ private struct JournalCreateSheet: View {
             error = nil
             // A name the user hasn't changed follows the new place.
             if name == suggestedName {
-                suggestedName = PracticeJournal.suggestedName(in: chosen)
+                suggestedName = PracticeJournal.suggestedName(in: chosen, fresh: isAnother)
                 name = suggestedName
             }
         }
