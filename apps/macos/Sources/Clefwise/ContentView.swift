@@ -3,6 +3,8 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var game: Game
+    /// The journals, for the title; nil in a view made without them.
+    @Environment(AppModel.self) private var model: AppModel?
     @State private var keyMonitor: Any?
     /// The window this view is in: keys typed in another one (Progress) aren't answers.
     @State private var hostWindow = WeakWindow()
@@ -50,7 +52,8 @@ struct ContentView: View {
         .overlay {
             if isDropTargeted { DropHighlight() }
         }
-        .navigationTitle("Clefwise")
+        // Whose journal it is, as each person keeps their own.
+        .navigationTitle(model?.windowTitle ?? "Clefwise")
         .toolbar { settingsToolbar }
         // Like the toolbar settings, a new piece waits for the round to end.
         .dropDestination(for: URL.self) { urls, _ in
@@ -610,6 +613,8 @@ private struct PausedPanel: View {
 
 private struct StartPanel: View {
     let game: Game
+    /// The journals, for the Journal menu; nil in a view made without them.
+    @Environment(AppModel.self) private var model: AppModel?
 
     var body: some View {
         VStack(spacing: 10) {
@@ -663,6 +668,12 @@ private struct StartPanel: View {
                     }
                 }
             }
+            // Whose practice this is, and the way to another person's journal. One fixed control,
+            // outside the measured parts above.
+            if let model, let current = model.current {
+                JournalMenu(model: model, current: current)
+                    .padding(.top, 4)
+            }
         }
         .panel()
         .padding(.vertical, 8)
@@ -688,6 +699,53 @@ private struct StartPanel: View {
             parts.append("Best: \(best)")
         }
         return parts.joined(separator: "  ·  ")
+    }
+}
+
+/// The start panel's "Journal: <name>": the journals on this Mac (the one in use ticked), then
+/// making, opening, showing and removing one. Only between rounds, as the panel is.
+private struct JournalMenu: View {
+    let model: AppModel
+    let current: JournalRecord
+
+    var body: some View {
+        let names = model.registry.displayNames
+        Menu {
+            Picker("Journals", selection: selection) {
+                ForEach(model.registry.records) { record in
+                    Text(names[record.id] ?? record.name).tag(record.id)
+                }
+            }
+            .pickerStyle(.inline)
+            Divider()
+            Button("New Journal…") { model.newJournal(from: "startPanel") }
+            Button("Open Journal…") { model.openJournal(from: "startPanel") }
+            Button("Show Journal in Finder") { model.showJournalInFinder(from: "startPanel") }
+            Divider()
+            Button("Remove “\(current.name)” from List…") { model.askToRemove(current) }
+        } label: {
+            Label("Journal: \(current.name)", systemImage: "book.closed")
+        }
+        .menuStyle(.button)
+        .menuIndicator(.visible)
+        .fixedSize()
+        .help("Each person keeps their own journal: switch, or make a new one")
+        // SwiftUI doesn't say when a menu opens, so this one is told apart by its last item, which
+        // the File menu doesn't have.
+        .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { notification in
+            guard let menu = notification.object as? NSMenu,
+                  menu.items.contains(where: { $0.title.hasPrefix("Remove “") && $0.title.hasSuffix("” from List…") })
+            else { return }
+            model.log.recordUIAction("journalMenu")
+        }
+    }
+
+    /// The journal in use, ticked; picking another switches to it.
+    private var selection: Binding<UUID> {
+        Binding(get: { current.id }, set: { id in
+            guard let record = model.registry.record(id: id) else { return }
+            model.switchJournal(to: record, from: "startPanel")
+        })
     }
 }
 

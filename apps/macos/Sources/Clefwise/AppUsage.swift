@@ -65,33 +65,38 @@ extension Binding where Value == Bool {
 /// work mid-round.
 @MainActor
 enum UsageData {
-    /// Asks where to save, then writes everything logged so far into a zip there and shows it in Finder.
-    static func export() {
+    /// Asks where to save, then writes everything logged so far into a zip there and shows it in
+    /// Finder, with the journal in use's saved settings and stats (under `namespace`, its
+    /// `JournalRecord.defaultsNamespace`) and its piece library (in `libraryFolder`).
+    static func export(namespace: String, libraryFolder: URL) {
         UsageLog.shared.recordUIAction("exportUsageData")
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.zip]
         let day = Date.ISO8601FormatStyle(timeZone: .current).year().month().day().format(Date())
         panel.nameFieldStringValue = "Clefwise usage \(day).zip"
         guard let window = NSApp.mainWindow else {
-            if panel.runModal() == .OK, let url = panel.url { export(to: url) }
+            if panel.runModal() == .OK, let url = panel.url { export(to: url, namespace: namespace, libraryFolder: libraryFolder) }
             return
         }
         Task {
-            if await panel.beginSheetModal(for: window) == .OK, let url = panel.url { export(to: url) }
+            if await panel.beginSheetModal(for: window) == .OK, let url = panel.url {
+                export(to: url, namespace: namespace, libraryFolder: libraryFolder)
+            }
         }
     }
 
     /// Set while an export runs, so a second one can't race it for the same files.
     private static var isExporting = false
 
-    static func export(to destination: URL) {
+    static func export(to destination: URL, namespace: String, libraryFolder: URL) {
         guard !isExporting else { return }
         isExporting = true
         // Reading years of log takes seconds: do it off the main thread so practice carries on.
         // (The export flushes events still on their way to disk first.)
-        let libraryFolder = PieceLibrary.shared.folder
         Task.detached(priority: .userInitiated) {
-            let result = Result { try UsageExport.export(UsageLog.shared, to: destination, libraryFolder: libraryFolder) }
+            let result = Result {
+                try UsageExport.export(UsageLog.shared, to: destination, namespace: namespace, libraryFolder: libraryFolder)
+            }
             await MainActor.run {
                 isExporting = false
                 switch result {
