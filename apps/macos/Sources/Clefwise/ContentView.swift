@@ -703,7 +703,7 @@ private struct StartPanel: View {
 }
 
 /// The start panel's "Journal: <name>": the journals on this Mac (the one in use ticked), then
-/// making, opening, showing and removing one. Only between rounds, as the panel is.
+/// making, opening, showing, renaming and removing one. Only between rounds, as the panel is.
 private struct JournalMenu: View {
     let model: AppModel
     let current: JournalRecord
@@ -721,6 +721,7 @@ private struct JournalMenu: View {
             Button("New Journal…") { model.newJournal(from: "startPanel") }
             Button("Open Journal…") { model.openJournal(from: "startPanel") }
             Button("Show Journal in Finder") { model.showJournalInFinder(from: "startPanel") }
+            Button("Rename “\(current.name)”…") { model.askToRename(from: "startPanel") }
             Divider()
             Button("Remove “\(current.name)” from List…") { model.askToRemove(current) }
         } label: {

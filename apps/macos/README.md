@@ -175,6 +175,9 @@ way Obsidian keeps notes in a folder. There's no account and no Clefwise server.
   - **Switch** between rounds with **Journal: <name>** on the start panel or **File → Switch
     Journal**. The start panel's menu and the File menu also have **New Journal…** and **Open
     Journal…** (a folder with `clefwise.json` in it).
+  - **Rename "<name>"…** on the start panel, or **File → Rename Journal…**, renames the journal's
+    folder, as Obsidian renames a vault (between rounds). Your other devices find it again, or ask
+    you to locate it.
   - **Remove "<name>" from List…** (on the start panel) only forgets it on this Mac; the folder
     stays as it is.
 - **Practice so far:** when your first journal is made, your usage log and pieces so far are

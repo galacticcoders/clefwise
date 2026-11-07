@@ -219,6 +219,12 @@ between rounds.
   device starts with the default settings.
 - **The device knows each journal by a local id** of its own, which never goes in the journal. The
   device id in headers is the same whichever journal the device writes to.
+- **A journal's name is its folder's name.** Nothing in the journal names it, so renaming a journal
+  renames its folder, in the folder it's in, and nothing inside changes. An app renames it only
+  between rounds, and never to a name that's empty, has a `/` or `:` in it, starts with a dot, or is
+  already taken there. Every device keeps finding it as it would a folder moved or renamed by hand:
+  through what it kept to find it (on macOS a bookmark), or, failing that, by asking the user to
+  locate it.
 - **The old usage log is brought into only one journal:** the first one the device makes or uses
   (see Bringing in the old usage log). Its practice is one person's; a journal added later starts
   without it.

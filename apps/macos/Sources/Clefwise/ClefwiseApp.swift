@@ -143,9 +143,10 @@ private struct PieceLibraryCommands: View {
     }
 }
 
-/// File ▸ New Journal…, Open Journal…, Switch Journal ▸ and Show Journal in Finder. Like the start
-/// panel's Journal menu, the first three wait for the round to end: a run goes into the journal it
-/// started in. Show Journal in Finder doesn't, as it leaves the game alone.
+/// File ▸ New Journal…, Open Journal…, Switch Journal ▸, Show Journal in Finder and Rename
+/// Journal…. Like the start panel's Journal menu, all but Show Journal in Finder wait for the round
+/// to end: a run goes into the journal it started in. Show Journal in Finder doesn't, as it leaves
+/// the game alone. Show and Rename need the journal in use found.
 private struct JournalCommands: View {
     let model: AppModel
 
@@ -166,6 +167,8 @@ private struct JournalCommands: View {
         }
         Button("Show Journal in Finder") { model.showJournalInFinder(from: "fileMenu") }
             .disabled(!model.canShowJournal)
+        Button("Rename Journal…") { model.askToRename(from: "fileMenu") }
+            .disabled(!isBetweenRounds || !model.canShowJournal)
     }
 
     /// The journal in use, ticked; picking another switches to it.
