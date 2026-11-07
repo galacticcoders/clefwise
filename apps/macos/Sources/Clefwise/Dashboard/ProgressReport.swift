@@ -73,10 +73,11 @@ struct ProgressReport: Equatable {
     var recentRounds: [RecentRound]
     /// Response times beyond the median: spread, shape, mistakes by speed, the previous note's pull.
     var responseTimes = ResponseTimes()
-    /// Answers from before detailed tracking began (the one-off stats snapshot): counted in the
-    /// all-time note map and pitch lists only, as they have no dates or times.
+    /// Answers from before detailed tracking began (the stats snapshots, one per device, added up):
+    /// counted in the all-time note map and pitch lists only, as they have no dates or times.
     var answersBeforeTracking: Int
-    /// Usage log lines that couldn't be read.
+    /// Lines in the practice journal's files (or, read the old way, the usage log) that couldn't be
+    /// read, and so are left out.
     var unreadableLines: Int
 
     var isEmpty: Bool { totals.answers == 0 && answersBeforeTracking == 0 }
@@ -167,6 +168,7 @@ struct BreakdownRow: Equatable, Identifiable {
 }
 
 struct PieceProgressSummary: Equatable, Identifiable {
+    /// From the round practised last.
     var title: String
     var path: String
     var lastPractised: Date
@@ -177,8 +179,12 @@ struct PieceProgressSummary: Equatable, Identifiable {
     var measureCount: Int?
     /// Bars with at least one answer, in order.
     var bars: [BarProgress]
+    /// The piece's id in the practice journal (the SHA-256 of the file it was first added with),
+    /// whatever path each Mac practised it from; nil for a piece known only by its path.
+    var pieceID: String? = nil
 
-    var id: String { path }
+    /// The journal's id for the piece, or failing that its path.
+    var id: String { pieceID ?? path }
     var accuracy: Double? { answers > 0 ? Double(correct) / Double(answers) : nil }
 }
 
@@ -203,7 +209,8 @@ struct RecentRound: Equatable, Identifiable {
     var description: String
     var score: Int
     var attempts: Int
-    /// Nil when the round never ended in the log (the app crashed).
+    /// Nil when the round never ended (the app crashed): only when read the old way, from the usage
+    /// log. Every run in the journal has its end, `interrupted` after a crash it didn't come back from.
     var endReason: RoundEndReason?
     /// A practice round's limit: "5 min", "100 notes"; nil without one.
     var practiceLength: String? = nil
