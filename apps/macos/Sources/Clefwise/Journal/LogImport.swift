@@ -263,7 +263,7 @@ enum LogImport {
             pausedMs: clock.everPaused ? pausedMs : nil, score: score, attempts: attempts, bestStreak: bestStreak,
             averageResponseMs: responseTimes.isEmpty
                 ? nil : Int((Double(responseTimes.reduce(0, +)) / Double(responseTimes.count)).rounded()),
-            bestScore: nil, isNewBest: false, notesToReview: review.prefix(4).map(\.key),
+            notesToReview: review.prefix(4).map(\.key),
             unansweredQuestion: unanswered, recordedAt: recordedAt)
     }
 

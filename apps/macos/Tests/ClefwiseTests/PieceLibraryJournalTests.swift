@@ -126,7 +126,6 @@ import Testing
         let url = folder.appendingPathComponent("grand-staff.musicxml")
         try FileManager.default.copyItem(at: try #require(Fixtures.url("grand-staff.musicxml")), to: url)
 
-        game.settings.mode = .practice
         game.openPiece(at: url)
         let entry = try #require(library.entries.first)
         game.start()

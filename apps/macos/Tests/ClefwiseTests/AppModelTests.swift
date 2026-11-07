@@ -118,8 +118,8 @@ final class AppModelTestBench {
     }
 
     /// Another Mac's practice arriving in the journal in `folder`, as a sync service brings it: a
-    /// minute's sprint on the default settings in which `score` notes were named right, and the
-    /// piece `title` added there, with its score. Returns the piece's id (its score's hash).
+    /// minute's round on the default settings in which `score` E4s were named right, and the piece
+    /// `title` added there, with its score. Returns the piece's id (its score's hash).
     @discardableResult
     func practiseElsewhere(in folder: URL, scoring score: Int, piece title: String) throws -> String {
         let start = Date(timeIntervalSinceNow: -600)
@@ -141,6 +141,12 @@ final class AppModelTestBench {
     func noteStats(of record: JournalRecord) -> [String: NoteStat]? {
         defaults.data(forKey: Game.key(Game.Keys.noteStats, in: record.defaultsNamespace))
             .flatMap { try? JSONDecoder().decode([String: NoteStat].self, from: $0) }
+    }
+
+    /// The answers to E4, the note `practiseElsewhere` asks, that `record`'s game has counted, as
+    /// saved; nil before any.
+    func answersToE4(of record: JournalRecord) -> Int? {
+        noteStats(of: record)?["treble.E4"]?.attempts
     }
 
     /// How each piece opened so far was opened (`pieceOpened`'s `via`), in order.
@@ -242,7 +248,6 @@ final class AppModelTestBench {
         let anna = try bench.makeJournal("Anna", in: model)
         model.game.settings.isMuted = true
         model.game.settings.clefChoice = .bass
-        model.game.settings.mode = .practice
         model.game.start()
         for _ in 0..<3 {
             let pitch = try #require(model.game.question?.pitch)
@@ -257,7 +262,7 @@ final class AppModelTestBench {
         model.game.settings.clefChoice = .both
 
         model.switchJournal(to: anna, from: "test")
-        #expect(model.game.settings.clefChoice == .bass && model.game.settings.mode == .practice)
+        #expect(model.game.settings.clefChoice == .bass)
         model.switchJournal(to: ben, from: "test")
         #expect(model.game.settings.clefChoice == .both)
         // Nothing went under the keys from before there were several journals.
@@ -637,7 +642,7 @@ final class AppModelTestBench {
         // Read once straight away, without waiting for a change.
         try await bench.waitForReading(model)
         #expect(model.progressStore.report.totals.answers == 6)
-        #expect(model.game.bestScore == 6 && bench.noteStats(of: anna) == JournalProjection.read(journal: folder).noteStats)
+        #expect(bench.answersToE4(of: anna) == 6 && bench.noteStats(of: anna) == JournalProjection.read(journal: folder).noteStats)
         #expect(model.library.entries.map(\.pieceID) == [piece])
     }
 
@@ -650,16 +655,16 @@ final class AppModelTestBench {
         try await bench.waitForReading(model)
         #expect(model.progressStore.hasLoaded && model.progressStore.report.isEmpty)
 
-        // Another Mac's sprint and piece arrive through the sync service: read once the watcher
+        // Another Mac's round and piece arrive through the sync service: read once the watcher
         // says files changed.
         let piece = try bench.practiseElsewhere(in: folder, scoring: 7, piece: "Gymnopédie")
-        #expect(model.library.isEmpty && model.game.bestScore == nil)
+        #expect(model.library.isEmpty && bench.answersToE4(of: anna) == nil)
         bench.watcher.fire()
         #expect(model.progressStore.isLoading && model.game.isRefreshingStats && model.isAdoptingPieces)
         try await bench.waitForReading(model)
 
         #expect(model.progressStore.report.totals.answers == 7 && model.progressStore.report.totals.rounds == 1)
-        #expect(model.game.bestScore == 7)
+        #expect(bench.answersToE4(of: anna) == 7)
         let stats = bench.noteStats(of: anna)
         #expect(stats == JournalProjection.read(journal: folder).noteStats && stats?.isEmpty == false)
         let entry = try #require(model.library.entries.first)
@@ -686,7 +691,7 @@ final class AppModelTestBench {
         let piece = try bench.practiseElsewhere(in: annasFolder, scoring: 4, piece: "Arabesque")
         watcher.fire()
         try await bench.waitForReading(model)
-        #expect(model.game.bestScore == 4 && model.library.entries.map(\.pieceID) == [piece])
+        #expect(bench.answersToE4(of: anna) == 4 && model.library.entries.map(\.pieceID) == [piece])
         #expect(model.progressStore.report.totals.answers == 4)
         #expect(bench.noteStats(of: ben)?.isEmpty != false)
 
@@ -723,7 +728,7 @@ final class AppModelTestBench {
         try bench.practiseElsewhere(in: folder, scoring: 5, piece: "Arabesque")
         bench.watcher.fire()
         try await bench.waitForReading(model)
-        #expect(model.game.bestScore == 5)
+        #expect(bench.answersToE4(of: anna) == 5)
 
         // Gone (a disk unplugged): reading nothing there would take the stats away, so it isn't
         // read; it's still watched by its path.
@@ -732,13 +737,13 @@ final class AppModelTestBench {
         try FileManager.default.removeItem(at: folder)
         bench.watcher.fire()
         #expect(!model.canShowJournal && !model.game.isRefreshingStats && !model.progressStore.isLoading)
-        #expect(bench.watcher.isWatching(folder) && model.game.bestScore == 5)
+        #expect(bench.watcher.isWatching(folder) && bench.answersToE4(of: anna) == 5)
 
         // Back where it was.
         try FileManager.default.copyItem(at: elsewhere, to: folder)
         bench.watcher.fire()
         #expect(model.canShowJournal && model.game.isRefreshingStats)
         try await bench.waitForReading(model)
-        #expect(model.game.bestScore == 5 && model.progressStore.report.totals.answers == 5)
+        #expect(bench.answersToE4(of: anna) == 5 && model.progressStore.report.totals.answers == 5)
     }
 }

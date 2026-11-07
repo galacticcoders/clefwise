@@ -290,8 +290,9 @@ struct NoteRange: Codable, Equatable {
         return (below && above ? "Above & below" : above ? "Above" : "Below") + " the staff, \(lines)"
     }
 
-    /// What best scores are kept under: the old names for the three choices the app first had,
-    /// so their best scores still count, otherwise like `below2+staff+above2`.
+    /// The range's short name, as the data export gives it: for the three choices the app first
+    /// had, the names older versions saved, so the export names them alike in old and new rounds;
+    /// otherwise like `below2+staff+above2`.
     var key: String {
         if let old = Self.oldNames.first(where: { $0.range.positions == positions }) { return old.name }
         return [below ? "below\(ledgerLines)" : nil, includesStaff ? "staff" : nil, above ? "above\(ledgerLines)" : nil]

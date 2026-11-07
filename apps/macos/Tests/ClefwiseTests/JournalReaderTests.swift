@@ -44,7 +44,7 @@ import Testing
 
     private func snapshot(_ attempts: Int) -> UsageEvent {
         .statsSnapshot(StatsSnapshot(reason: "beforeUsageLog",
-                                     noteStats: ["treble.C4": NoteStat(attempts: attempts, correct: attempts)], bestScores: [:]))
+                                     noteStats: ["treble.C4": NoteStat(attempts: attempts, correct: attempts)]))
     }
 
     private func added(_ title: String) -> UsageEvent {

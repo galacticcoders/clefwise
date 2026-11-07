@@ -1,16 +1,15 @@
 import Foundation
 
-// What the app keeps today (note stats and best scores), worked out from the practice journal's
+// What the app keeps today (note stats), worked out from the practice journal's
 // files alone: the proof that the files are the data and the rest a projection of them. See
 // spec/practice-journal.md, "Reading" and "What stays on each device".
 
-/// Note stats and best scores folded from a journal's runs, starting from its opening balances,
-/// exactly as `Game` keeps them as it goes.
+/// Note stats folded from a journal's runs, starting from its opening balances, exactly as `Game`
+/// keeps them as it goes. The best sprint scores that runs and opening balances from versions until
+/// 2026-11-07 hold aren't kept: the sprint is gone, and nothing shows them.
 struct JournalProjection: Equatable, Sendable {
     /// As `Game` saves them (`noteStats`), by `statKey`.
     var noteStats: [String: NoteStat] = [:]
-    /// As `Game` saves them (`bestScores`), by `Game.bestScoreKey(for:)`.
-    var bestScores: [String: Int] = [:]
     /// Runs folded in.
     var runsRead = 0
     /// Record files left out, runs and event files alike (`JournalReader.Contents.skippedFiles`):
@@ -48,8 +47,8 @@ struct JournalProjection: Equatable, Sendable {
     }
 
     /// Adds an opening balance. The first is taken as it is; another (a second device's) adds its
-    /// attempts and right answers to each note's, its recent results after the ones already there
-    /// (keeping the last eight, as `NoteStat` does), and keeps the higher best score.
+    /// attempts and right answers to each note's, and its recent results after the ones already
+    /// there (keeping the last eight, as `NoteStat` does).
     mutating func apply(_ snapshot: StatsSnapshot) {
         for (key, stat) in snapshot.noteStats {
             guard var kept = noteStats[key] else {
@@ -61,57 +60,25 @@ struct JournalProjection: Equatable, Sendable {
             kept.recent = Array((kept.recent + stat.recent).suffix(8))
             noteStats[key] = kept
         }
-        bestScores.merge(snapshot.bestScores) { max($0, $1) }
     }
 
-    /// Folds one run in, by the rules `Game` follows as it goes:
-    /// - **Note stats:** every answer counts towards its note's stat (`NoteStat.record`), in the
-    ///   order given, in random and piece rounds alike. Notes asked together are answered one
-    ///   `answerGiven` each, in the order `Game` counts them.
-    /// - **Best scores:** a sprint on random notes that ended by running out of time or being
-    ///   stopped (not abandoned, quit or interrupted) keeps its score as the best for its setup
-    ///   (`Game.bestScoreKey(for:)` with its `roundStarted.settings`) when it beats the best so far:
-    ///   a tie keeps the old one, and a first score of 0 sets none.
+    /// Folds one run in, by the rule `Game` follows as it goes: every answer counts towards its
+    /// note's stat (`NoteStat.record`), in the order given, in random and piece rounds alike. Notes
+    /// asked together are answered one `answerGiven` each, in the order `Game` counts them.
     mutating func apply(run events: [LoggedEvent]) {
         var keys: [UUID: String] = [:]
-        var settings: Game.Settings?
-        var isPieceRound = false
-        var round: UUID?
         for logged in events {
             switch logged.event {
-            case .roundStarted(let started):
-                round = started.round
-                settings = Self.settings(from: started.settings)
-                isPieceRound = started.piece != nil
             case .questionShown(let question):
                 keys[question.question] = Self.statKey(clef: question.clef, pitch: question.pitch.name)
             case .answerGiven(let answer):
                 guard let key = keys[answer.question] else { continue }
                 noteStats[key, default: NoteStat()].record(answer.correct)
-            case .roundEnded(let ended) where ended.round == round:
-                guard Self.keepsBestScore(ended.reason), !isPieceRound, let settings, settings.mode == .sprint else { continue }
-                let key = Game.bestScoreKey(for: settings)
-                if ended.score > (bestScores[key] ?? 0) { bestScores[key] = ended.score }
             default:
                 continue
             }
         }
         runsRead += 1
-    }
-
-    /// The ends `Game.finish` scores: the clock running out, Stop, the end of a piece or of a set
-    /// number of notes. A round abandoned, quit or interrupted keeps no score.
-    private static func keepsBestScore(_ reason: RoundEndReason) -> Bool {
-        switch reason {
-        case .timeUp, .stopped, .pieceComplete, .notesDone: true
-        case .abandoned, .appQuit, .interrupted: false
-        }
-    }
-
-    /// `roundStarted.settings` as `Game` reads saved settings: missing keys take their defaults.
-    private static func settings(from value: JSONValue) -> Game.Settings? {
-        guard let data = try? JSONEncoder().encode(value) else { return nil }
-        return try? JSONDecoder().decode(Game.Settings.self, from: data)
     }
 }
 

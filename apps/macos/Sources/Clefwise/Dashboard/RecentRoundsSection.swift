@@ -61,7 +61,7 @@ struct RecentRoundsSection: View {
                         .monospacedDigit()
                     ReportTable.cell(round.description)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    ReportTable.cell(mode(round))
+                    ReportTable.cell(round.modeLabel)
                     ReportTable.cell(input(round))
                     ReportTable.cell(namingLabel(round))
                     ReportTable.cell("\(round.score)/\(round.attempts)")
@@ -91,7 +91,7 @@ struct RecentRoundsSection: View {
                             .font(.callout)
                             .foregroundStyle(DashboardTheme.textPrimary)
                             .lineLimit(2)
-                        Text("\(mode(round)) · \(input(round)) · \(namingLabel(round))")
+                        Text("\(round.modeLabel) · \(input(round)) · \(namingLabel(round))")
                             .font(.caption)
                             .foregroundStyle(DashboardTheme.textMuted)
                     }
@@ -137,11 +137,6 @@ struct RecentRoundsSection: View {
             : date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
     }
 
-    /// "60s Sprint", "Practice", "Practice · 5 min"
-    private func mode(_ round: RecentRound) -> String {
-        let label = Game.Mode(rawValue: round.mode)?.label ?? round.mode.capitalized
-        return round.practiceLength.map { "\(label) · \($0)" } ?? label
-    }
     private func input(_ round: RecentRound) -> String { Game.AnswerInput(rawValue: round.input)?.label ?? round.input.capitalized }
     private func namingLabel(_ round: RecentRound) -> String { NamingSystem(rawValue: round.naming)?.label ?? round.naming.capitalized }
 

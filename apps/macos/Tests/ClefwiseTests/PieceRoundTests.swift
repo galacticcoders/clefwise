@@ -112,10 +112,6 @@ class GameTestBench {
             try await Task.sleep(for: .milliseconds(20))
         }
     }
-
-    func storedBestScores() -> [String: Int]? {
-        defaults.data(forKey: "bestScores").flatMap { try? JSONDecoder().decode([String: Int].self, from: $0) }
-    }
 }
 
 // MARK: - Piece rounds
@@ -123,7 +119,6 @@ class GameTestBench {
 @MainActor
 @Suite final class PieceRoundTests: GameTestBench {
     @Test func inOrderWalksEachHand() {
-        game.settings.mode = .practice
         game.open(twoHands, from: fileURL)
 
         game.settings.piece.hand = .right
@@ -153,14 +148,12 @@ class GameTestBench {
     }
 
     @Test func singleStaffPartsIgnoreTheHand() {
-        game.settings.mode = .practice
         game.settings.piece.hand = .left
         game.open(gMajorTune, from: fileURL)
         #expect(playRound().count == 4)
     }
 
     @Test func startsFromTheStartBar() {
-        game.settings.mode = .practice
         game.settings.piece.hand = .both
         game.open(twoHands, from: fileURL)
         game.settings.piece.startBar = 2
@@ -171,7 +164,6 @@ class GameTestBench {
     }
 
     @Test func oneNotePerChordKeepsTheTopInTheRightHandAndTheBottomInTheLeft() {
-        game.settings.mode = .practice
         game.settings.piece.oneNotePerChord = true
         game.open(twoHands, from: fileURL)
 
@@ -184,8 +176,7 @@ class GameTestBench {
         #expect(playRound() == [Pitch(.c, 3), Pitch(.f, 2), Pitch(.g, 2)])
     }
 
-    @Test func practiceFinishesAfterTheLastNote() throws {
-        game.settings.mode = .practice
+    @Test func aRoundFinishesAfterTheLastNote() throws {
         game.open(twoHands, from: fileURL)
         _ = playRound()
         #expect(game.phase == .finished)
@@ -196,8 +187,6 @@ class GameTestBench {
         #expect(summary.pieceTitle == "Two hands")
         #expect(summary.score == 6)
         #expect(summary.attempts == 6)
-        #expect(summary.bestScore == nil)
-        #expect(!summary.isNewBest)
         #expect(!summary.timeRanOut)
         #expect(!summary.mixedClefs)
 
@@ -207,7 +196,6 @@ class GameTestBench {
     }
 
     @Test func stoppingEarlyDoesNotFinishThePiece() {
-        game.settings.mode = .practice
         game.open(twoHands, from: fileURL)
         game.start()
         answerRight()
@@ -216,23 +204,20 @@ class GameTestBench {
         #expect(game.summary?.pieceTitle == "Two hands")
     }
 
-    @Test func sprintWrapsToTheStartBar() {
-        game.settings.mode = .sprint
+    @Test func theLastNoteEndsTheRoundRatherThanGoingRoundAgain() {
         game.open(twoHands, from: fileURL)
-        #expect(playRound(limit: 8) == rightHand + rightHand.prefix(2))
-        #expect(game.phase == .playing)
-        #expect(game.pieceProgress == Game.PieceProgress(bar: 1, bars: 4, done: 2, total: 6))
+        // Asked for more notes than the piece has: it doesn't start again from the start bar.
+        #expect(playRound(limit: 8) == rightHand)
+        #expect(game.phase == .finished && game.summary?.finishedPiece == true)
+        #expect(game.pieceProgress == nil)
 
-        game.stop()
-        #expect(game.summary?.finishedPiece == false)
-        #expect(game.summary?.bestScore == nil)
-        #expect(game.summary?.isNewBest == false)
-        #expect(storedBestScores() == nil)
-        #expect(game.bestScore == nil)
+        // Nor does a time limit keep it going: pieces ignore it.
+        game.settings.practiceLimit = .time
+        #expect(playRound(limit: 8) == rightHand)
+        #expect(game.summary?.finishedPiece == true && game.summary?.timeRanOut == false)
     }
 
     @Test func shuffledDrawsOnlyFromTheSelectionAndNeverRepeatsAtOnce() {
-        game.settings.mode = .practice
         game.settings.piece.order = .shuffled
         game.open(twoHands, from: fileURL)
         let asked = playRound(limit: 200)
@@ -254,7 +239,6 @@ class GameTestBench {
     }
 
     @Test func gMajorPieceTakesSharpAnswers() throws {
-        game.settings.mode = .practice
         game.open(gMajorTune, from: fileURL)
         #expect(game.currentKeySignature == gMajor)
         #expect(game.accidentalsPossible)
@@ -349,7 +333,6 @@ class GameTestBench {
     }
 
     @Test func progressFollowsTheRound() {
-        game.settings.mode = .practice
         game.settings.piece.hand = .both
         game.open(twoHands, from: fileURL)
         #expect(game.pieceProgress == nil)
@@ -404,7 +387,6 @@ class GameTestBench {
         #expect(game.settings.piecePath == nil)
 
         // A summary on screen goes too.
-        game.settings.mode = .practice
         game.open(gMajorTune, from: otherFileURL)
         _ = playRound()
         #expect(game.phase == .finished)
@@ -449,7 +431,6 @@ class GameTestBench {
     }
 
     @Test func pieceSettingsWaitForTheNextRound() {
-        game.settings.mode = .practice
         game.open(twoHands, from: fileURL)
         game.start()
         answerRight()
@@ -461,7 +442,6 @@ class GameTestBench {
     }
 
     @Test func aMissStillMovesOn() async throws {
-        game.settings.mode = .practice
         game.open(twoHands, from: fileURL)
         game.start()
         game.answer(Pitch(.c, 1))
@@ -474,7 +454,6 @@ class GameTestBench {
     }
 
     @Test func missingTheLastNoteStillFinishesThePiece() async throws {
-        game.settings.mode = .practice
         game.open(twoHands, from: fileURL)
         game.settings.piece.startBar = 3
         game.start()
@@ -518,7 +497,6 @@ class GameTestBench {
 @MainActor
 @Suite final class RandomRoundTests: GameTestBench {
     @Test func questionsFollowTheToolbarSettings() throws {
-        game.settings.mode = .practice
         #expect(game.pieceProgress == nil)
         #expect(game.staffPositionsToFit == nil)
         #expect(!game.accidentalsPossible)
@@ -547,23 +525,6 @@ class GameTestBench {
         #expect(game.currentKeySignature == gMajor)
         game.start()
         #expect(game.question?.keySignature == gMajor)
-    }
-
-    @Test func sprintsKeepBestScores() {
-        game.settings.mode = .sprint
-        game.start()
-        for _ in 0..<3 { answerRight() }
-        game.stop()
-        #expect(game.summary?.isNewBest == true)
-        #expect(game.summary?.bestScore == 3)
-        #expect(game.bestScore == 3)
-        #expect(storedBestScores() == ["treble.staff": 3])
-
-        // Not shown while a piece is open, and back once it's closed.
-        game.open(twoHands, from: fileURL)
-        #expect(game.bestScore == nil)
-        game.closePiece()
-        #expect(game.bestScore == 3)
     }
 
     @Test func closingAPieceGoesBackToRandomNotes() {

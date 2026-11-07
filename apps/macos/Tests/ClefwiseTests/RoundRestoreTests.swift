@@ -92,7 +92,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     /// "Lantern at Dusk", kept in the library so the next launch reopens it, practised as told.
     private func openLantern(hand: Game.PieceSettings.Hand = .right, order: Game.PieceSettings.Order = .inOrder,
                              chords: Game.PieceSettings.Chords = .eachNote) throws {
-        game.settings.mode = .practice
         game.openPiece(at: try #require(Fixtures.url("bar-view.musicxml")))
         try #require(game.pieceError == nil)
         game.settings.piece.hand = hand
@@ -179,7 +178,7 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
         #expect(abs(try #require(end.recordedAt).timeIntervalSinceNow) < 5)
         let answers = payloads(AnswerGiven.self, in: crash.run.events)
         #expect(end.attempts == answers.count && end.score == answers.last?.scoreAfter)
-        #expect(end.bestStreak == answers.map(\.streakAfter).max() && !end.isNewBest)
+        #expect(end.bestStreak == answers.map(\.streakAfter).max() && end.bestScore == nil && end.isNewBest == nil)
         #expect(defaults.object(forKey: "restoringRound") == nil)
         return end
     }
@@ -187,7 +186,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     // MARK: - Random notes
 
     @Test func anEndlessRoundComesBackAsItWas() async throws {
-        game.settings.mode = .practice
         game.start()
         for _ in 0..<3 { answerRight() }
         let missed = try #require(game.question)
@@ -218,7 +216,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     }
 
     @Test func aTimedRoundKeepsTheTimeItHadLeft() async throws {
-        game.settings.mode = .practice
         game.settings.practiceLimit = .time
         game.settings.practiceMinutes = 2
         game.start()
@@ -243,7 +240,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     }
 
     @Test func aRoundOfSetNotesCountsOnFromWhereItWas() async throws {
-        game.settings.mode = .practice
         game.settings.practiceLimit = .notes
         game.settings.practiceNotes = 6
         game.start()
@@ -265,27 +261,41 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
         try expectEndAgrees(crash, then: later, summary: summary)
     }
 
-    @Test func aSprintComesBackWithItsClock() async throws {
-        #expect(game.settings.mode == .sprint)
+    @Test func aSprintFromBeforeItWentComesBackAsPractice() async throws {
         game.start()
         for _ in 0..<3 { answerRight() }
         try await Task.sleep(for: .milliseconds(100))
         answerRight()
         let crash = try stopLikeACrash(game, logged: recorder)
+        // As a version until 2026-11-07 left it, set for a sprint: `mode` in the saved settings and
+        // in the run's `roundStarted`.
+        let saved = try #require(defaults.data(forKey: Game.Keys.settings))
+        var settings = try #require(try JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        settings["mode"] = "sprint"
+        defaults.set(try JSONSerialization.data(withJSONObject: settings), forKey: Game.Keys.settings)
+        let events = crash.run.events.map { logged -> LoggedEvent in
+            guard case .roundStarted(var started) = logged.event, case .object(var values) = started.settings else { return logged }
+            values["mode"] = .string("sprint")
+            started.settings = .object(values)
+            return LoggedEvent(.roundStarted(started), session: logged.session, sequence: logged.sequence, time: logged.time)
+        }
 
         let (restored, later) = try await relaunchAfterCrash()
-        restored.restore(crash.run)
+        restored.restore(PendingRun(round: crash.run.round, file: crash.run.file, events: events))
         try expectRebuilt(restored, from: crash, logged: later)
-        #expect(abs(restored.timeRemaining - (60 - Double(crash.activeMs) / 1000)) < 0.05)
+        // A practice round with no limit: no minute's clock runs out.
+        #expect(restored.roundTimeLimit == nil && restored.roundNoteLimit == nil)
         try resumeAskingAgain(restored, after: crash, logged: later)
         answerRight(on: restored)
-        answerRight(on: restored)
         restored.tick(at: .now + .seconds(61))
+        #expect(restored.phase == .playing)
+        answerRight(on: restored)
+        restored.stop()
 
         let summary = try #require(restored.summary)
-        #expect(summary.timeRanOut && summary.score == 6 && summary.isNewBest && summary.bestScore == 6)
+        #expect(!summary.timeRanOut && !summary.hadLimit && summary.score == 6)
         let end = try #require(payloads(RoundEnded.self, in: later.events).last)
-        #expect(end.reason == .timeUp && end.isNewBest && end.bestScore == 6)
+        #expect(end.reason == .stopped && end.bestScore == nil && end.isNewBest == nil)
         try expectEndAgrees(crash, then: later, summary: summary)
     }
 
@@ -423,7 +433,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     // MARK: - Paused, missed
 
     @Test func aRoundPausedAtTheCrashComesBackWithItsTime() async throws {
-        game.settings.mode = .practice
         game.start()
         answerRight()
         answerRight()
@@ -452,7 +461,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     }
 
     @Test func aCrashRightAfterAMissGoesOnToTheNextNote() async throws {
-        game.settings.mode = .practice
         game.start()
         answerRight()
         answerRight()
@@ -481,7 +489,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     // MARK: - When it isn't brought back
 
     @Test func aRoundThatCrashesAgainBeforeAnAnswerIsEnded() async throws {
-        game.settings.mode = .practice
         game.start()
         for _ in 0..<3 { answerRight() }
         let first = try stopLikeACrash(game, logged: recorder)
@@ -511,7 +518,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     }
 
     @Test func aRoundThatCrashesAgainWhilePausedComesBackAgain() async throws {
-        game.settings.mode = .practice
         game.start()
         for _ in 0..<2 { answerRight() }
         let first = try stopLikeACrash(game, logged: recorder)
@@ -532,7 +538,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     }
 
     @Test func aRestoreThatNeverSettledIsNotTriedAgain() async throws {
-        game.settings.mode = .practice
         game.start()
         answerRight()
         try answerWrong(on: game)
@@ -549,7 +554,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     }
 
     @Test func theDevicesNoteLastsUntilTheRoundHasSettledBackIn() async throws {
-        game.settings.mode = .practice
         game.start()
         answerRight()
         let crash = try stopLikeACrash(game, logged: recorder)
@@ -618,7 +622,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     }
 
     @Test func changedSettingsEndTheRound() async throws {
-        game.settings.mode = .practice
         game.start()
         for _ in 0..<2 { answerRight() }
         let crash = try stopLikeACrash(game, logged: recorder)
@@ -632,7 +635,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     }
 
     @Test func settingsThatDontShapeTheRoundCanChange() async throws {
-        game.settings.mode = .practice
         game.start()
         answerRight()
         let crash = try stopLikeACrash(game, logged: recorder)
@@ -647,7 +649,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     }
 
     @Test func eventsThatDontMakeARoundEndIt() async throws {
-        game.settings.mode = .practice
         game.start()
         for _ in 0..<2 { answerRight() }
         let crash = try stopLikeACrash(game, logged: recorder)
@@ -663,7 +664,6 @@ private func sameNote(_ a: Question?, _ b: Question?) -> Bool {
     }
 
     @Test func aRunThatEndedIsLeftAlone() async throws {
-        game.settings.mode = .practice
         game.start()
         answerRight()
         game.stop()
@@ -847,8 +847,7 @@ private struct Run {
         var replay = RoundReplay(round: run.round, events: run.events)
         #expect(replay.attempts == 1 && replay.score == 1 && !replay.hasEnded)
         run.add(.roundEnded(RoundEnded(round: run.round, reason: .stopped, durationMs: 2000, score: 1, attempts: 1,
-                                       bestStreak: 1, averageResponseMs: 1000, bestScore: nil, isNewBest: false,
-                                       notesToReview: [])), at: 2)
+                                       bestStreak: 1, averageResponseMs: 1000, notesToReview: [])), at: 2)
         replay = RoundReplay(round: run.round, events: run.events)
         #expect(replay.hasEnded)
     }
@@ -898,8 +897,8 @@ private struct Run {
         #expect(week.responseTimes.byPreviousNote.first { $0.distance == .samePlace }?.answers == 0)
 
         run.add(.roundEnded(RoundEnded(round: run.round, reason: .stopped, durationMs: 9_000, pausedMs: 4_000, score: 2,
-                                       attempts: 3, bestStreak: 1, averageResponseMs: 2000, bestScore: nil,
-                                       isNewBest: false, notesToReview: ["treble.G4"])), at: 7207)
+                                       attempts: 3, bestStreak: 1, averageResponseMs: 2000,
+                                       notesToReview: ["treble.G4"])), at: 7207)
         week = report(run.events)
         #expect(week.totals.rounds == 1 && week.totals.practiceSeconds == 9)
         let ended = try #require(week.recentRounds.first)
@@ -917,7 +916,7 @@ private struct Run {
         run.relaunch(after: 3600)
         // Written at the later launch, timed at the round's last event.
         var end = RoundEnded(round: run.round, reason: .interrupted, durationMs: 2_000, score: 1, attempts: 1, bestStreak: 1,
-                             averageResponseMs: 2000, bestScore: nil, isNewBest: false, notesToReview: [])
+                             averageResponseMs: 2000, notesToReview: [])
         end.recordedAt = run.start.addingTimeInterval(3600)
         run.add(.roundEnded(end), at: 2)
         let week = report(run.events)

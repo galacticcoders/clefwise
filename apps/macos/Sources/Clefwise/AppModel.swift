@@ -14,7 +14,7 @@ import Observation
 /// and each journal has its own run-file writer, with its own `Current` and `Pending`.
 ///
 /// The journal in use is read through one `JournalReader`, which the progress store, the game's
-/// note stats and best scores, and the library's pieces share, so each file is read once between
+/// note stats, and the library's pieces share, so each file is read once between
 /// them. From launch on it's watched (`JournalWatching`): whenever files arrive, from this Mac's
 /// runs or through a sync service, all three are brought up to date (`readJournal()`).
 ///
@@ -49,7 +49,7 @@ final class AppModel {
     let registry: JournalRegistry
     /// The journals' sheet and alerts on the main window.
     let setup: JournalSetup
-    /// The journal in use's game: its settings, note stats and best scores.
+    /// The journal in use's game: its settings and note stats.
     private(set) var game: Game
     /// The journal in use's piece library on this Mac.
     private(set) var library: PieceLibrary
@@ -498,7 +498,7 @@ final class AppModel {
         return true
     }
 
-    /// Brings the dashboard, the game's note stats and best scores, and the library's pieces up to
+    /// Brings the dashboard, the game's note stats, and the library's pieces up to
     /// date with the journal in use, all through its one reader, each off the main thread: the
     /// progress store reloads, the game refreshes (`Game.refreshStats(from:)`, which never takes
     /// them mid-round or without its own latest rounds), and the pieces are adopted
@@ -614,7 +614,7 @@ extension AppModel {
                                 journal: JournalEventRecorder(outbox: writer.outbox, device: device, launch: launch, log: log))
         }
 
-        /// `record`'s game: its settings, note stats and best scores are under its namespace, so a
+        /// `record`'s game: its settings and note stats are under its namespace, so a
         /// journal new to this Mac starts from the default settings. With no journal, the keys
         /// from before there were several. The piece it reopens is logged with `reopeningVia`.
         func makeGame(for record: JournalRecord?, library: PieceLibrary, reopeningVia source: PieceOpenSource) -> Game {

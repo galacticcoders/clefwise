@@ -101,10 +101,13 @@ private struct LogWriter {
     }
 }
 
-private func roundStarted(_ round: UUID, mode: Game.Mode = .practice) -> UsageEvent {
-    var settings = Game.Settings()
-    settings.mode = mode
-    return .roundStarted(RoundStarted(round: round, via: .button, settings: JSONValue(encoding: settings), keyFifths: 0, piece: nil))
+/// A round's start as versions until 2026-11-07 logged it, with `mode` in its settings: `practice`,
+/// or `sprint` for a 60-second sprint.
+private func roundStarted(_ round: UUID, mode: String = "practice") -> UsageEvent {
+    var settings: [String: JSONValue] = [:]
+    if case .object(let saved) = JSONValue(encoding: Game.Settings()) { settings = saved }
+    settings["mode"] = .string(mode)
+    return .roundStarted(RoundStarted(round: round, via: .button, settings: .object(settings), keyFifths: 0, piece: nil))
 }
 
 private func question(_ round: UUID, _ id: UUID, _ pitch: Pitch, index: Int = 0) -> UsageEvent {
@@ -122,7 +125,7 @@ private func answer(_ round: UUID, _ id: UUID, correct: Bool, responseMs: Int = 
 
 private func ended(_ round: UUID, _ reason: RoundEndReason = .stopped, score: Int, attempts: Int) -> UsageEvent {
     .roundEnded(RoundEnded(round: round, reason: reason, durationMs: 4000, score: score, attempts: attempts, bestStreak: score,
-                           averageResponseMs: nil, bestScore: nil, isNewBest: false, notesToReview: []))
+                           averageResponseMs: nil, notesToReview: []))
 }
 
 @MainActor
@@ -193,7 +196,7 @@ private func ended(_ round: UUID, _ reason: RoundEndReason = .stopped, score: In
         day2.raw(#"{"schema":1,"type":"keyPress","id":"#)
         // The next launch, a newer version, ends R4 normally after a pause.
         try day2.log(.appLaunched(launched("0.2.0", timeZone: "Europe/Stockholm")), s3, at: 600)
-        starts[r4] = try day2.log(roundStarted(r4, mode: .sprint), s3, at: 601).time
+        starts[r4] = try day2.log(roundStarted(r4, mode: "sprint"), s3, at: 601).time
         try day2.log(question(r4, q6, Pitch(.c, 5)), s3, at: 601.2)
         try day2.log(.roundPaused(RoundPaused(round: r4, question: q6, via: .key, activeMs: 300)), s3, at: 601.5)
         try day2.log(.roundResumed(RoundResumed(round: r4, question: q6, via: .key, pausedMs: 2000)), s3, at: 603.5)
@@ -262,7 +265,7 @@ private func ended(_ round: UUID, _ reason: RoundEndReason = .stopped, score: In
         #expect(end.time == starts[r3]!.addingTimeInterval(1.75))
         #expect(end.event == .roundEnded(RoundEnded(
             round: r3, reason: .interrupted, durationMs: 1750, pausedMs: nil, score: 1, attempts: 1, bestStreak: 1,
-            averageResponseMs: 1200, bestScore: nil, isNewBest: false, notesToReview: [],
+            averageResponseMs: 1200, notesToReview: [],
             unansweredQuestion: UnansweredQuestion(question: q5, shownMs: 0, keystrokes: []), recordedAt: importedAt)))
 
         // R4 in the next session, with that session's launch.
@@ -392,7 +395,7 @@ private func ended(_ round: UUID, _ reason: RoundEndReason = .stopped, score: In
         let end = LogImport.interruptedEnd(of: events, round: round, recordedAt: importedAt)
         #expect(end == RoundEnded(
             round: round, reason: .interrupted, durationMs: 7000, pausedMs: 13_000, score: 2, attempts: 3, bestStreak: 2,
-            averageResponseMs: 1500, bestScore: nil, isNewBest: false, notesToReview: ["treble.F4"],
+            averageResponseMs: 1500, notesToReview: ["treble.F4"],
             unansweredQuestion: UnansweredQuestion(question: d, shownMs: 3000, keystrokes: [], pausedMs: 13_000),
             recordedAt: importedAt))
     }

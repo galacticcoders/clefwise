@@ -33,7 +33,6 @@ private let gMajorTuneURL = URL(fileURLWithPath: "/tmp/clefwise-typing-tests/tun
 
     /// The G major tune in solfège (or `naming`), typed, its first note (G4) up.
     private func startTune(naming: NamingSystem = .solfege) throws {
-        game.settings.mode = .practice
         game.settings.answerInput = .keyboard
         game.settings.naming = naming
         game.open(gMajorTune, from: gMajorTuneURL)
@@ -112,7 +111,6 @@ private let gMajorTuneURL = URL(fileURLWithPath: "/tmp/clefwise-typing-tests/tun
     }
 
     @Test func withoutSignsEveryNameStillGoesInAtOnce() throws {
-        game.settings.mode = .practice
         game.settings.answerInput = .keyboard
         game.settings.naming = .solfege
         game.start()

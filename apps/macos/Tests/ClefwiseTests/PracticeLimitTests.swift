@@ -10,7 +10,6 @@ import Testing
     }
 
     private func practice(_ limit: Game.PracticeLimit, minutes: Int = 5, notes: Int = 100) {
-        game.settings.mode = .practice
         game.settings.practiceLimit = limit
         game.settings.practiceMinutes = minutes
         game.settings.practiceNotes = notes
@@ -22,7 +21,6 @@ import Testing
     }
 
     @Test func practiceHasNoLimitUnlessOneIsChosen() {
-        game.settings.mode = .practice
         #expect(game.settings.practiceLimit == .endless)
         #expect(game.roundTimeLimit == nil && game.roundNoteLimit == nil)
         game.start()
@@ -38,7 +36,7 @@ import Testing
     @Test func settingsFromBeforeTheLimitLoad() throws {
         let saved = Data(#"{"mode":"practice"}"#.utf8)
         let settings = try JSONDecoder().decode(Game.Settings.self, from: saved)
-        #expect(settings.mode == .practice && settings.practiceLimit == .endless)
+        #expect(settings.practiceLimit == .endless)
         #expect(settings.practiceMinutes == 5 && settings.practiceNotes == 100)
     }
 
@@ -124,12 +122,27 @@ import Testing
         #expect(ended()?.reason == .stopped)
     }
 
-    @Test func sprintsIgnoreThePracticeLimit() {
-        practice(.notes, notes: 50)
-        game.settings.mode = .sprint
-        #expect(game.roundTimeLimit == 60 && game.roundNoteLimit == nil)
-        game.settings.practiceLimit = .time
-        #expect(game.roundTimeLimit == 60)
+    @Test func sprintSettingsFromBeforeItWentLoadAsPracticeKeepingTheRest() throws {
+        // As versions until 2026-11-07 saved them, set for a sprint.
+        let saved = #"{"addsAccidentals":true,"answerInput":"keyboard","clefChoice":"both","key":{"random":{}},"mode":"sprint","naming":"sargam","practiceLimit":"time","practiceMinutes":10,"practiceNotes":250,"range":{"above":false,"below":true,"ledgerLines":2,"onStaff":true},"showHints":true}"#
+        defaults.set(Data(saved.utf8), forKey: Game.Keys.settings)
+        let game = relaunch()
+        let settings = game.settings
+        #expect(settings.clefChoice == .both && settings.naming == .sargam && settings.answerInput == .keyboard)
+        #expect(settings.key == .random && settings.addsAccidentals && settings.showHints)
+        #expect(settings.range == NoteRange(below: true, ledgerLines: 2))
+        #expect(settings.practiceLimit == .time && settings.practiceMinutes == 10 && settings.practiceNotes == 250)
+        // Practice, with the limit saved: not a minute's sprint.
+        #expect(game.roundTimeLimit == 600 && game.roundNoteLimit == nil)
+        game.start()
+        game.tick(at: .now + .seconds(61))
+        #expect(game.phase == .playing)
+        game.stop()
+        // Saved again, the mode is gone.
+        game.settings.practiceLimit = .endless
+        let resaved = try #require(defaults.data(forKey: Game.Keys.settings))
+        let object = try #require(try JSONSerialization.jsonObject(with: resaved) as? [String: Any])
+        #expect(object["mode"] == nil && object["naming"] as? String == "sargam")
     }
 
     @Test func piecesIgnoreThePracticeLimit() throws {
@@ -156,13 +169,9 @@ import Testing
         game.start()
         answer(1)
         game.stop()
-        game.settings.mode = .sprint
-        game.settings.practiceLimit = .notes
-        game.start()
-        answer(1)
-        game.stop()
         let rounds = ProgressAnalyzer.report(from: recorder.events, filter: ProgressFilter(range: .all)).recentRounds
-        #expect(rounds.reversed().map(\.practiceLength) == ["50 notes", "15 min", nil, nil])
+        #expect(rounds.reversed().map(\.practiceLength) == ["50 notes", "15 min", nil])
+        #expect(rounds.allSatisfy { !$0.wasSprint })
         #expect(rounds.last?.endReason == .notesDone)
     }
 
