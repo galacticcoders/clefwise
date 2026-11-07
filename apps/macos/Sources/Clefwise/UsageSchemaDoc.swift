@@ -17,9 +17,18 @@ extension UsageExport {
         | `sessions.csv` | One row per app session, launch to quit. |
         | `settings.json` | The settings as saved when exporting. |
         | `note-stats.json` | The per-note history used to bring up notes you struggle with, as saved when exporting. |
-        | `best-scores.json` | Best sprint scores, as saved when exporting. |
         | `piece-library.json` | The pieces kept to practise again, as saved when exporting (see below). |
         | `SCHEMA.md` | This file. |
+
+        Exports from versions until 2026-11-07, which had a 60-second sprint beside practice
+        rounds, also hold `best-scores.json`: the best sprint scores, as saved when exporting (see
+        below).
+
+        **Data from versions with the sprint.** Rounds logged until 2026-11-07 can be sprints, and
+        their data has fields that newer data doesn't: `mode` in the settings, `bestScore` and
+        `isNewBest` in `roundEnded`, `bestScores` in `statsSnapshot`, and the matching columns of the
+        tables. Every round logged since is a practice round: its settings have no `mode`, and a
+        round without one is a practice round.
 
         ## Conventions
 
@@ -251,15 +260,15 @@ extension UsageExport {
         | Field | Meaning |
         |---|---|
         | `round` | The round's id. |
-        | `reason` | `timeUp` (the clock of a sprint or timed practice round ran out), `stopped` (Stop or Esc), `pieceComplete` (the last note of a piece), `notesDone` (the last of a practice round's set number of notes), `abandoned` (replaced by opening or closing a piece, or starting over), `appQuit` (the app quit mid-round), `interrupted` (the app stopped without quitting and the round couldn't be brought back; see `roundRestored`. It's written at a later launch, timed at the round's last event, with its duration, score and attempts counted from the events). |
+        | `reason` | `timeUp` (the clock of a timed round ran out, or of a sprint in versions until 2026-11-07), `stopped` (Stop or Esc), `pieceComplete` (the last note of a piece), `notesDone` (the last of a practice round's set number of notes), `abandoned` (replaced by opening or closing a piece, or starting over), `appQuit` (the app quit mid-round), `interrupted` (the app stopped without quitting and the round couldn't be brought back; see `roundRestored`. It's written at a later launch, timed at the round's last event, with its duration, score and attempts counted from the events). |
         | `durationMs` | How long the round went on, pauses left out. |
         | `pausedMs` | Time spent paused (absent when the round never was). |
         | `score` | Correct answers. |
         | `attempts` | All answers. |
         | `bestStreak` | Longest run of correct answers. |
         | `averageResponseMs` | Average response time, as in the round summary (absent when there was nothing to average). |
-        | `bestScore` | The best sprint score for these settings (sprints on random notes only). |
-        | `isNewBest` | This round set a new best score. |
+        | `bestScore` | Versions until 2026-11-07 only: the best sprint score for these settings (sprints on random notes only). |
+        | `isNewBest` | Versions until 2026-11-07 only: this round set a new best sprint score. |
         | `notesToReview` | The notes missed most, as listed in the round summary. |
         | `unansweredQuestion` | The question still on screen when the round ended, if any: `question` id, `shownMs` (how long it was up, pauses left out), `pausedMs` (how long the round was paused meanwhile, if it was), its `keystrokes` (as in `answerGiven`) and for notes asked together their `group` (then `question` is the first of them). |
         | `recordedAt` | When this event was written, if later than its `time`: an `interrupted` end takes the time of the round's last event, and is written at the next launch. Absent otherwise. |
@@ -349,7 +358,7 @@ extension UsageExport {
         |---|---|
         | `reason` | Why it was recorded. |
         | `noteStats` | As in `note-stats.json`. |
-        | `bestScores` | As in `best-scores.json`. |
+        | `bestScores` | Versions until 2026-11-07 only: the best sprint scores, as in `best-scores.json`. |
 
         ### Settings
 
@@ -360,8 +369,8 @@ extension UsageExport {
         |---|---|
         | `clefChoice` | `treble`, `bass` or `both`. |
         | `range` | Where random notes come from: `below`, `onStaff` and `above` (booleans, any mix; nothing chosen counts as `onStaff`), and `ledgerLines`, how far below and above go (1 to 5 ledger lines). Changes are logged per value (`range.above`, `range.ledgerLines`). Older versions saved a name instead: `staff` (on the staff), `oneLedgerLine` or `threeLedgerLines` (on the staff and that many ledger lines below and above). |
-        | `mode` | `sprint` (60 seconds) or `practice` (at your own pace, see `practiceLimit`). |
-        | `practiceLimit` | How a practice round of random notes ends: `endless` (when stopped), `time` (after `practiceMinutes`) or `notes` (once `practiceNotes` notes are answered, right or wrong). Ignored in sprints and piece rounds. Absent in settings saved before it existed, which means `endless`. |
+        | `mode` | Versions until 2026-11-07 only: `sprint` (60 seconds) or `practice` (at your own pace, see `practiceLimit`). Settings without it are practice: every round is one now. |
+        | `practiceLimit` | How a round of random notes ends: `endless` (when stopped), `time` (after `practiceMinutes`) or `notes` (once `practiceNotes` notes are answered, right or wrong). Ignored in piece rounds, and in sprints. Absent in settings saved before it existed, which means `endless`. |
         | `practiceMinutes`, `practiceNotes` | The length chosen for each kind of limit. Both stay saved whichever limit is in use. |
         | `naming` | `letters`, `solfege` or `sargam`. |
         | `answerInput` | `buttons`, `piano` or `keyboard`. |
@@ -390,12 +399,13 @@ extension UsageExport {
         ### `note-stats.json` and `best-scores.json`
 
         Note stats are keyed by clef and pitch (`treble.F♯4`): `attempts`, `correct`, and
-        `recent`, the latest results (up to 8, oldest first, `true` = correct). Best scores are
-        keyed by the sprint's setup: `clefChoice.range`, where the range is `staff`, `oneLedgerLine` or
-        `threeLedgerLines` for those choices (as older versions saved them) and otherwise lists the
-        parts with the ledger lines, like `below2+staff` or `below5+above5`; then `.piano` or `.keyboard` unless
-        answering with buttons, `.keyN` or `.keyRandom` unless in C major, and `.acc` with added
-        accidentals, e.g. `treble.staff` or `both.oneLedgerLine.piano.key-2.acc`.
+        `recent`, the latest results (up to 8, oldest first, `true` = correct). Best scores, in
+        exports from versions until 2026-11-07, are keyed by the sprint's setup: `clefChoice.range`,
+        where the range is `staff`, `oneLedgerLine` or `threeLedgerLines` for those choices (as
+        older versions saved them) and otherwise lists the parts with the ledger lines, like
+        `below2+staff` or `below5+above5`; then `.piano` or `.keyboard` unless answering with
+        buttons, `.keyN` or `.keyRandom` unless in C major, and `.acc` with added accidentals, e.g.
+        `treble.staff` or `both.oneLedgerLine.piano.key-2.acc`.
 
         ## The tables
 
@@ -436,7 +446,7 @@ extension UsageExport {
         | `scoreAfter`, `streakAfter` | Score and streak after the answer. |
         | `hintsVisible`, `keyNamesVisible` | Whether the staff hints and the names on the piano keys were showing. |
         | `pickChance` | The chance the note had of being picked (random and shuffled rounds). |
-        | `mode`, `clefChoice`, `range`, `addsAccidentals` | The round's settings. `range` by its short name, as best scores key it (`staff`, `below2+staff+above2`). |
+        | `mode`, `clefChoice`, `range`, `addsAccidentals` | The round's settings. `mode` is empty for rounds without it, which are practice rounds (see Data from versions with the sprint). `range` by its short name (`staff`, `below2+staff+above2`), as best scores were keyed. |
         | `keySetting` | The round's key setting: a fixed key in fifths, or `random`. |
         | `pieceTitle` | The piece, for piece rounds. |
 
@@ -451,14 +461,14 @@ extension UsageExport {
         | `endLocalTime`, `endTime` | When it ended; empty if no `roundEnded` was logged (the app crashed, or the round is still going). An `interrupted` round ends at its last event. |
         | `session`, `round` | Ids, as in the log. A round that came back after a crash spans two sessions: `session` is the one it started in. |
         | `via` | What started it. |
-        | `mode`, `clefChoice`, `range`, `addsAccidentals`, `naming`, `answerInput` | Settings at the start. `range` by its short name, as best scores key it (`staff`, `below2+staff+above2`). |
+        | `mode`, `clefChoice`, `range`, `addsAccidentals`, `naming`, `answerInput` | Settings at the start. `mode` is empty for rounds without it, which are practice rounds (see Data from versions with the sprint). `range` by its short name (`staff`, `below2+staff+above2`), as best scores were keyed. |
         | `keySetting` | The key setting: a fixed key in fifths, or `random`. |
         | `keyFifths` | The key the round was in (a random key resolved). |
-        | `practiceLimit`, `practiceTarget` | Practice rounds of random notes with a limit: `time` and its minutes, or `notes` and how many. Empty for other rounds. |
+        | `practiceLimit`, `practiceTarget` | Rounds of random notes with a limit: `time` and its minutes, or `notes` and how many. Empty for other rounds (pieces, rounds without a limit, and sprints). |
         | `pieceTitle`, `piecePart`, `pieceHand`, `pieceOrder`, `pieceStartBar`, `pieceOneNotePerChord`, `pieceNotes` | Piece rounds only: as in `roundStarted.piece` (`pieceNotes` is `noteCount`). |
         | `pieceChords` | Piece rounds only: `piece.chords`, or for rounds logged before it existed `topOrBottom` or `eachNote` from `oneNotePerChord`. |
         | `pieceLibraryID` | Piece rounds only: `piece.libraryID`, the piece's entry in the piece library, which tells pieces with the same title apart; empty for rounds logged before the library. |
-        | `endReason`, `durationMs`, `pausedMs`, `score`, `attempts`, `bestStreak`, `averageResponseMs`, `bestScore`, `isNewBest` | From `roundEnded`. The time between a crash and the round coming back counts in neither `durationMs` nor `pausedMs`. |
+        | `endReason`, `durationMs`, `pausedMs`, `score`, `attempts`, `bestStreak`, `averageResponseMs`, `bestScore`, `isNewBest` | From `roundEnded`. The time between a crash and the round coming back counts in neither `durationMs` nor `pausedMs`. `bestScore` and `isNewBest` are empty for rounds since 2026-11-07. |
         | `endRecordedTime` | `recordedAt` from `roundEnded`: for an `interrupted` round, when a later launch wrote its end. Empty otherwise. |
         | `restores` | How many times the round came back after a crash (`roundRestored`). |
         | `accuracy` | `score / attempts`, 0–1. |

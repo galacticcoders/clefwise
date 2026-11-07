@@ -52,7 +52,7 @@ private extension GameTestBench {
 
     @Test func statsAreSnapshottedOncePerStore() {
         #expect(types.first == "statsSnapshot")
-        #expect(logged(StatsSnapshot.self) == [StatsSnapshot(reason: "beforeUsageLog", noteStats: [:], bestScores: [:])])
+        #expect(logged(StatsSnapshot.self) == [StatsSnapshot(reason: "beforeUsageLog", noteStats: [:])])
 
         game.start()
         answerRight()
@@ -66,11 +66,12 @@ private extension GameTestBench {
         let older = InMemoryDefaults()
         let stats = ["treble.C4": NoteStat(attempts: 3, correct: 2, recent: [true, false, true])]
         older.set(try JSONEncoder().encode(stats), forKey: "noteStats")
+        // The best sprint scores versions until 2026-11-07 kept stay out of it: nothing reads them now.
         older.set(try JSONEncoder().encode(["treble.staff": 12]), forKey: "bestScores")
         let recorder = MemoryUsageRecorder()
         _ = Game(defaults: older, recorder: recorder, library: .temporary())
         #expect(recorder.events.map(\.event) == [
-            .statsSnapshot(StatsSnapshot(reason: "beforeUsageLog", noteStats: stats, bestScores: ["treble.staff": 12])),
+            .statsSnapshot(StatsSnapshot(reason: "beforeUsageLog", noteStats: stats)),
         ])
         #expect(older.object(forKey: "usageLogStarted") != nil)
     }
@@ -78,7 +79,6 @@ private extension GameTestBench {
     // MARK: Questions and answers
 
     @Test func randomRoundsLogQuestionsAndClickedAnswers() async throws {
-        game.settings.mode = .practice
         game.start()
         let started = try #require(logged(RoundStarted.self).last)
         #expect(started.via == .button)
@@ -120,7 +120,6 @@ private extension GameTestBench {
     }
 
     @Test func shortcutsKeepTheirKeys() async throws {
-        game.settings.mode = .practice
         game.start()
         var question = try #require(game.question)
         let letter = question.pitch.letter.name.lowercased()
@@ -146,7 +145,6 @@ private extension GameTestBench {
     }
 
     @Test func typingLogsEveryKeystroke() async throws {
-        game.settings.mode = .practice
         game.settings.answerInput = .keyboard
         game.settings.naming = .solfege
         // G major: the right name goes in by itself, with its ♯ when it has one; no Return.
@@ -175,7 +173,6 @@ private extension GameTestBench {
     }
 
     @Test func armingASignOnTheNoteButtonsIsLogged() async throws {
-        game.settings.mode = .practice
         game.settings.key = .fixed(KeySignature(fifths: 1))
         game.start()
         let question = try #require(game.question)
@@ -195,7 +192,6 @@ private extension GameTestBench {
     }
 
     @Test func pianoAnswersKeepTheKeyAndTellAWrongOctave() async throws {
-        game.settings.mode = .practice
         game.settings.answerInput = .piano
         game.settings.showKeyNames = true
         game.start()
@@ -229,7 +225,6 @@ private extension GameTestBench {
     }
 
     @Test func aSargamAnswerIsNamedAsASwara() throws {
-        game.settings.mode = .practice
         game.settings.naming = .sargam
         game.settings.answerInput = .piano
         game.start()
@@ -258,7 +253,6 @@ private extension GameTestBench {
     }
 
     @Test func answersDuringTheMissPauseAreIgnored() throws {
-        game.settings.mode = .practice
         game.start()
         let round = try #require(logged(RoundStarted.self).last).round
         let question = try #require(game.question)
@@ -277,7 +271,6 @@ private extension GameTestBench {
     }
 
     @Test func typingDuringTheMissPauseIsIgnored() throws {
-        game.settings.mode = .practice
         game.settings.answerInput = .keyboard
         game.start()
         let round = try #require(logged(RoundStarted.self).last).round
@@ -287,7 +280,6 @@ private extension GameTestBench {
     }
 
     @Test func komalSaIsIgnored() async throws {
-        game.settings.mode = .practice
         game.settings.naming = .sargam
         game.settings.key = .fixed(KeySignature(fifths: -1)) // F major, so ♭ is on offer
         game.start()
@@ -341,13 +333,11 @@ private extension GameTestBench {
         game.settings.key = .fixed(KeySignature(fifths: 2))
         var settings = game.settings
         settings.showHints = true
-        settings.mode = .practice
         game.settings = settings
         game.settings.key = .random
         #expect(Array(logged(SettingChanged.self).dropFirst()) == [
             SettingChanged(setting: "naming", from: .string("letters"), to: .string("solfege")),
             SettingChanged(setting: "key.fixed._0.fifths", from: .number(0), to: .number(2)),
-            SettingChanged(setting: "mode", from: .string("sprint"), to: .string("practice")),
             SettingChanged(setting: "showHints", from: .bool(false), to: .bool(true)),
             SettingChanged(setting: "key.fixed._0.fifths", from: .number(2), to: .null),
             SettingChanged(setting: "key.random", from: .null, to: .object([:])),
@@ -371,7 +361,6 @@ private extension GameTestBench {
     // MARK: Round ends
 
     @Test func roundsEndForTheirReasons() {
-        game.settings.mode = .practice
         game.start()
         answerRight()
         game.stop()
@@ -388,39 +377,27 @@ private extension GameTestBench {
         #expect(ended.map(\.reason) == [.stopped, .stopped, .abandoned, .appQuit])
         #expect(ended.map(\.round) == logged(RoundStarted.self).map(\.round))
         #expect(ended.map(\.score) == [1, 0, 1, 0])
-        #expect(ended.allSatisfy { $0.durationMs >= 0 && $0.bestScore == nil && !$0.isNewBest })
+        #expect(ended.allSatisfy { $0.durationMs >= 0 && $0.bestScore == nil && $0.isNewBest == nil })
+        #expect(ended.last?.averageResponseMs == nil)
     }
 
-    @Test func aSprintEndsWhenTimeIsUp() throws {
-        game.settings.mode = .sprint
+    @Test func aTimedRoundEndsWhenTimeIsUp() throws {
+        game.settings.practiceLimit = .time
+        game.settings.practiceMinutes = 2
         game.start()
         for _ in 0..<3 { answerRight() }
-        game.tick(at: .now + .seconds(61))
+        game.tick(at: .now + .seconds(121))
         #expect(game.summary?.timeRanOut == true)
 
         let ended = try #require(logged(RoundEnded.self).last)
         #expect(ended.reason == .timeUp)
         #expect(ended.score == 3 && ended.attempts == 3 && ended.bestStreak == 3)
-        #expect(ended.bestScore == 3 && ended.isNewBest)
+        #expect(ended.bestScore == nil && ended.isNewBest == nil)
         #expect(ended.averageResponseMs != nil)
         #expect(ended.notesToReview.isEmpty)
     }
 
-    @Test func aStoppedSprintKeepsTheBestScoreItDidNotBeat() throws {
-        game.settings.mode = .sprint
-        game.start()
-        answerRight()
-        game.stop()
-        game.start()
-        game.appWillTerminate()
-        let ended = logged(RoundEnded.self)
-        #expect(ended.map(\.isNewBest) == [true, false])
-        #expect(ended.map(\.bestScore) == [1, 1])
-        #expect(ended.last?.averageResponseMs == nil)
-    }
-
     @Test func pieceRoundsLogTheirPieceAndEndWithIt() async throws {
-        game.settings.mode = .practice
         game.open(tune, from: tuneURL)
         game.start()
         let started = try #require(logged(RoundStarted.self).last)
@@ -447,7 +424,7 @@ private extension GameTestBench {
         let ended = try #require(logged(RoundEnded.self).last)
         #expect(ended.reason == .pieceComplete)
         #expect(ended.score == 2 && ended.attempts == 3 && ended.bestStreak == 2)
-        #expect(ended.bestScore == nil && !ended.isNewBest)
+        #expect(ended.bestScore == nil && ended.isNewBest == nil)
         #expect(ended.notesToReview == ["treble.G4"])
     }
 
@@ -527,7 +504,6 @@ private extension GameTestBench {
     // MARK: Order
 
     @Test func roundEventsComeInOrder() async throws {
-        game.settings.mode = .practice
         press(" ", keyCode: 49) // Space starts a round
         answerRight()
         game.answer(Pitch(.c, 1))

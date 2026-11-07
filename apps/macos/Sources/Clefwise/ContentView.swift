@@ -129,31 +129,23 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var settingsToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
+            // A piece brings its own clefs, notes and keys. Disabled rather than hidden, so the
+            // toolbar doesn't jump when a piece is opened or closed; and fixed while a round plays.
             Group {
-                // A piece brings its own clefs, notes and keys. Disabled rather than hidden, so the
-                // toolbar doesn't jump when a piece is opened or closed.
-                Group {
-                    Picker("Clef", selection: $game.settings.clefChoice) {
-                        ForEach(ClefChoice.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .help(pieceHelp("Which clef to read", piece: "The piece sets the clef"))
-
-                    keyMenu
-
-                    Toggle("Accidentals", isOn: $game.settings.addsAccidentals)
-                        .toggleStyle(.checkbox)
-                        .help(pieceHelp("Now and then put a ♯, ♭ or ♮ in front of a note, on top of the key signature",
-                                        piece: "The piece's own ♯, ♭ and ♮ are shown"))
+                Picker("Clef", selection: $game.settings.clefChoice) {
+                    ForEach(ClefChoice.allCases) { Text($0.label).tag($0) }
                 }
-                .disabled(game.isPractisingPiece)
+                .pickerStyle(.segmented)
+                .help(pieceHelp("Which clef to read", piece: "The piece sets the clef"))
 
-                // A pop-up rather than segments, so the key controls fit without the toolbar overflowing.
-                Picker("Mode", selection: $game.settings.mode) {
-                    ForEach(Game.Mode.allCases) { Text($0.label).tag($0) }
-                }
-                .help("Race the clock, or practice at your own pace")
+                keyMenu
+
+                Toggle("Accidentals", isOn: $game.settings.addsAccidentals)
+                    .toggleStyle(.checkbox)
+                    .help(pieceHelp("Now and then put a ♯, ♭ or ♮ in front of a note, on top of the key signature",
+                                    piece: "The piece's own ♯, ♭ and ♮ are shown"))
             }
+            .disabled(game.isPractisingPiece)
             .disabled(game.phase == .playing)
 
             Picker("Note names", selection: $game.settings.naming) {
@@ -624,9 +616,7 @@ private struct StartPanel: View {
                 .foregroundStyle(.secondary)
             NoteRangeControls(game: game)
                 .padding(.top, 4)
-            if game.settings.mode == .practice {
-                PracticeLimitControls(game: game)
-            }
+            PracticeLimitControls(game: game)
             Button {
                 game.start(via: .button)
             } label: {
@@ -680,7 +670,6 @@ private struct StartPanel: View {
     }
 
     private var heading: String {
-        guard game.settings.mode == .practice else { return "How many notes can you name in 60 seconds?" }
         switch game.settings.practiceLimit {
         case .endless: return "Practice at your own pace"
         case .time: return "How many notes can you name in \(game.settings.practiceMinutes) minutes?"
@@ -694,9 +683,6 @@ private struct StartPanel: View {
         // Plain C major goes unsaid, as before keys existed.
         if game.accidentalsPossible {
             parts.append(game.settings.key.shortLabel + (game.settings.addsAccidentals ? " + accidentals" : ""))
-        }
-        if game.settings.mode == .sprint, let best = game.bestScore {
-            parts.append("Best: \(best)")
         }
         return parts.joined(separator: "  ·  ")
     }
@@ -859,17 +845,6 @@ private struct SummaryPanel: View {
                     .font(.title3)
                     .foregroundStyle(.secondary)
             }
-            // Pieces keep no best score: one piece's score says nothing about another's.
-            if summary.pieceTitle == nil {
-                if summary.isNewBest {
-                    Label("New personal best!", systemImage: "star.fill")
-                        .font(.headline)
-                        .foregroundStyle(.orange)
-                } else if let best = summary.bestScore {
-                    Text("Personal best: \(best)")
-                        .foregroundStyle(.secondary)
-                }
-            }
             HStack(spacing: 32) {
                 if let seconds = summary.noteRoundSeconds {
                     Metric(title: "Time", value: String(format: "%d:%02d", Int(seconds) / 60, Int(seconds) % 60))
@@ -904,7 +879,7 @@ private struct SummaryPanel: View {
         if summary.finishedPiece { return "Piece complete" }
         if summary.finishedNotes { return "\(summary.attempts.formatted()) notes done" }
         if summary.timeRanOut { return "Time's up!" }
-        return summary.mode == .practice && !summary.hadLimit ? "Practice complete" : "Round ended"
+        return summary.hadLimit ? "Round ended" : "Practice complete"
     }
 
     /// "F♯4", or "Fa♯ (F♯4)" with other naming systems; adds the clef when clefs were mixed.

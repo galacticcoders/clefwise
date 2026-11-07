@@ -432,7 +432,7 @@ private struct Analysis {
         let defaults = Game.Settings()
         return RecentRound(
             id: round.id, started: round.started!, durationMs: round.durationMs,
-            mode: settings.string("mode") ?? defaults.mode.rawValue,
+            wasSprint: round.start?.wasSprint ?? false,
             input: settings.string("answerInput") ?? defaults.answerInput.rawValue,
             naming: settings.string("naming") ?? defaults.naming.rawValue,
             description: description(of: round, settings),
@@ -440,9 +440,10 @@ private struct Analysis {
             endReason: round.end?.reason, practiceLength: practiceLength(of: round, settings))
     }
 
-    /// "5 min" or "100 notes" for a practice round of random notes with a limit.
+    /// "5 min" or "100 notes" for a round of random notes with a limit. An old sprint had none,
+    /// whatever its saved settings say.
     private static func practiceLength(of round: RoundRecord, _ settings: SavedSettings) -> String? {
-        guard round.start?.piece == nil, settings.string("mode") == Game.Mode.practice.rawValue else { return nil }
+        guard let start = round.start, start.piece == nil, !start.wasSprint else { return nil }
         let defaults = Game.Settings()
         switch settings.string("practiceLimit").flatMap(Game.PracticeLimit.init(rawValue:)) {
         case .time:

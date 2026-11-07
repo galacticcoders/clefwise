@@ -28,7 +28,7 @@ enum JournalFixture {
 
     static func ended(_ round: UUID, reason: RoundEndReason = .stopped) -> UsageEvent {
         .roundEnded(RoundEnded(round: round, reason: reason, durationMs: 5_000, score: 1, attempts: 1, bestStreak: 1,
-                               averageResponseMs: 900, bestScore: nil, isNewBest: false, notesToReview: []))
+                               averageResponseMs: 900, notesToReview: []))
     }
 
     static func action(_ name: String) -> UsageEvent {

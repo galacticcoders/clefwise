@@ -24,14 +24,14 @@ import Testing
         #expect(NoteRange.oneLedgerLine.span == -2...10)
         #expect(NoteRange.threeLedgerLines.span == -6...14)
         for (name, span) in [("staff", 0...8), ("oneLedgerLine", -2...10), ("threeLedgerLines", -6...14)] {
-            let saved = try JSONDecoder().decode(Game.Settings.self, from: Data(#"{"range":"\#(name)","mode":"practice"}"#.utf8))
+            let saved = try JSONDecoder().decode(Game.Settings.self, from: Data(#"{"range":"\#(name)","naming":"solfege"}"#.utf8))
             #expect(saved.range.span == span)
             #expect(saved.range.positions == Array(span))
-            #expect(saved.mode == .practice)
+            #expect(saved.naming == .solfege)
         }
         // A name this version doesn't know falls back to the staff rather than losing every setting.
-        let unknown = try JSONDecoder().decode(Game.Settings.self, from: Data(#"{"range":"twoLedgerLines","mode":"practice"}"#.utf8))
-        #expect(unknown.range == .staff && unknown.mode == .practice)
+        let unknown = try JSONDecoder().decode(Game.Settings.self, from: Data(#"{"range":"twoLedgerLines","naming":"solfege"}"#.utf8))
+        #expect(unknown.range == .staff && unknown.naming == .solfege)
     }
 
     @Test func savedAsItsParts() throws {
@@ -45,7 +45,7 @@ import Testing
         #expect(tooFar == NoteRange(above: true, ledgerLines: 5))
     }
 
-    @Test func bestScoresKeepTheOldNames() {
+    @Test func theExportKeepsTheOldNames() {
         #expect(NoteRange.staff.key == "staff")
         // The ledger lines don't matter while only the staff is ticked.
         #expect(NoteRange(ledgerLines: 4).key == "staff")
@@ -73,7 +73,6 @@ import Testing
 @Suite final class NoteRangeGameTests: GameTestBench {
     /// Staff positions of the notes a practice round asks, answering each right.
     private func positionsAsked(_ count: Int = 300) -> Set<Int> {
-        game.settings.mode = .practice
         game.start()
         var positions: Set<Int> = []
         for _ in 0..<count {

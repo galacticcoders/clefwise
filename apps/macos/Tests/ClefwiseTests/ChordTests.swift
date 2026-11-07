@@ -86,10 +86,9 @@ private func names(_ text: String) -> [Game.NoteName] {
 }
 
 private extension GameTestBench {
-    /// Opens the piece to name its chords together, in practice mode.
+    /// Opens the piece to name its chords together.
     func together(_ hand: Game.PieceSettings.Hand = .both, input: Game.AnswerInput = .buttons, flat: Bool = false,
                   naming: NamingSystem = .letters) {
-        game.settings.mode = .practice
         game.settings.answerInput = input
         game.settings.naming = naming
         game.settings.piece.hand = hand
@@ -245,7 +244,6 @@ private extension GameTestBench {
     }
 
     @Test func theOtherChoicesAskAsBefore() {
-        game.settings.mode = .practice
         game.settings.piece.hand = .both
         game.open(chordPiece(), from: pieceURL)
         #expect(askedThrough() == [[c3], [b4], [g5], [c5], [g2], [c4], [c5], [e4], [b4], [c5], [e5], [a4]])
@@ -256,7 +254,6 @@ private extension GameTestBench {
     }
 
     @Test func theFixtureAsksBothHandsTogether() throws {
-        game.settings.mode = .practice
         game.settings.piece.chords = .together
         game.settings.piece.hand = .both
         game.openPiece(at: try #require(Fixtures.url("bar-view.musicxml")))
@@ -308,10 +305,10 @@ private extension GameTestBench {
         #expect(game.barStrip == Game.BarStrip(bars: 1...2, current: 1, pieceBars: 2, showsDone: true))
     }
 
-    @Test func aSprintWrapsByGroups() {
+    @Test func theRoundEndsAfterTheLastGroup() {
         together(.right)
-        game.settings.mode = .sprint
-        #expect(askedThrough(limit: 8) == [[b4, g5], [c5], [c4, c5], [e4, b4], [c5, e5], [a4], [b4, g5], [c5]])
+        #expect(askedThrough(limit: 8) == [[b4, g5], [c5], [c4, c5], [e4, b4], [c5, e5], [a4]])
+        #expect(game.phase == .finished && game.summary?.finishedPiece == true)
     }
 
     @Test func shuffledRoundsDrawGroups() {

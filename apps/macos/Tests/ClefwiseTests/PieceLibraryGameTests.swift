@@ -137,7 +137,6 @@ import Testing
     }
 
     @Test func roundsAndClosingKnowTheLibraryEntry() throws {
-        game.settings.mode = .practice
         let url = try userFile("bar-view.musicxml")
         game.openPiece(at: url)
         let id = try #require(game.pieceEntryID)

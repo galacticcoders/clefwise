@@ -22,8 +22,9 @@ private extension GameTestBench {
 
 @MainActor
 @Suite final class PauseTests: GameTestBench {
-    @Test func aPausedSprintKeepsItsTime() {
-        game.settings.mode = .sprint
+    @Test func aPausedTimedRoundKeepsItsTime() {
+        game.settings.practiceLimit = .time
+        game.settings.practiceMinutes = 2
         let start = ContinuousClock.now
         game.start()
         game.pause(at: start + .seconds(10))
@@ -34,13 +35,13 @@ private extension GameTestBench {
         #expect(game.phase == .playing)
         #expect(game.elapsed < 11)
 
-        // Resumed after 90 seconds paused: 50 seconds of sprint are left.
+        // Resumed after 90 seconds paused: 110 of the round's 120 seconds are left.
         game.resume(at: start + .seconds(100))
         #expect(!game.isPaused && game.isTakingAnswers)
-        game.tick(at: start + .seconds(145))
+        game.tick(at: start + .seconds(205))
         #expect(game.phase == .playing)
-        #expect(game.elapsed >= 54 && game.elapsed < 56)
-        game.tick(at: start + .seconds(151))
+        #expect(game.elapsed >= 114 && game.elapsed < 116)
+        game.tick(at: start + .seconds(211))
         #expect(game.phase == .finished)
         #expect(game.summary?.timeRanOut == true)
     }

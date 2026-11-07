@@ -70,8 +70,7 @@ enum UsageExport {
 
     /// The names `Game` saves under in the defaults (`Game.Keys`, before the namespace), and the
     /// files they go to.
-    private static let savedValues = [(Game.Keys.settings, "settings.json"), (Game.Keys.noteStats, "note-stats.json"),
-                                      (Game.Keys.bestScores, "best-scores.json")]
+    private static let savedValues = [(Game.Keys.settings, "settings.json"), (Game.Keys.noteStats, "note-stats.json")]
 
     /// Runs one step, so a failure says which step it was.
     private static func step<T>(_ name: String, _ work: () throws -> T) throws -> T {
@@ -263,9 +262,8 @@ enum UsageExport {
         return (value * scale).rounded() / scale
     }
 
-    /// A value from a round's saved settings by key path ("piece.hand"), as cell text.
-    /// The notes' range by its short name (`staff`, `below2+staff+above2`), as best scores key it,
-    /// from its saved parts or the name older versions saved.
+    /// The notes' range by its short name (`staff`, `below2+staff+above2`, `NoteRange.key`), from
+    /// its saved parts or the name older versions saved.
     private static func range(in settings: JSONValue?) -> String? {
         guard case .object(let object)? = settings, let value = object["range"],
               let data = try? JSONEncoder().encode(value),
@@ -273,9 +271,10 @@ enum UsageExport {
         return range.key
     }
 
-    /// The limit a round ran under, and its minutes or notes; nil for a round without one.
+    /// The limit a round ran under, and its minutes or notes; nil for a round without one. An old
+    /// sprint had none, whatever its saved settings say.
     private static func practiceLimit(of start: RoundStarted?) -> (limit: String, target: String?)? {
-        guard let start, start.piece == nil, setting("mode", in: start.settings) == Game.Mode.practice.rawValue,
+        guard let start, start.piece == nil, !start.wasSprint,
               let limit = setting("practiceLimit", in: start.settings) else { return nil }
         switch Game.PracticeLimit(rawValue: limit) {
         case .time: return (limit, setting("practiceMinutes", in: start.settings))
@@ -284,6 +283,7 @@ enum UsageExport {
         }
     }
 
+    /// A value from a round's saved settings by key path ("piece.hand"), as cell text.
     private static func setting(_ path: String, in settings: JSONValue?) -> String? {
         var value = settings
         for key in path.split(separator: ".") {

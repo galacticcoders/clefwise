@@ -150,8 +150,7 @@ private let launch = AppLaunched(appVersion: "0.1.0", build: "7", osVersion: "26
                         session: session, sequence: 4),
             LoggedEvent(.appActivity(AppActivity(active: false)), session: session, sequence: 5),
             LoggedEvent(.roundEnded(RoundEnded(round: runID, reason: .stopped, durationMs: 1000, score: 1, attempts: 1,
-                                               bestStreak: 1, averageResponseMs: 800, bestScore: nil, isNewBest: false,
-                                               notesToReview: [])),
+                                               bestStreak: 1, averageResponseMs: 800, notesToReview: [])),
                         session: session, sequence: 6),
         ]
     }
