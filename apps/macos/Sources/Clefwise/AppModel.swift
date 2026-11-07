@@ -62,9 +62,9 @@ final class AppModel {
     /// `appLaunched` first, go on in it. `Game.restore` has brought the round back or ended it.
     @ObservationIgnored let pendingRun: PendingRun?
     /// Called after launch (`didFinishLaunching()`), after each switch, and when the journal in
-    /// use is made or found again (moved and found by its bookmark too), with what the app now
-    /// keeps for it; nil once no journal is in use. By then the journal is watched and being read
-    /// again. Does nothing until the app sets it.
+    /// use is made, found again or renamed (moved and found by its bookmark too), with what the app
+    /// now keeps for it; nil once no journal is in use. By then the journal is watched and being
+    /// read again. Does nothing until the app sets it.
     @ObservationIgnored var onJournalChanged: (Context?) -> Void = { _ in }
     /// Shows a folder in Finder, for Show Journal in Finder; tests put their own.
     @ObservationIgnored var revealInFinder: (URL) -> Void = { NSWorkspace.shared.open($0) }
@@ -136,6 +136,16 @@ final class AppModel {
         progressStore = factory.makeStore(for: reader)
         if let record, let writer { writers[record.id] = writer }
         activeID = record?.id
+        // Wherever the journal in use is kept now, it's followed there, however that came to light:
+        // renamed here, or moved or renamed in Finder and found by its bookmark (by the watcher, a
+        // run being placed, Show Journal in Finder). Afterwards, as it's heard of in the middle of
+        // looking for the folder.
+        registry.onMoved = { [weak self] moved in
+            Task { @MainActor in
+                guard let self, moved.id == self.activeID else { return }
+                self.followJournalInUse()
+            }
+        }
     }
 
     /// The journal in use; nil while there's none.
@@ -315,6 +325,44 @@ final class AppModel {
         revealInFinder(folder)
     }
 
+    /// File ▸ Rename Journal… and the start panel's Rename "<name>"…: asks for the journal in use's
+    /// new name (`renameJournal(to:)`), its name now filled in. One renamed in Finder since it was
+    /// last looked for is found first, so that's the name asked about; one that can't be found
+    /// brings up the alert instead. Not during a round.
+    func askToRename(from source: String) {
+        guard canChangeJournal, current != nil else { return }
+        log.recordUIAction("renameJournal", detail: source)
+        setup.lookAgain()
+        guard let record = current, setup.folder != nil else {
+            setup.isReportingMissing = true
+            return
+        }
+        setup.askToRename(record)
+    }
+
+    /// The rename dialog's Rename: renames the journal in use's folder to `name`, trimmed, where it
+    /// is (`JournalRegistry.rename(_:to:)`), and returns its record as it is now. The game carries
+    /// on as it was, the same journal with the same settings and stats; the window title and the
+    /// menus show the new name, and Show Journal in Finder, the reader, the progress store and the
+    /// watcher follow the folder (`followJournalInUse()`). The same name changes nothing. Throws,
+    /// changing nothing, for a name that won't do or is taken there, or when the folder can't be
+    /// renamed (logged as `renameJournalRefused`). Returns nil, changing nothing, during a round.
+    @discardableResult
+    func renameJournal(to name: String) throws -> JournalRecord? {
+        guard canChangeJournal, let record = current else { return nil }
+        let renamed: JournalRecord
+        do {
+            renamed = try registry.rename(record.id, to: name)
+        } catch {
+            log.recordUIAction("renameJournalRefused", detail: error.localizedDescription)
+            throw error
+        }
+        guard renamed.path != record.path else { return renamed }
+        log.recordUIAction("renamedJournal")
+        followJournalInUse()
+        return renamed
+    }
+
     /// The start panel's Remove "<name>" from List…: asks first (`remove(_:)`).
     func askToRemove(_ record: JournalRecord) {
         guard canChangeJournal else { return }
@@ -399,10 +447,10 @@ final class AppModel {
         pieceAdoption != nil
     }
 
-    /// From launch on, after each switch, and when the journal in use is made or found again: the
-    /// journal is watched where it is now (one folder at a time, so the last one watched no longer
-    /// is), and read (`readJournal()`); then `onJournalChanged` hears of it. With no journal in
-    /// use, nothing is watched.
+    /// From launch on, after each switch, and when the journal in use is made, found again or
+    /// renamed: the journal is watched where it is now (one folder at a time, so the last one
+    /// watched no longer is), and read (`readJournal()`); then `onJournalChanged` hears of it. With
+    /// no journal in use, nothing is watched.
     private func journalInUseChanged() {
         if let record = activeID.flatMap(registry.record(id:)) {
             let reader = follow(record)
@@ -415,9 +463,9 @@ final class AppModel {
     }
 
     /// The reader of `record`'s journal, the one in use, where the journal is now: the reader there
-    /// is, or when the journal is now somewhere else (found elsewhere with Locate…, or moved and
-    /// found by its bookmark), a new one, with a progress store reading through it. The game and
-    /// library stay: they don't read the folder themselves.
+    /// is, or when the journal is now somewhere else (found elsewhere with Locate…, renamed, or
+    /// moved and found by its bookmark), a new one, with a progress store reading through it. The
+    /// game and library stay: they don't read the folder themselves.
     private func follow(_ record: JournalRecord) -> JournalReader {
         if let reader, PracticeJournal.isSameFolder(reader.folder, factory.folder(for: record)) { return reader }
         let reader = factory.makeReader(for: record)
@@ -428,16 +476,26 @@ final class AppModel {
 
     /// The watcher saw something change in the journal in use: files arriving (this Mac's runs and
     /// pieces, or another device's through a sync service), or the folder itself appearing, going
-    /// or moving. Looks for the journal again, so Show Journal in Finder is up to date. One moved
-    /// and found by its bookmark is watched and read where it is now; otherwise it's read again.
+    /// or moving. One moved or renamed is followed (`followJournalInUse()`); otherwise it's read
+    /// again.
     private func journalDidChange() {
-        guard let record = activeID.flatMap(registry.record(id:)), let watched = reader else { return }
+        guard activeID != nil, reader != nil else { return }
+        if !followJournalInUse() { readJournal() }
+    }
+
+    /// Follows the journal in use to wherever it's kept now: renamed here (`renameJournal(to:)`),
+    /// or moved or renamed in Finder and found by its bookmark, the same way. Looks for it again, so
+    /// Show Journal in Finder is up to date; then, if it's somewhere other than where it's read
+    /// from, it's watched and read there, with a new reader and progress store
+    /// (`journalInUseChanged()`). The game and library carry on as they are. Returns whether it had
+    /// moved.
+    @discardableResult
+    private func followJournalInUse() -> Bool {
         setup.lookAgain()
-        if follow(record) !== watched {
-            journalInUseChanged()
-        } else {
-            readJournal()
-        }
+        guard let record = activeID.flatMap(registry.record(id:)), let reader,
+              !PracticeJournal.isSameFolder(reader.folder, factory.folder(for: record)) else { return false }
+        journalInUseChanged()
+        return true
     }
 
     /// Brings the dashboard, the game's note stats and best scores, and the library's pieces up to

@@ -7,7 +7,8 @@ import Observation
 /// The journals this Mac knows (`JournalRecord`s, kept in the defaults under `journals`) and the
 /// one in use (its id under `currentJournal`). Each record's folder is found through a
 /// `PracticeJournal` of its own, which follows the folder when it's moved or renamed and brings
-/// the record's path up to date. Nothing here ever deletes a journal's folder, or anything in it.
+/// the record's path up to date. A journal's name is its folder's, so renaming one renames its
+/// folder. Nothing here ever deletes a journal's folder, or anything in it.
 @MainActor @Observable
 final class JournalRegistry {
     /// Where the defaults keep the list and the one in use.
@@ -23,6 +24,12 @@ final class JournalRegistry {
     private(set) var currentID: UUID?
 
     @ObservationIgnored let defaults: UserDefaults
+    /// Hears of each journal whose record follows its folder to a new path, with the record as it
+    /// is now: renamed here (`rename(_:to:)`), located by the user, or moved or renamed in Finder
+    /// and found by its bookmark, whatever was looking for it then. Called on the main actor, possibly
+    /// in the middle of that look, so anything more is best done afterwards. Does nothing until the
+    /// app sets it.
+    @ObservationIgnored var onMoved: (JournalRecord) -> Void = { _ in }
     /// Each record's journal, made when first asked for and kept, so there's one per journal.
     @ObservationIgnored private var journals: [UUID: PracticeJournal] = [:]
 
@@ -128,6 +135,20 @@ final class JournalRegistry {
         try journal(for: record).use(folder)
     }
 
+    /// Renames the journal `id`'s folder to `name`, trimmed, in the folder it's in
+    /// (`PracticeJournal.rename(to:)`), and returns its record, whose path and bookmark, and so its
+    /// name, have followed. The same name changes nothing. Throws as that does, changing nothing (a
+    /// name that won't do, one already taken there, the journal missing, the file system refusing),
+    /// and `JournalError.missing` for an id not on the list.
+    @discardableResult
+    func rename(_ id: UUID, to name: String) throws -> JournalRecord {
+        guard let record = record(id: id) else { throw JournalError.missing }
+        // The journal tells `relocated` its new path and bookmark, here on the main actor, before
+        // it returns.
+        try journal(for: record).rename(to: name)
+        return self.record(id: id) ?? record
+    }
+
     /// Adds `record` (build 1's journal, brought over) and makes it the one in use.
     @discardableResult
     func add(_ record: JournalRecord) -> JournalRecord {
@@ -177,13 +198,15 @@ final class JournalRegistry {
         }
     }
 
-    /// The journal `id` was found, made or located at `path`.
+    /// The journal `id` was found, made, renamed or located at `path`.
     private func relocated(_ id: UUID, path: String, bookmark: Data?) {
         guard let index = records.firstIndex(where: { $0.id == id }),
               records[index].path != path || records[index].bookmark != bookmark else { return }
+        let hasMoved = records[index].path != path
         records[index].path = path
         records[index].bookmark = bookmark
         save()
+        if hasMoved { onMoved(records[index]) }
     }
 
     private func save() {
