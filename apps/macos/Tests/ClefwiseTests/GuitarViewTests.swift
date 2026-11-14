@@ -78,23 +78,29 @@ import Testing
 }
 
 @Suite struct FretNameTests {
-    @Test func naturalsHaveOneName() {
-        #expect(GuitarNeck.names(of: Pitch(.e, 2), in: .solfege, prefersFlats: false) == [["Mi"]])
-        #expect(GuitarNeck.names(of: Pitch(.b, 3), in: .letters, prefersFlats: true) == [["B"]])
-        #expect(GuitarNeck.names(of: Pitch(.g, 3), in: .sargam, prefersFlats: false) == [["Pa"]])
+    /// With the octave as it sounds: the open 6th string is E2, the 1st E4.
+    @Test func naturalsHaveOneNameWithTheirOctave() {
+        // Where it's narrow, the octave under the name.
+        #expect(GuitarNeck.names(of: Pitch(.e, 2), in: .solfege, prefersFlats: false) == [["Mi2"], ["Mi", "2"]])
+        #expect(GuitarNeck.names(of: Pitch(.b, 3), in: .letters, prefersFlats: true) == [["B3"], ["B", "3"]])
+        #expect(GuitarNeck.names(of: Pitch(.g, 3), in: .sargam, prefersFlats: false) == [["Pa3"], ["Pa", "3"]])
+        #expect(GuitarNeck.names(of: Pitch(.c, 6), in: .letters, prefersFlats: false) == [["C6"], ["C", "6"]])
+        let board = Fretboard()
+        #expect((1...6).map { GuitarNeck.names(of: board.pitch(at: GuitarPosition(string: $0, fret: 0)), in: .letters, prefersFlats: false)[0] }
+                == [["E4"], ["B3"], ["G3"], ["D3"], ["A2"], ["E2"]])
     }
 
     @Test func notesBetweenAreCalledBothWaysWhereThereIsRoom() {
-        // Then the sharp, or in a flat key the flat.
-        #expect(GuitarNeck.names(of: Pitch(.f, 3, .sharp), in: .solfege, prefersFlats: false) == [["Fa♯/Sol♭"], ["Fa♯"]])
-        #expect(GuitarNeck.names(of: Pitch(.f, 3, .sharp), in: .solfege, prefersFlats: true) == [["Fa♯/Sol♭"], ["Sol♭"]])
-        #expect(GuitarNeck.names(of: Pitch(.a, 2, .sharp), in: .letters, prefersFlats: false) == [["A♯/B♭"], ["A♯"]])
-        #expect(GuitarNeck.names(of: Pitch(.c, 4, .sharp), in: .letters, prefersFlats: true) == [["C♯/D♭"], ["D♭"]])
+        // Then the sharp, or in a flat key the flat; both in the same octave.
+        #expect(GuitarNeck.names(of: Pitch(.f, 3, .sharp), in: .solfege, prefersFlats: false) == [["Fa♯3/Sol♭3"], ["Fa♯3"], ["Fa♯", "3"]])
+        #expect(GuitarNeck.names(of: Pitch(.f, 3, .sharp), in: .solfege, prefersFlats: true) == [["Fa♯3/Sol♭3"], ["Sol♭3"], ["Sol♭", "3"]])
+        #expect(GuitarNeck.names(of: Pitch(.a, 2, .sharp), in: .letters, prefersFlats: false) == [["A♯2/B♭2"], ["A♯2"], ["A♯", "2"]])
+        #expect(GuitarNeck.names(of: Pitch(.c, 4, .sharp), in: .letters, prefersFlats: true) == [["C♯4/D♭4"], ["D♭4"], ["D♭", "4"]])
     }
 
     @Test func sargamHasOneNameOnTwoLinesWhereNarrow() {
-        #expect(GuitarNeck.names(of: Pitch(.c, 4, .sharp), in: .sargam, prefersFlats: false) == [["komal Re"], ["komal", "Re"]])
-        #expect(GuitarNeck.names(of: Pitch(.f, 3, .sharp), in: .sargam, prefersFlats: true) == [["tivra Ma"], ["tivra", "Ma"]])
+        #expect(GuitarNeck.names(of: Pitch(.c, 4, .sharp), in: .sargam, prefersFlats: false) == [["komal Re4"], ["komal", "Re4"]])
+        #expect(GuitarNeck.names(of: Pitch(.f, 3, .sharp), in: .sargam, prefersFlats: true) == [["tivra Ma3"], ["tivra", "Ma3"]])
     }
 
     @Test func everyPlaceOnTheBoardHasAName() {
