@@ -36,6 +36,17 @@ enum Theme {
     static let blackKeyTop = Color(light: NSColor(0.28, 0.28, 0.28), dark: NSColor(0.24, 0.24, 0.24))
     static let blackKeyBottom = Color(light: NSColor(0.12, 0.11, 0.10), dark: NSColor(hex: 0x0E0E10))
 
+    /// The guitar's neck reads as one in either appearance: a pale maple fretboard with a dark nut
+    /// in light, a muted rosewood one with a bone nut in dark. Inlays are only a shade off the wood,
+    /// so they're never taken for the finger dots that mark answers.
+    static let fretboard = Color(light: NSColor(hex: 0xE8D8BA), dark: NSColor(hex: 0x3B2F28))
+    static let fretWire = Color(light: NSColor(hex: 0x9A9EA6), dark: NSColor(hex: 0x878A91))
+    static let guitarNut = Color(light: NSColor(hex: 0x4D4741), dark: NSColor(hex: 0xD3CBBA))
+    static let guitarString = Color(light: NSColor(hex: 0x6B6F77), dark: NSColor(hex: 0xBDC0C6))
+    static let fretInlay = Color(light: NSColor(hex: 0xCDB894), dark: NSColor(hex: 0x5C4E43))
+    /// Note names on the fretboard: 7.3:1 on the maple, 10.5:1 on the rosewood.
+    static let fretLabel = Color(light: NSColor(hex: 0x4A3F33), dark: NSColor(hex: 0xEDE7DC))
+
     static let background = LinearGradient(
         colors: [Color(light: NSColor(0.94, 0.95, 0.97), dark: NSColor(hex: 0x17181C)),
                  Color(light: NSColor(0.88, 0.91, 0.95), dark: NSColor(hex: 0x101114))],

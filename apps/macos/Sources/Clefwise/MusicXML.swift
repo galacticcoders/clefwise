@@ -40,7 +40,7 @@ enum MusicXMLImporter {
             throw ScoreImportError(message: "“\(fileName)” looks damaged and couldn't be read.")
         }
         guard !reader.parts.isEmpty else {
-            throw ScoreImportError(message: "“\(fileName)” has no notes in treble or bass clef to practise.")
+            throw ScoreImportError(message: "“\(fileName)” has no notes in the treble, bass or guitar clef to practise.")
         }
         let title = [reader.workTitle, reader.movementTitle].compactMap { $0 }.first { !$0.isEmpty }
         return Score(title: title ?? fallbackTitle, parts: reader.parts)
@@ -133,6 +133,9 @@ private final class ScoreReader: NSObject, XMLParserDelegate {
     private var partNames: [String: String] = [:]
     private var partIndex = 0
     private var part: PartReader?
+    /// The text of each `<credit>` on the score (title, composer, a "6=D" under the title…), its
+    /// `<credit-words>` joined. Credits come before the parts.
+    private var creditTexts: [String] = []
     /// Names of the open elements, outermost first.
     private var path: [String] = []
     /// The element being kept and its open descendants, innermost last.
@@ -151,7 +154,7 @@ private final class ScoreReader: NSObject, XMLParserDelegate {
         case (0, _):
             root = name
             if name != "score-partwise" { parser.abortParsing() }
-        case (1, "work"), (1, "movement-title"), (1, "part-list"):
+        case (1, "work"), (1, "movement-title"), (1, "part-list"), (1, "credit"):
             kept.append(Element(name: name, attributes: attributes))
         case (1, "part"):
             partIndex += 1
@@ -179,7 +182,7 @@ private final class ScoreReader: NSObject, XMLParserDelegate {
         case (2, "measure"):
             part?.endMeasure()
         case (1, "part"):
-            if let finished = part?.finish() { parts.append(finished) }
+            if let finished = part?.finish(credits: creditTexts) { parts.append(finished) }
             part = nil
         default:
             break
@@ -198,6 +201,9 @@ private final class ScoreReader: NSObject, XMLParserDelegate {
                     partNames[id] = name
                 }
             }
+        case "credit":
+            let text = element.children(named: "credit-words").map(\.value).joined(separator: " ")
+            if !text.isEmpty { creditTexts.append(text) }
         default:
             part?.read(element)
         }
@@ -207,11 +213,27 @@ private final class ScoreReader: NSObject, XMLParserDelegate {
 /// Follows one `<part>`: the position within each measure, and the clef, key and 8va lines on
 /// each staff. Notes and rests get their clef, key and octave shift once the whole part has been
 /// read, and then the bars are laid out.
+///
+/// Guitar music is read in the guitar clef (`Clef.treble8vb`), with every pitch as it sounds. A
+/// `<pitch>` is as written, and sounds as `<transpose>` says (what must be added to the written
+/// pitch to get the sounding one); an octave clef only moves where notes are drawn. So:
+/// - the treble clef with `<clef-octave-change>-1` (MuseScore's guitar) is the guitar clef, its
+///   pitches as they are;
+/// - a plain treble clef under a `<transpose>` an octave down and nothing else (MuseScore's
+///   "treble clef" guitars, the MusicXML tutorial's) is the guitar clef too, its pitches an octave
+///   lower than written, which leaves every note on the same line or space;
+/// - both together (as Sibelius writes guitars) is the guitar clef, an octave lower than written.
+/// Other octave clefs and other transpositions aren't read, as before.
+///
+/// A tablature staff (`<clef><sign>TAB</sign>`) beside a staff in notes repeats those notes, so
+/// it's left out altogether and the part keeps its other staves; its `<staff-tuning>` is the
+/// part's guitar tuning. A part with only a six-string tablature staff is read in the guitar
+/// clef from its pitches.
 private struct PartReader {
     /// A note or rest as read, before every clef, key and 8va line is known.
     private struct Symbol {
-        /// nil for a rest.
-        let pitch: Pitch?
+        /// nil for a rest. As written until the part is finished, then as it sounds.
+        var pitch: Pitch?
         /// The `<accidental>` printed in the score, if it's one we can show.
         let printedAccidental: Accidental?
         let staff: Int
@@ -230,12 +252,18 @@ private struct PartReader {
         let tiedToNext: Bool
         let tiedFromPrevious: Bool
         /// Rests only: `<display-step>` and `<display-octave>`, as a written pitch.
-        let restDisplay: Pitch?
+        var restDisplay: Pitch?
         /// `<rest measure="yes">`.
         let isMeasureRest: Bool
 
         /// A note to read: played, so neither a rest nor the held-over end of a tie.
         var isQuestion: Bool { pitch != nil && !tiedFromPrevious }
+
+        /// Moves the note, or a rest's place, by `octaves`: from as written to as it sounds.
+        mutating func moveOctaves(_ octaves: Int) {
+            pitch = pitch.map { Pitch($0.letter, $0.octave + octaves, $0.accidental) }
+            restDisplay = restDisplay.map { Pitch($0.letter, $0.octave + octaves, $0.accidental) }
+        }
     }
 
     /// Where a symbol stands, worked out once the part has been read.
@@ -244,6 +272,23 @@ private struct PartReader {
         let key: KeySignature
         let octaveShift: Int
         let voice: Int
+    }
+
+    /// A `<clef>` as read: one we can draw, a tablature staff (decided once the part is read), or
+    /// one we can't show.
+    private enum ClefRead: Equatable {
+        case clef(Clef)
+        case tab
+        case unsupported
+    }
+
+    /// A `<staff-details>`: how many lines, and the open strings from the lowest (`line="1"`), as
+    /// written; nil where it doesn't say, or says it unreadably.
+    private struct StaffDetails {
+        let staff: Int?
+        let time: Double
+        let lines: Int?
+        let tuning: [Pitch]?
     }
 
     let name: String
@@ -269,10 +314,17 @@ private struct PartReader {
     private var hasBeams = false
     /// The `<time>` each measure gives, by measure number, and whether it's printed there.
     private var timeChanges: [Int: (time: TimeSignature, printed: Bool)] = [:]
-    /// nil for a clef we can't show.
-    private var clefs = Timeline<Clef?>()
+    private var clefs = Timeline<ClefRead>()
     private var keys = Timeline<KeySignature>()
     private var octaveShifts = Timeline<Int>()
+    /// Octaves added to written pitches to get sounding ones, from `<transpose>`: -1 for a
+    /// transposition an octave down and nothing else (guitar), 0 for none or any other.
+    private var octaveTranspositions = Timeline<Int>()
+    private var staffDetails: [StaffDetails] = []
+    /// The `<words>` of each direction in the first bars, for a retuned string written there ("6=D").
+    private var openingWords: [String] = []
+    /// How many bars `openingWords` reads from.
+    private static let openingBars = 3
     /// Every note and rest we could draw, in document order.
     private var symbols: [Symbol] = []
     /// Start and length of each finished measure, in quarter notes.
@@ -332,6 +384,14 @@ private struct PartReader {
         for clef in attributes.children(named: "clef") {
             clefs.set(Self.clef(clef), at: now, staff: clef.intAttribute("number") ?? 1)
         }
+        for details in attributes.children(named: "staff-details") {
+            staffDetails.append(StaffDetails(staff: details.intAttribute("number"), time: now, lines: details.int("staff-lines"),
+                                             tuning: Self.tuning(details)))
+        }
+        for transpose in attributes.children(named: "transpose") {
+            // Without a number it applies to every staff.
+            octaveTranspositions.set(Self.octaveTransposition(transpose), at: now, staff: transpose.intAttribute("number"))
+        }
         // A time signature for one staff only is rare; take staff 1's, or failing that the first.
         let times = attributes.children(named: "time")
         if let time = times.first(where: { ($0.intAttribute("number") ?? 1) == 1 }) ?? times.first,
@@ -368,15 +428,40 @@ private struct PartReader {
 
     private static func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
 
-    /// Treble is G on line 2 and bass F on line 4; anything else (alto, tenor, a treble with an
-    /// 8 below, percussion, tablature) is a clef we can't show.
-    private static func clef(_ clef: Element) -> Clef? {
-        if let octaveChange = clef.int("clef-octave-change"), octaveChange != 0 { return nil }
-        switch (clef.string("sign"), clef.int("line")) {
-        case ("G", nil), ("G", 2): return .treble
-        case ("F", nil), ("F", 4): return .bass
-        default: return nil
+    /// Treble is G on line 2, bass F on line 4, and the guitar clef G on line 2 with an 8 below
+    /// (`<clef-octave-change>-1`); tablature is decided once the part is read; anything else
+    /// (alto, tenor, other octave clefs, percussion) is a clef we can't show.
+    private static func clef(_ clef: Element) -> ClefRead {
+        let octaveChange = clef.int("clef-octave-change") ?? 0
+        switch (clef.string("sign"), clef.int("line"), octaveChange) {
+        case ("G", nil, 0), ("G", 2, 0): return .clef(.treble)
+        case ("G", nil, -1), ("G", 2, -1): return .clef(.treble8vb)
+        case ("F", nil, 0), ("F", 4, 0): return .clef(.bass)
+        case ("TAB", _, _): return .tab
+        default: return .unsupported
         }
+    }
+
+    /// -1 for a `<transpose>` an octave down and nothing else, as guitars are written; 0 for any
+    /// other, which isn't read (a B♭ clarinet's notes stay as written).
+    private static func octaveTransposition(_ transpose: Element) -> Int {
+        let diatonic = transpose.int("diatonic") ?? 0, chromatic = transpose.int("chromatic") ?? 0
+        return diatonic == 0 && chromatic == 0 && transpose.int("octave-change") == -1 ? -1 : 0
+    }
+
+    /// The open strings a `<staff-details>` gives, from the lowest (`line="1"`) up, as written: nil
+    /// unless every line from 1 has one, each a pitch we can spell.
+    private static func tuning(_ details: Element) -> [Pitch]? {
+        var strings: [Int: Pitch] = [:]
+        for tuning in details.children(named: "staff-tuning") {
+            guard let line = tuning.intAttribute("line"), strings[line] == nil,
+                  let letter = tuning.string("tuning-step").flatMap(\.first).flatMap(NoteLetter.init(character:)),
+                  let octave = tuning.int("tuning-octave"),
+                  let accidental = Accidental(alter: tuning.double("tuning-alter") ?? 0) else { return nil }
+            strings[line] = Pitch(letter, octave, accidental)
+        }
+        guard !strings.isEmpty, Set(strings.keys) == Set(1...strings.count) else { return nil }
+        return (1...strings.count).map { strings[$0]! }
     }
 
     /// 8va and 8vb lines. A shift "down" means the notes are written lower than their `<pitch>`,
@@ -384,6 +469,12 @@ private struct PartReader {
     private mutating func readDirection(_ direction: Element) {
         let time = now + (direction.double("offset") ?? 0) / divisions
         let staff = direction.int("staff") ?? 1
+        if measureCount <= Self.openingBars {
+            // A text in several runs (a circled "6", then "=D") is read as one.
+            let words = direction.children(named: "direction-type").flatMap { $0.children(named: "words") }
+            let text = words.map(\.value).joined(separator: " ")
+            if !text.isEmpty { openingWords.append(text) }
+        }
         for type in direction.children(named: "direction-type") {
             for shift in type.children(named: "octave-shift") {
                 let octaves = max(1, ((shift.intAttribute("size") ?? 8) - 1) / 7)
@@ -517,14 +608,31 @@ private struct PartReader {
         }
     }
 
-    func finish() -> ScorePart? {
+    /// The part as read, once it has ended; nil when it has no note to read. `credits` are the
+    /// score's credit texts, where a retuned string may be written ("6=D").
+    mutating func finish(credits: [String]) -> ScorePart? {
         let clefs = self.clefs.lookup(), keys = self.keys.lookup(), octaveShifts = self.octaveShifts.lookup()
-        // Before any `<clef>`, assume a grand staff: treble on top, bass below.
-        func clefInForce(at time: Double, staff: Int) -> Clef? {
-            clefs.value(at: time, staff: staff) ?? (staff == 1 ? .treble : .bass)
+        let transpositions = octaveTranspositions.lookup()
+        let layout = staffLayout(clefs)
+        // The clef a staff is drawn in at `time`, and the octaves to add to its written pitches to
+        // get the sounding ones (-1 for a guitar written in the plain treble clef); nil for a clef
+        // we can't show. Before any `<clef>`, assume a grand staff: treble on top, bass below.
+        func clefInForce(at time: Double, staff: Int) -> (clef: Clef, octaves: Int)? {
+            let clef: Clef
+            switch clefs.value(at: time, staff: staff) ?? .clef(staff == 1 ? .treble : .bass) {
+            case .clef(let read): clef = read
+            case .tab where layout.readsTablature: clef = .treble8vb
+            case .tab, .unsupported: return nil
+            }
+            guard clef != .bass, transpositions.value(at: time, staff: staff) == -1 else { return (clef, 0) }
+            return (.treble8vb, -1)
         }
         func keyInForce(at time: Double, staff: Int) -> KeySignature {
             keys.value(at: time, staff: staff) ?? .cMajor
+        }
+        // Staves after a dropped tablature staff move up.
+        func number(_ staff: Int) -> Int {
+            staff - layout.dropped.filter { $0 < staff }.count
         }
 
         var skipped = skippedNoteCount
@@ -537,11 +645,16 @@ private struct PartReader {
         let bars = self.bars.count < measureCount ? self.bars + [(measureStart, measureLength / divisions)] : self.bars
         var symbolsInBar = [[Int]](repeating: [], count: bars.count)
 
-        for (index, symbol) in symbols.enumerated() {
-            guard let clef = clefInForce(at: symbol.onset, staff: symbol.staff) else {
-                if symbol.isQuestion { skipped += 1 }
+        for index in symbols.indices {
+            // A dropped tablature staff's notes are the other staff's again: not skipped, just left out.
+            guard !layout.dropped.contains(symbols[index].staff) else { continue }
+            guard let (clef, octaves) = clefInForce(at: symbols[index].onset, staff: symbols[index].staff) else {
+                if symbols[index].isQuestion { skipped += 1 }
                 continue
             }
+            // As it sounds, from here on: an octave down keeps every note on its line or space.
+            if octaves != 0 { symbols[index].moveOctaves(octaves) }
+            let symbol = symbols[index]
             let key = keyInForce(at: symbol.onset, staff: symbol.staff)
             let placement = Placement(clef: clef, key: key,
                                       octaveShift: octaveShifts.value(at: symbol.onset, staff: symbol.staff) ?? 0,
@@ -551,7 +664,7 @@ private struct PartReader {
             guard let pitch = symbol.pitch, symbol.isQuestion else { continue }
             notes.append(ScoreNote(pitch: pitch, clef: clef, keySignature: key,
                                    printedAccidental: Self.sign(for: pitch, printed: symbol.printedAccidental, in: key),
-                                   octaveShift: placement.octaveShift, staff: symbol.staff,
+                                   octaveShift: placement.octaveShift, staff: number(symbol.staff),
                                    measure: symbol.measure, onset: symbol.onset, chord: symbol.chord))
             noteSymbols.append(index)
         }
@@ -568,15 +681,15 @@ private struct PartReader {
             let signs = barSigns(members, placements: placements)
             let ordered = members.sorted { drawsBefore($0, $1, placements: placements) }
             for (position, index) in ordered.enumerated() { symbolIndices[index] = position }
-            let staves = (1...max(1, staffCount)).map { staff in
-                ScoreMeasure.StaffStart(clef: clefInForce(at: start, staff: staff),
+            let staves = layout.kept.map { staff in
+                ScoreMeasure.StaffStart(clef: clefInForce(at: start, staff: staff)?.clef,
                                         keySignature: keyInForce(at: start, staff: staff))
             }
             var drawn = ordered.map { index -> BarSymbol in
                 let symbol = symbols[index], placement = placements[index]!
                 let fillsBar = symbol.isMeasureRest || (symbol.pitch == nil && !symbol.hasType && length > 0
                     && abs(symbol.offset) < 1e-9 && symbol.duration >= length - 1e-9)
-                return BarSymbol(pitch: symbol.pitch, clef: placement.clef, staff: symbol.staff, voice: placement.voice,
+                return BarSymbol(pitch: symbol.pitch, clef: placement.clef, staff: number(symbol.staff), voice: placement.voice,
                                  offset: symbol.offset, duration: symbol.duration, value: symbol.value,
                                  octaveShift: placement.octaveShift, accidental: signs[index], stemUp: symbol.stemUp,
                                  chord: symbol.chord, tiedToNext: symbol.tiedToNext,
@@ -599,8 +712,43 @@ private struct PartReader {
             (a.element.onset, -a.element.staff, a.element.pitch.midiNumber, a.offset)
                 < (b.element.onset, -b.element.staff, b.element.pitch.midiNumber, b.offset)
         }
+        // A guitar part: one in the guitar clef, or one whose staff is tuned as a guitar's.
+        let staffTuning = guitarStaffTuning(transpositions)
+        let isGuitar = staffTuning != nil || placements.contains { $0?.clef == .treble8vb }
         return ScorePart(name: name, notes: ordered.map(\.element), measures: measures, measureCount: measureCount,
-                         staffCount: staffCount, skippedNoteCount: skipped)
+                         staffCount: layout.dropped.isEmpty ? staffCount : layout.kept.count, skippedNoteCount: skipped,
+                         guitarTuning: isGuitar ? staffTuning ?? WrittenRetuning.tuning(in: openingWords + credits) : nil)
+    }
+
+    /// The staves the part keeps, in order, and whether a tablature staff is read. A tablature staff
+    /// (every clef on it TAB) beside a staff in notes repeats its notes, so it's `dropped`. A part
+    /// with only tablature `readsTablature` in the guitar clef when it's a six-string guitar's (six
+    /// lines, six open strings, where its `<staff-details>` say); otherwise its notes are skipped.
+    private func staffLayout(_ clefs: Timeline<ClefRead>.Lookup) -> (kept: [Int], dropped: [Int], readsTablature: Bool) {
+        let staves = Array(1...max(1, staffCount))
+        let tablature = staves.filter { staff in
+            let read = clefs.values(staff: staff)
+            return !read.isEmpty && read.allSatisfy { $0 == .tab }
+        }
+        if tablature.isEmpty { return (staves, [], false) }
+        if tablature.count < staves.count { return (staves.filter { !tablature.contains($0) }, tablature, false) }
+        let isGuitar = staves.allSatisfy { staff in
+            staffDetails.filter { $0.staff == nil || $0.staff == staff }.allSatisfy { details in
+                (details.lines ?? 6) == 6 && (details.tuning?.count ?? 6) == 6
+            }
+        }
+        return (staves, [], isGuitar)
+    }
+
+    /// The first six-string `<staff-tuning>` in the part, as it sounds: a staff written an octave
+    /// up (guitar under `<transpose>`) gives its strings an octave up too. Nil without one.
+    private func guitarStaffTuning(_ transpositions: Timeline<Int>.Lookup) -> GuitarTuning? {
+        for details in staffDetails {
+            guard let strings = details.tuning, strings.count == 6 else { continue }
+            let octaves = transpositions.value(at: details.time, staff: details.staff ?? 1) == -1 ? -1 : 0
+            return GuitarTuning(strings: strings.map { Pitch($0.letter, $0.octave + octaves, $0.accidental) })
+        }
+        return nil
     }
 
     /// The score's voices as numbers: `<voice>3</voice>` is 3, no voice is 1, and voices named
@@ -925,6 +1073,11 @@ private struct Timeline<Value> {
         /// The changes that name no staff, for staves no change names.
         let everyStaff: [(time: Double, value: Value)]
 
+        /// Every value `staff` takes, in time order.
+        func values(staff: Int) -> [Value] {
+            (byStaff[staff] ?? everyStaff).map(\.value)
+        }
+
         /// The latest change at or before `time` for `staff`; of two at the same time, the later written.
         func value(at time: Double, staff: Int) -> Value? {
             let changes = byStaff[staff] ?? everyStaff
@@ -935,6 +1088,56 @@ private struct Timeline<Value> {
             }
             return low > 0 ? changes[low - 1].value : nil
         }
+    }
+}
+
+/// A retuned guitar string written on a score as text, as guitar music says it above the first
+/// bar: "6=D" (the 6th string down to D), also "6 = D", "⑥=D", "(6)=D", several at once ("6=D 5=G"),
+/// with a sign after the letter (♯ ♭ # b).
+enum WrittenRetuning {
+    /// A string number 1–6 (plain, circled or in brackets, not part of a longer number), "=", a
+    /// note letter with an optional sign, and no letter straight after ("6=Dance" isn't one).
+    private static let pattern = try! NSRegularExpression(
+        pattern: #"(?<![0-9])(?:([1-6])|([\x{2460}-\x{2465}])|\(([1-6])\))\s*[=＝]\s*([A-G])(♯|♭|#|b)?(?![A-Za-z])"#)
+
+    /// Each string `text` retunes, in the order written, with the letter and sign it names.
+    static func retunings(in text: String) -> [(string: Int, letter: NoteLetter, accidental: Accidental)] {
+        let range = NSRange(text.startIndex..., in: text)
+        return pattern.matches(in: text, range: range).compactMap { match in
+            func group(_ index: Int) -> String? {
+                Range(match.range(at: index), in: text).map { String(text[$0]) }
+            }
+            let string: Int?
+            if let circled = group(2)?.unicodeScalars.first {
+                string = Int(circled.value) - 0x2460 + 1
+            } else {
+                string = (group(1) ?? group(3)).flatMap { Int($0) }
+            }
+            guard let string, let letter = group(4)?.first.flatMap(NoteLetter.init(character:)) else { return nil }
+            let accidental: Accidental = switch group(5) {
+            case "♯", "#": .sharp
+            case "♭", "b": .flat
+            default: .natural
+            }
+            return (string, letter, accidental)
+        }
+    }
+
+    /// Standard tuning with each string `texts` retune set to the pitch of that name nearest its
+    /// standard pitch, always within a tritone (the lower of two equally near): "6=D" is D2, "1=D"
+    /// D4. A string retuned twice keeps the first. Nil when no text retunes a string.
+    static func tuning(in texts: [String]) -> GuitarTuning? {
+        var strings = GuitarTuning.standard.strings
+        var retuned = Set<Int>()
+        for text in texts {
+            for (string, letter, accidental) in retunings(in: text) where retuned.insert(string).inserted {
+                let standard = GuitarTuning.standard.openPitch(of: string).midiNumber
+                strings[6 - string] = (-1...1)
+                    .map { Pitch(letter, GuitarTuning.standard.openPitch(of: string).octave + $0, accidental) }
+                    .min { (abs($0.midiNumber - standard), $0.midiNumber) < (abs($1.midiNumber - standard), $1.midiNumber) }!
+            }
+        }
+        return retuned.isEmpty ? nil : GuitarTuning(strings: strings)
     }
 }
 

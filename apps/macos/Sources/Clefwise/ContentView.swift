@@ -21,6 +21,7 @@ struct ContentView: View {
             case .buttons: AnswerPad(game: game)
             case .piano: PianoPad(game: game)
             case .keyboard: TypingPad(game: game)
+            case .guitar: GuitarPad(game: game)
             }
             HStack {
                 Text(shortcutHint)
@@ -34,6 +35,16 @@ struct ContentView: View {
                         .help("Write note names on the piano keys (K)")
                         .padding(.trailing, 12)
                 }
+                if game.settings.answerInput == .guitar {
+                    // The same setting as the piano's key names. The tuning sits over the neck (see
+                    // `GuitarPad`): here the footer wouldn't have room for it in a narrow window.
+                    Toggle("Show note names", isOn: showKeyNames)
+                        .toggleStyle(.checkbox)
+                        // On one line in a narrow window: the shortcut hint gives way instead.
+                        .fixedSize()
+                        .help("Write note names on the fretboard (K)")
+                        .padding(.trailing, 12)
+                }
                 // Next to the answer area, where you'd look for it.
                 Picker("Answer with", selection: answerInput) {
                     ForEach(Game.AnswerInput.allCases) { Label($0.label, systemImage: $0.symbol).tag($0) }
@@ -42,7 +53,7 @@ struct ContentView: View {
                 .labelStyle(.titleAndIcon)
                 .fixedSize()
                 .disabled(game.phase == .playing)
-                .help("Note buttons and typing accept any octave; on the piano you click the exact key")
+                .help("Note buttons and typing accept any octave; on the piano and the guitar you play the exact note")
             }
         }
         .padding(24)
@@ -104,6 +115,7 @@ struct ContentView: View {
         case (.buttons, _): parts = ["Press 1–7 to answer"]
         case (.piano, _): parts = ["Click the exact key"]
         case (.keyboard, _): parts = ["Type the note's name, ⌫ to fix"]
+        case (.guitar, _): parts = ["Click where you'd play it"]
         }
         // Naming notes together, entries can be taken back.
         if game.namesTogether {
@@ -111,6 +123,7 @@ struct ContentView: View {
             case .buttons: parts.append("⌫ take one back")
             case .piano: parts = ["Click the exact keys"]
             case .keyboard: parts = ["Type the names one after another, ⌫ to fix"]
+            case .guitar: parts = ["Click where you'd play them"]
             }
         }
         // Words rather than ♯/♭, which are too small to read at caption size.
@@ -122,6 +135,7 @@ struct ContentView: View {
         case .buttons: parts += ["H hints", "M mute"]
         case .piano: parts += ["H hints", "K key names", "M mute"]
         case .keyboard: break // letters are typed during a round, so H and M aren't shortcuts then
+        case .guitar: parts += ["H hints", "K note names", "M mute"]
         }
         return parts.joined(separator: "  ·  ")
     }
@@ -132,11 +146,15 @@ struct ContentView: View {
             // A piece brings its own clefs, notes and keys. Disabled rather than hidden, so the
             // toolbar doesn't jump when a piece is opened or closed; and fixed while a round plays.
             Group {
-                Picker("Clef", selection: $game.settings.clefChoice) {
+                Picker("Clef", selection: clefChoice) {
                     ForEach(ClefChoice.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .help(pieceHelp("Which clef to read", piece: "The piece sets the clef"))
+                .disabled(writesGuitarMusic)
+                .help(writesGuitarMusic
+                      ? "With the guitar, notes are written as guitar music: the treble clef with a small 8 below, "
+                        + "an octave above how they sound"
+                      : pieceHelp("Which clef to read", piece: "The piece sets the clef"))
 
                 keyMenu
 
@@ -153,6 +171,18 @@ struct ContentView: View {
             }
             .help("Name notes with letters, solfège (Do = C) or sargam (Sa = C)")
         }
+    }
+
+    /// Random notes answered on the guitar are written as guitar music, whatever the clef setting:
+    /// the picker then shows Treble, greyed out, and the setting is kept for the other inputs. A
+    /// piece brings its own clefs, as with any input.
+    private var writesGuitarMusic: Bool {
+        game.settings.answerInput == .guitar && !game.isPractisingPiece
+    }
+
+    private var clefChoice: Binding<ClefChoice> {
+        Binding(get: { writesGuitarMusic ? .treble : game.settings.clefChoice },
+                set: { if !writesGuitarMusic { game.settings.clefChoice = $0 } })
     }
 
     /// A menu with a short title rather than a picker: a toolbar picker is as wide as its longest
@@ -678,8 +708,10 @@ private struct StartPanel: View {
     }
 
     private var details: String {
-        // The notes' range has its own checkboxes just below.
-        var parts = [game.settings.clefChoice.summary]
+        // The notes' range has its own checkboxes just below. On the guitar, notes are written as
+        // guitar music whatever the clef setting (`randomClefs`), in the tuning chosen.
+        var parts = game.randomClefs == [.treble8vb] ? ["Guitar clef", "\(game.guitarTuning.name) tuning"]
+            : [game.settings.clefChoice.summary]
         // Plain C major goes unsaid, as before keys existed.
         if game.accidentalsPossible {
             parts.append(game.settings.key.shortLabel + (game.settings.addsAccidentals ? " + accidentals" : ""))
@@ -947,15 +979,21 @@ private struct MnemonicBar: View {
     var body: some View {
         HStack(spacing: 32) {
             if naming == .letters {
-                Text("\(clef.name) lines  \(Text(naming.names(of: clef.lineLetters)).bold())  —  \(clef.lineMnemonic)")
+                Text("\(linesTitle)  \(Text(naming.names(of: clef.lineLetters)).bold())  —  \(clef.lineMnemonic)")
                 Text("Spaces  \(Text(naming.names(of: clef.spaceLetters)).bold())  —  \(clef.spaceMnemonic)")
             } else {
-                Text("\(clef.name) lines  \(Text(naming.names(of: clef.lineLetters)).bold())")
+                Text("\(linesTitle)  \(Text(naming.names(of: clef.lineLetters)).bold())")
                 Text("Spaces  \(Text(naming.names(of: clef.spaceLetters)).bold())")
             }
         }
         .font(.callout)
         .foregroundStyle(Theme.hint)
+    }
+
+    /// "Treble lines"; "Guitar clef lines", since beside a fretboard "Guitar lines" could be read
+    /// as the strings.
+    private var linesTitle: String {
+        clef == .treble8vb ? "\(clef.name) clef lines" : "\(clef.name) lines"
     }
 }
 

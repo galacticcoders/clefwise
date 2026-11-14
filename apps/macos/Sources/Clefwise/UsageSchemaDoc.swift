@@ -43,12 +43,23 @@ extension UsageExport {
           1 = G major (one sharp), −3 = E♭ major (three flats).
         - **Staff positions**: 0 = the bottom line, each step up one line or space, so 8 is the top
           line, −1 the space just below the staff and −2 the first ledger line below it. In the
-          treble clef 0 is E4, in the bass clef G2.
+          treble clef 0 is E4, in the bass clef G2, in the guitar clef (`treble8vb`) E3.
         - **Pitches** use scientific pitch notation: C4 is middle C, MIDI note 60. Names like
           `F♯4`, `B♭3`, `C4` use the characters ♯ (U+266F) and ♭ (U+266D); naturals have no sign.
         - **Pieces**: bars count from 1 at the start of the piece (not the printed bar numbers);
           staff 1 is the upper staff (right hand on the piano), 2 the lower (left hand); onsets are
           in quarter notes from the start of the piece.
+        - **The guitar clef** (`treble8vb`, since 2026-11-14) is the treble clef with a small 8 below,
+          which guitar music is written in: its lines and spaces have the treble clef's names, an
+          octave lower, as the guitar sounds. Like every pitch here, its notes are kept as they
+          sound (the bottom line is E3): the clef itself says they're written an octave up, so
+          `pitch` and `written` are both the sounding pitch, `octaveShift` stays 0, and `position`
+          is where the note is written.
+        - **Guitar tunings** (since 2026-11-14) are written as one string: a preset's name,
+          `standard` (E2 A2 D3 G3 B3 E4), `dropD` (the 6th string down to D2), `doubleDropD`,
+          `dadgad`, `openD`, `openG` or `halfStepDown`, or for any other tuning its six open strings
+          as they sound, from the 6th (lowest) to the 1st: `C2 G2 C3 G3 C4 E4`. Strings count as
+          guitarists count them: 1 is the highest, 6 the lowest; fret 0 is the open string.
         - Ids are UUIDs. Booleans are `true`/`false`.
 
         ## The event log (`events/`)
@@ -134,6 +145,7 @@ extension UsageExport {
         | `piece.id` | The piece in your practice journal: the SHA-256 of the score file it was first added with. Absent for a piece not in the journal, and in rounds logged before it. |
         | `piece.file` | The SHA-256 of the exact score file practised. It differs from `piece.id` once the score has been exported again with changes. Absent when `piece.id` is. |
         | `piece.staves` | Staves in the part practised: 1, or 2 for a grand staff. Absent in rounds logged before the practice journal. |
+        | `piece.guitarNotesOutOfReach` | Answering on the guitar (since 2026-11-14): how many of the notes chosen (part, hand, start bar, chords) its tuning can't reach anywhere on a 24-fret neck. They're left out of the round, and `noteCount` doesn't count them. Absent with other inputs. |
 
         ### `questionShown`: a note appeared
 
@@ -142,9 +154,9 @@ extension UsageExport {
         | `round` | The round's id. |
         | `question` | This question's id, shared by its answer. |
         | `index` | 0-based count of questions shown so far this round; notes asked together count one each. |
-        | `clef` | `treble` or `bass`. |
+        | `clef` | `treble`, `bass`, or `treble8vb` (the guitar clef, see Conventions; since 2026-11-14). |
         | `pitch` | The note as played (see Pitch below). |
-        | `written` | The note as written; differs from `pitch` under an 8va or 8vb line. |
+        | `written` | The note as written; differs from `pitch` under an 8va or 8vb line. In the guitar clef it's the sounding pitch too (see Conventions). |
         | `position` | Staff position of the written note. |
         | `keyFifths` | The key signature. |
         | `printedAccidental` | The sign printed right before the note, −1/0/1 (0 = ♮); absent when none is printed and the key signature applies. In the whole-bar view it's the sign the bar prints: one earlier in the bar carries on, so a note can be sharp with no sign of its own. Shown on its own, a note gets the sign it needs printed on it. |
@@ -155,9 +167,11 @@ extension UsageExport {
         | `group`, `groupSize` | For notes asked together (see Notes asked together): the id their questions share, and how many notes there are. Absent for a note asked on its own. |
         | `pickChance` | The chance this note had of being picked (random and shuffled rounds), 0–1, for studying the adaptive picking. For notes asked together, the chance the group had. |
         | `naming` | Note names in use: `letters` (C D E), `solfege` (Do Re Mi, fixed: Do = C), `sargam` (Sa Re Ga, Sa = C). |
-        | `input` | How answers are given: `buttons`, `piano`, `keyboard` (typing names). |
+        | `input` | How answers are given: `buttons`, `piano`, `keyboard` (typing names), `guitar` (a place on a guitar's neck, since 2026-11-14; see Answering on the guitar). |
         | `hintsVisible` | Whether the staff hints were showing. |
-        | `keyNamesVisible` | Whether note names were showing on the piano keys. |
+        | `keyNamesVisible` | Whether note names were showing on the piano keys, or on the guitar's frets. |
+        | `guitarTuning` | Answering on the guitar: the tuning in use (see Conventions). Absent with other inputs. |
+        | `guitarFrets` | Answering on the guitar: the frets shown, from 12 (an octave on every string) up to 24, as many as the round's notes need. Absent with other inputs. |
 
         **Pitch** (`pitch`, `written`, and an answer's `pitch`):
 
@@ -175,13 +189,14 @@ extension UsageExport {
         |---|---|
         | `round`, `question` | Ids of the round and the question answered. |
         | `responseMs` | From the question appearing to the answer, pauses left out. |
-        | `source` | `click` (note buttons clicked), `shortcut` (keyboard shortcuts for the buttons: letters, 1–7), `typing` (typed names), `piano` (piano keys). |
+        | `source` | `click` (note buttons clicked), `shortcut` (keyboard shortcuts for the buttons: letters, 1–7), `typing` (typed names), `piano` (piano keys), `guitar` (a place on the guitar's neck, since 2026-11-14). |
         | `letter`, `accidental` | What was answered: letter and sign. |
         | `name` | Its name in the naming system in use: `F♯`, `Fa♯`, `komal Re`. |
-        | `pitch` | The exact key, for piano answers (see Pitch). |
+        | `pitch` | The exact key, for piano answers; for guitar answers the pitch the place sounds (see Pitch). Both spell the notes between the naturals as sharps: C♯, never D♭. |
         | `correct` | Whether it was right. |
-        | `wrongOctave` | Piano only: the right note in the wrong octave. |
-        | `keystrokes` | Every key pressed while the question was up, in order, each with `key`, `ms` (since the question appeared) and `result`: `typed` (kept as part of a name, or an entry towards notes asked together), `rejected` (refused; the box shook), `deleted` (Backspace, or an entry taken back), `submitted` (Return, or a completed name submitting), `armed` (♯/♭ armed or disarmed on the note buttons; clicks on those buttons appear as keys `click ♯` / `click ♭`), `other` (pressed but not part of answering). Towards notes asked together, clicks appear as keys too: `click Sol♯` (a note button), `piano G♯4` (a piano key chosen, or clicked again to take it back) and `remove Sol♯` (an entry clicked to take it back). |
+        | `wrongOctave` | Piano and guitar only: the right note in the wrong octave. |
+        | `guitarString`, `guitarFret` | Guitar answers only (since 2026-11-14): where on the neck, string 1 (the highest) to 6 (the lowest), and fret (0 = the open string). |
+        | `keystrokes` | Every key pressed while the question was up, in order, each with `key`, `ms` (since the question appeared) and `result`: `typed` (kept as part of a name, or an entry towards notes asked together), `rejected` (refused; the box shook), `deleted` (Backspace, or an entry taken back), `submitted` (Return, or a completed name submitting), `armed` (♯/♭ armed or disarmed on the note buttons; clicks on those buttons appear as keys `click ♯` / `click ♭`), `other` (pressed but not part of answering). Towards notes asked together, clicks appear as keys too: `click Sol♯` (a note button), `piano G♯4` (a piano key chosen, or clicked again to take it back), `guitar E3 string 4 fret 2` (a place on the guitar chosen, clicked again to take it back, or chosen instead of another place that sounds the same pitch; an open string is fret 0) and `remove Sol♯` (an entry clicked to take it back). |
         | `scoreAfter`, `streakAfter` | Score and current streak after this answer; for notes asked together, after the whole group. |
         | `pausedMs` | How long the round was paused while the question was up (absent when it wasn't). |
         | `group`, `groupSize` | For notes asked together: as in their `questionShown`. Absent for a note answered on its own. |
@@ -196,10 +211,11 @@ extension UsageExport {
         **Notes asked together.** With `piece.chords` `together`, every note struck at one moment
         (in the staves read; tied-over notes aren't asked) is one question, answered with one name
         per note in any order, or on the piano one key per note (notes sounding the same key share
-        it). A moment with a single note is asked and logged as usual. The notes are logged one by
-        one: one `questionShown` per note when they appear, in reading order (lower staff first,
-        then low to high), then one `answerGiven` per note when they're judged, each with its own
-        `correct`. The answers are matched to the notes so that the most notes are right; a note
+        it), or on the guitar one place per pitch (a place sounding a pitch already chosen at
+        another place moves the choice there). A moment with a single note is asked and logged as
+        usual. The notes are logged one by one: one `questionShown` per note when they appear, in
+        reading order (lower staff first, then low to high), then one `answerGiven` per note when
+        they're judged, each with its own `correct`. The answers are matched to the notes so that the most notes are right; a note
         named right gets the answer that named it (`letter`, `accidental`, `name`, `pitch`), a
         note named wrong one of the answers left over, paired in order. They share `responseMs`,
         `source` (how the last answer was given), `scoreAfter` and `streakAfter`; the keystrokes
@@ -207,10 +223,20 @@ extension UsageExport {
         score goes up by the notes named right; the streak grows by them all only when all are
         right, and is reset otherwise.
 
+        **Answering on the guitar** (since 2026-11-14). With `answerInput` `guitar` the answer is
+        a place on a guitar's neck: any string and fret that sounds the note is right, judged like a
+        piano key by the pitch it sounds, so the octave counts (`wrongOctave` says when only the
+        octave was wrong). Random notes are then written in the guitar clef (`clef` `treble8vb`),
+        whatever `clefChoice` says, and only notes the tuning can play are asked: far ledger notes
+        below the lowest open string aren't. A piece's notes the tuning can't reach are left out of
+        its rounds (`piece.guitarNotesOutOfReach`). The neck shows 12 frets, or more (up to 24)
+        when the notes asked need them (`guitarFrets`).
+
         ### `inputIgnored`: an answer or keystroke that didn't count
 
         While the round is paused (`reason` `paused`), during the pause after a miss, a sign with
-        no name in the naming system, and so on.
+        no name in the naming system, and so on. A place on the guitar has `detail` as its
+        keystroke has it: `guitar E3 string 4 fret 2`.
 
         | Field | Meaning |
         |---|---|
@@ -367,19 +393,20 @@ extension UsageExport {
 
         | Key | Meaning |
         |---|---|
-        | `clefChoice` | `treble`, `bass` or `both`. |
+        | `clefChoice` | `treble`, `bass` or `both`. Answering on the guitar, random notes are in the guitar clef whatever it says. |
         | `range` | Where random notes come from: `below`, `onStaff` and `above` (booleans, any mix; nothing chosen counts as `onStaff`), and `ledgerLines`, how far below and above go (1 to 5 ledger lines). Changes are logged per value (`range.above`, `range.ledgerLines`). Older versions saved a name instead: `staff` (on the staff), `oneLedgerLine` or `threeLedgerLines` (on the staff and that many ledger lines below and above). |
         | `mode` | Versions until 2026-11-07 only: `sprint` (60 seconds) or `practice` (at your own pace, see `practiceLimit`). Settings without it are practice: every round is one now. |
         | `practiceLimit` | How a round of random notes ends: `endless` (when stopped), `time` (after `practiceMinutes`) or `notes` (once `practiceNotes` notes are answered, right or wrong). Ignored in piece rounds, and in sprints. Absent in settings saved before it existed, which means `endless`. |
         | `practiceMinutes`, `practiceNotes` | The length chosen for each kind of limit. Both stay saved whichever limit is in use. |
         | `naming` | `letters`, `solfege` or `sargam`. |
-        | `answerInput` | `buttons`, `piano` or `keyboard`. |
+        | `answerInput` | `buttons`, `piano`, `keyboard` or `guitar` (since 2026-11-14). |
         | `showHints` | Staff hints shown. |
-        | `showKeyNames` | Note names on the piano keys. |
+        | `showKeyNames` | Note names on the piano keys, or on the guitar's frets. |
+        | `guitarTuning` | The guitar's tuning for random notes (see Conventions), `standard` unless changed. Absent in settings saved before 2026-11-14. A change is logged as `guitarTuning`, e.g. from `"standard"` to `"dropD"`. |
         | `isMuted` | Sound off. |
         | `key` | `{"fixed":{"_0":{"fifths":N}}}` for a fixed key signature, `{"random":{}}` for a new random one each round. |
         | `addsAccidentals` | Now and then print a ♯, ♭ or ♮ in front of a note, on top of the key signature. |
-        | `piece` | `part` (index from 0), `hand`, `order`, `startBar`, `chords`, as in `roundStarted.piece` (settings saved before `chords` existed have `oneNotePerChord` instead); and `showsWholeBar`, the "Show the whole bar" checkbox (true unless switched off; with `chords` `together` the whole bar is shown whatever it says). These are the open piece's own settings: each piece in the library keeps its own, and they come back when it's opened again (see `pieceOpened`). |
+        | `piece` | `part` (index from 0), `hand`, `order`, `startBar`, `chords`, as in `roundStarted.piece` (settings saved before `chords` existed have `oneNotePerChord` instead); `showsWholeBar`, the "Show the whole bar" checkbox (true unless switched off; with `chords` `together` the whole bar is shown whatever it says); and `guitarTuning`, the tuning chosen for the piece on the guitar (since 2026-11-14; absent until one is chosen, which means the score's own if it names one, else the `guitarTuning` above; a change is logged as `piece.guitarTuning`). These are the open piece's own settings: each piece in the library keeps its own, and they come back when it's opened again (see `pieceOpened`). |
         | `piecePath` | The open piece, by where it was first opened from (as `pieceOpened.path`); absent with random notes. Before the piece library, the piece reopened at launch. |
         | `pieceID` | The open piece, by its entry in the piece library (as `pieceOpened.libraryID`), reopened at launch; absent with random notes. |
         | `appearance` | View ▸ Appearance: `system` (as macOS is set, the default), `light` or `dark`. |
@@ -398,7 +425,8 @@ extension UsageExport {
 
         ### `note-stats.json` and `best-scores.json`
 
-        Note stats are keyed by clef and pitch (`treble.F♯4`): `attempts`, `correct`, and
+        Note stats are keyed by clef and pitch (`treble.F♯4`; in the guitar clef as it sounds,
+        `treble8vb.E3` for its bottom line): `attempts`, `correct`, and
         `recent`, the latest results (up to 8, oldest first, `true` = correct). Best scores, in
         exports from versions until 2026-11-07, are keyed by the sprint's setup: `clefChoice.range`,
         where the range is `staff`, `oneLedgerLine` or `threeLedgerLines` for those choices (as
@@ -422,7 +450,7 @@ extension UsageExport {
         | `localTime`, `time` | When the answer was given. |
         | `session`, `round`, `question` | Ids, as in the log. |
         | `questionIndex` | 0-based position of the question in its round. |
-        | `clef` | `treble` or `bass`. |
+        | `clef` | `treble`, `bass` or `treble8vb` (the guitar clef). |
         | `pitch`, `pitchMidi` | The note as played: name and MIDI number. |
         | `written` | The note as written (differs under 8va/8vb). |
         | `position` | Staff position of the written note. |
@@ -434,21 +462,23 @@ extension UsageExport {
         | `barStaves` | In the whole-bar view, the staves drawn, space-separated: `1 2` for a grand staff, `1` or `2` for one. |
         | `group`, `groupSize` | For notes asked together: the id their rows share, and how many notes there are (one row each); empty for a note answered on its own. |
         | `naming`, `input` | The naming system and answer input in use. |
-        | `source` | How the answer was given: `click`, `shortcut`, `typing`, `piano`. |
+        | `source` | How the answer was given: `click`, `shortcut`, `typing`, `piano`, `guitar`. |
         | `answerLetter`, `answerAccidental`, `answerName` | What was answered. |
-        | `answerPitch`, `answerMidi` | The key played, for piano answers. |
+        | `answerPitch`, `answerMidi` | The key played, for piano answers; the pitch sounded, for guitar answers. |
         | `correct` | Whether it was right. |
-        | `wrongOctave` | Piano only: the right note in the wrong octave. |
+        | `wrongOctave` | Piano and guitar only: the right note in the wrong octave. |
         | `responseMs` | From the question appearing to the answer, pauses left out. |
         | `pausedMs` | How long the round was paused while the question was up; empty when it wasn't. |
         | `keystrokes` | How many keys were pressed while the question was up (the keys themselves are in the log). |
         | `rejectedKeystrokes` | How many of those were refused. |
         | `scoreAfter`, `streakAfter` | Score and streak after the answer. |
-        | `hintsVisible`, `keyNamesVisible` | Whether the staff hints and the names on the piano keys were showing. |
+        | `hintsVisible`, `keyNamesVisible` | Whether the staff hints and the names on the piano keys (or the guitar's frets) were showing. |
         | `pickChance` | The chance the note had of being picked (random and shuffled rounds). |
         | `mode`, `clefChoice`, `range`, `addsAccidentals` | The round's settings. `mode` is empty for rounds without it, which are practice rounds (see Data from versions with the sprint). `range` by its short name (`staff`, `below2+staff+above2`), as best scores were keyed. |
         | `keySetting` | The round's key setting: a fixed key in fifths, or `random`. |
         | `pieceTitle` | The piece, for piece rounds. |
+        | `guitarTuning`, `guitarFrets` | Answering on the guitar: the question's `guitarTuning` and `guitarFrets`; empty otherwise. |
+        | `answerString`, `answerFret` | Guitar answers: `guitarString` and `guitarFret`, where on the neck; empty otherwise. |
 
         The question's columns are empty if its `questionShown` line is missing from the log, and
         the round's if its `roundStarted` is.
@@ -474,6 +504,8 @@ extension UsageExport {
         | `accuracy` | `score / attempts`, 0–1. |
         | `notesToReview` | Space-separated. |
         | `answers` | `answerGiven` events logged for the round; equals `attempts` unless lines are missing. |
+        | `guitarTuning` | Rounds answered on the guitar: the tuning, as its first question logged it; empty otherwise. |
+        | `pieceGuitarNotesOutOfReach` | Piece rounds on the guitar: `piece.guitarNotesOutOfReach`, the notes chosen that the tuning can't reach, left out of the round. |
 
         ### `sessions.csv`: one row per app session
 

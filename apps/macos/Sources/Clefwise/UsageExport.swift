@@ -183,6 +183,11 @@ enum UsageExport {
         Column("keySetting") { keySetting(in: $0.round?.settings) },
         Column("addsAccidentals") { setting("addsAccidentals", in: $0.round?.settings) },
         Column("pieceTitle") { $0.round?.piece?.title },
+        // Answering on the guitar (since 2026-11-14); last, so the columns before keep their places.
+        Column("guitarTuning") { $0.question?.guitarTuning },
+        Column("guitarFrets") { $0.question?.guitarFrets },
+        Column("answerString") { $0.answer.guitarString },
+        Column("answerFret") { $0.answer.guitarFret },
     ] }
 
     private static func roundColumns(_ times: TimeFormat) -> [Column<RoundRow>] { [
@@ -227,6 +232,9 @@ enum UsageExport {
         Column("isNewBest") { $0.end?.isNewBest },
         Column("notesToReview") { $0.end?.notesToReview.joined(separator: " ") },
         Column("answers") { $0.answers },
+        // Answering on the guitar (since 2026-11-14): the tuning its first question was asked in.
+        Column("guitarTuning") { $0.guitarTuning },
+        Column("pieceGuitarNotesOutOfReach") { $0.start?.piece?.guitarNotesOutOfReach },
     ] }
 
     private static func sessionColumns(_ times: TimeFormat) -> [Column<SessionRow>] { [
@@ -348,6 +356,8 @@ private struct RoundRow {
     var answers = 0
     /// Times it came back after a crash.
     var restores = 0
+    /// Answered on the guitar: the tuning its first question was asked in (`questionShown.guitarTuning`).
+    var guitarTuning: String?
 }
 
 private struct SessionRow {
@@ -419,6 +429,9 @@ private struct Tables {
         case .questionShown(let question):
             questions[question.question] = question
             questionsByRound[question.round, default: []].append(question.question)
+            if let tuning = question.guitarTuning, let round = roundIndex[question.round], rounds[round].guitarTuning == nil {
+                rounds[round].guitarTuning = tuning
+            }
         case .answerGiven(let answer):
             sessions[session].answers += 1
             if answer.correct { sessions[session].correct += 1 }

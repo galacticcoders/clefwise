@@ -169,6 +169,8 @@ private struct Analysis {
     private var pitches: [ClefKey<Pitch>: Tally] = [:]
     private var inputs: [String: Tally] = [:], namings: [String: Tally] = [:]
     private var pieces: [String: PieceTally] = [:]
+    /// Every clef answered in, whatever the filter.
+    private var clefsPractised: Set<Clef> = []
     /// Right answers to single notes in the window and in the one before, and the window's answers
     /// by speed and by the previous note: for `ResponseTimes`.
     private var times = TimesTally()
@@ -278,6 +280,7 @@ private struct Analysis {
         let question = waiting.shown
         let day = days.day(of: time)
         practised[day.start] = day.end
+        if let clef = Clef(rawValue: question.clef) { clefsPractised.insert(clef) }
         guard inClef(question.clef) else { return }
         rounds[index].hasAnswerInClef = true
         // Notes named together share one time, so the time statistics leave them out.
@@ -332,6 +335,9 @@ private struct Analysis {
         recent.sort { (rounds[$0].started!, $0) > (rounds[$1].started!, $1) }
 
         let answersBeforeTracking = filter.range == .all ? addSnapshot() : 0
+        for (key, stat) in openingBalance.noteStats where stat.attempts > 0 {
+            if let (clef, _) = ProgressAnalyzer.parseStatKey(key) { clefsPractised.insert(clef) }
+        }
         let streaks = self.streaks()
         return ProgressReport(
             filter: filter, generatedAt: now, periodStart: periodStart,
@@ -360,7 +366,7 @@ private struct Analysis {
                 .sorted { ($0.lastPractised, $1.id) > ($1.lastPractised, $0.id) },
             recentRounds: recent.prefix(50).map { Self.recentRound(rounds[$0]) },
             responseTimes: times.responseTimes(previous: periodStart == nil ? nil : previousTimes),
-            answersBeforeTracking: answersBeforeTracking, unreadableLines: 0)
+            answersBeforeTracking: answersBeforeTracking, unreadableLines: 0, clefsPractised: clefsPractised)
     }
 
     /// Adds the stats kept before the log (every device's opening balance) to the note map and pitch
@@ -457,7 +463,8 @@ private struct Analysis {
         }
     }
 
-    /// "Treble · On the staff · G major", or for a piece "Minuet in G · Right hand".
+    /// "Treble · On the staff · G major", "Guitar · On the staff · G major" when answered on the
+    /// guitar, or for a piece "Minuet in G · Right hand".
     private static func description(of round: RoundRecord, _ settings: SavedSettings) -> String {
         if let piece = round.start?.piece {
             let hand = round.singleStaff ? nil : Game.PieceSettings.Hand(rawValue: piece.hand)?.label
@@ -473,8 +480,10 @@ private struct Analysis {
             key = KeyChoice.random.label + (round.start.flatMap { majorKey($0.keyFifths) }.map { " (\($0))" } ?? "")
         }
         let clefs: ClefChoice = settings.decode("clefChoice") ?? defaults.clefChoice
+        // Answering on the guitar, random notes are guitar music, in the guitar clef (`Game.randomClefs`).
+        let onGuitar = settings.string("answerInput") == Game.AnswerInput.guitar.rawValue
         let range: NoteRange = settings.decode("range") ?? defaults.range
-        return [clefs.label, range.label, key].compactMap { $0 }.joined(separator: " · ")
+        return [onGuitar ? Clef.treble8vb.name : clefs.label, range.label, key].compactMap { $0 }.joined(separator: " · ")
     }
 
     /// "G major"; nil for a signature that can't be one.
@@ -781,6 +790,12 @@ private struct SavedSettings {
 }
 
 private extension Clef {
-    /// Treble first.
-    var order: Int { self == .treble ? 0 : 1 }
+    /// Treble first, then bass, then the guitar clef.
+    var order: Int {
+        switch self {
+        case .treble: 0
+        case .bass: 1
+        case .treble8vb: 2
+        }
+    }
 }

@@ -349,8 +349,9 @@ private func close(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-9 }
 
     @Test func otherClefsLeaveTheStaffUndrawn() throws {
         let viola = try onlyPart("clefs.musicxml")
-        #expect(viola.measures.map { $0.staves.map(\.clef) } == [[nil], [.treble], [nil], [.bass]])
-        #expect(viola.measures.map(\.symbols.count) == [0, 1, 0, 1])
+        // Bar 3's treble clef with an 8 below is the guitar clef (since 2026-11-14).
+        #expect(viola.measures.map { $0.staves.map(\.clef) } == [[nil], [.treble], [.treble8vb], [.bass]])
+        #expect(viola.measures.map(\.symbols.count) == [0, 1, 1, 1])
     }
 
     @Test func signsCarryInTheBarUnlikeOneNoteAtATime() throws {
@@ -421,6 +422,7 @@ private func close(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-9 }
         "accidentals.musicxml", "ties-rests-grace.musicxml", "ottava.musicxml", "clefs.musicxml",
         "voice-and-piano.musicxml", "clarinet-tune.musicxml", "clarinet-tune.mxl",
         "beams.musicxml", "auto-beams.musicxml",
+        "guitar-drop-d.musicxml", "guitar-transpose.musicxml", "guitar-tab.musicxml",
     ]
 
     @Test(arguments: fixtures) func everyNoteFindsItsSymbol(_ name: String) throws {

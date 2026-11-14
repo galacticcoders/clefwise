@@ -131,6 +131,9 @@ struct PieceContext: Codable, Equatable {
     /// Staves in the part practised: 1, or 2 for a grand staff. Nil in rounds logged before the
     /// journal.
     var staves: Int? = nil
+    /// Answering on the guitar (since 2026-11-14): how many of the notes chosen its tuning can't
+    /// reach, left out of the round (`noteCount` doesn't count them). Nil with other inputs.
+    var guitarNotesOutOfReach: Int? = nil
 }
 
 struct QuestionShown: Codable, Equatable {
@@ -163,6 +166,11 @@ struct QuestionShown: Codable, Equatable {
     /// many they were; nil for a note asked on its own.
     var group: UUID? = nil
     var groupSize: Int? = nil
+    /// Answering on the guitar (since 2026-11-14): the tuning in use (`GuitarTuning.key`:
+    /// "standard", "dropD"…, or the open strings "D2 A2 D3 G3 B3 E4") and the frets shown. Nil
+    /// with other inputs.
+    var guitarTuning: String? = nil
+    var guitarFrets: Int? = nil
 }
 
 struct LoggedPitch: Codable, Equatable {
@@ -207,7 +215,7 @@ struct AnswerGiven: Codable, Equatable {
     var name: String
     var pitch: LoggedPitch?
     var correct: Bool
-    /// Piano only: the right note in the wrong octave.
+    /// Piano and guitar only: the right note in the wrong octave.
     var wrongOctave: Bool?
     /// Every key pressed while this question was up, in order.
     var keystrokes: [Keystroke]
@@ -223,6 +231,10 @@ struct AnswerGiven: Codable, Equatable {
     /// note answered on its own.
     var group: UUID? = nil
     var groupSize: Int? = nil
+    /// Guitar answers (since 2026-11-14): where on the neck, string 1 (the highest) to 6, and fret
+    /// (0 = open). `pitch` is what it sounds. Nil for other sources.
+    var guitarString: Int? = nil
+    var guitarFret: Int? = nil
 }
 
 struct Keystroke: Codable, Equatable {
@@ -413,8 +425,9 @@ enum PauseSource: String, Codable, Equatable {
 }
 
 enum AnswerSource: String, Codable, Equatable {
-    /// Note buttons clicked; keyboard shortcuts (letters, 1–7) for them; typed names; piano keys.
-    case click, shortcut, typing, piano
+    /// Note buttons clicked; keyboard shortcuts (letters, 1–7) for them; typed names; piano keys;
+    /// places on the guitar's neck (since 2026-11-14).
+    case click, shortcut, typing, piano, guitar
 }
 
 enum KeystrokeResult: String, Codable, Equatable {
