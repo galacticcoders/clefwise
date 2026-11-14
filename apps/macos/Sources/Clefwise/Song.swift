@@ -19,6 +19,9 @@ struct ScorePart {
     let staffCount: Int
     /// Notes left out because we can't show them (other clefs, double sharps, microtones…).
     let skippedNoteCount: Int
+    /// For a guitar part, the tuning the score asks for: its staff tuning (`<staff-tuning>`, as a
+    /// tablature staff has), or a retuned string written on it ("6=D"). Nil when it says nothing.
+    var guitarTuning: GuitarTuning? = nil
 
     /// The bar `note` is in and the index of its symbol there; nil when the part has no bar
     /// layout or the note has no symbol.

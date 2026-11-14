@@ -85,7 +85,8 @@ struct KeySignature: Hashable, Codable {
     /// Staff positions (0 = bottom line) of the signature's sharps or flats, in writing order.
     func staffPositions(for clef: Clef) -> [Int] {
         let treble = fifths >= 0 ? [8, 5, 9, 6, 3, 7, 4] : [4, 7, 3, 6, 2, 5, 1]
-        let shift = clef == .treble ? 0 : -2
+        // The guitar clef is a treble clef: its signature sits where the treble one does.
+        let shift = clef == .bass ? -2 : 0
         return treble.prefix(abs(fifths)).map { $0 + shift }
     }
 
@@ -118,12 +119,32 @@ enum KeyChoice: Hashable, Codable, Identifiable {
 }
 
 enum Clef: String, CaseIterable, Codable {
-    case treble, bass
+    /// `treble8vb` is the guitar clef: the treble clef with a small 8 below, which sounds an octave
+    /// lower than the treble clef. Guitar music is written in it, and its notes are kept as they
+    /// sound (its bottom line is E3), like every other `Pitch` here. Last, so treble and bass
+    /// keep their order in `allCases`.
+    case treble, bass, treble8vb
 
-    var name: String { self == .treble ? "Treble" : "Bass" }
+    var name: String {
+        switch self {
+        case .treble: "Treble"
+        case .bass: "Bass"
+        case .treble8vb: "Guitar"
+        }
+    }
 
-    /// The pitch that sits on the bottom staff line.
-    var bottomLine: Pitch { self == .treble ? Pitch(.e, 4) : Pitch(.g, 2) }
+    /// The pitch that sits on the bottom staff line, as it sounds.
+    var bottomLine: Pitch {
+        switch self {
+        case .treble: Pitch(.e, 4)
+        case .bass: Pitch(.g, 2)
+        case .treble8vb: Pitch(.e, 3)
+        }
+    }
+
+    /// The clef whose lines and spaces have the same letters: the guitar clef reads as the treble
+    /// clef (mnemonics, hints, key signatures), only an octave lower.
+    var readsAs: Clef { self == .treble8vb ? .treble : self }
 
     /// Staff position 0 is the bottom line; each +1 moves up one line-or-space.
     func pitch(atPosition position: Int) -> Pitch {
@@ -139,8 +160,8 @@ enum Clef: String, CaseIterable, Codable {
     var spaceLetters: [NoteLetter] { stride(from: 1, through: 7, by: 2).map { pitch(atPosition: $0).letter } }
 
     /// Memory aids; these only work with letter names.
-    var lineMnemonic: String { self == .treble ? "Every Good Boy Does Fine" : "Good Boys Do Fine Always" }
-    var spaceMnemonic: String { self == .treble ? "spells FACE" : "All Cows Eat Grass" }
+    var lineMnemonic: String { readsAs == .treble ? "Every Good Boy Does Fine" : "Good Boys Do Fine Always" }
+    var spaceMnemonic: String { readsAs == .treble ? "spells FACE" : "All Cows Eat Grass" }
 }
 
 /// How notes are called. Solfège and sargam are used as fixed names here: Do = Sa = C.

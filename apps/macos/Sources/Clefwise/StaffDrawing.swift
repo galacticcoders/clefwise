@@ -87,7 +87,7 @@ enum StaffMetrics {
     /// The staff position a clef is set on: the G clef curls round the G line, the F clef's dots
     /// straddle the F line.
     static func clefPosition(_ clef: Clef) -> Int {
-        clef == .treble ? 2 : 6
+        clef == .bass ? 6 : 2
     }
 
     /// Vertical extent of each clef, in staff spaces above the bottom line; `change` for the smaller

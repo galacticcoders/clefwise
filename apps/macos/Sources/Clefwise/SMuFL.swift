@@ -10,6 +10,8 @@ enum SMuFL {
         case brace = 0xE000
 
         case gClef = 0xE050
+        /// The guitar clef: the G clef with a small 8 below (`Clef.treble8vb`).
+        case gClef8vb = 0xE052
         case fClef = 0xE062
         /// The smaller clefs of a change partway through a bar.
         case gClefChange = 0xE07A
@@ -82,6 +84,8 @@ enum SMuFL {
             switch clef {
             case .treble: change ? .gClefChange : .gClef
             case .bass: change ? .fClefChange : .fClef
+            // SMuFL has no smaller guitar clef for a change partway through a bar.
+            case .treble8vb: .gClef8vb
             }
         }
 
@@ -140,6 +144,7 @@ enum SMuFL {
     static let boundingBoxes: [Glyph: (sw: CGPoint, ne: CGPoint)] = [
         .brace: (CGPoint(x: 0, y: -0.002531), CGPoint(x: 0.277415, y: 4.00244)),
         .gClef: (CGPoint(x: 0, y: -2.632), CGPoint(x: 2.684, y: 4.392)),
+        .gClef8vb: (CGPoint(x: 0, y: -3.512), CGPoint(x: 2.684, y: 4.392)),
         .fClef: (CGPoint(x: -0.02, y: -2.54), CGPoint(x: 2.736, y: 1.048)),
         .gClefChange: (CGPoint(x: 0, y: -1.82), CGPoint(x: 1.76, y: 2.828)),
         .fClefChange: (CGPoint(x: -0.06, y: -1.656), CGPoint(x: 1.852, y: 0.68)),

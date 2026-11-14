@@ -270,13 +270,14 @@ private struct Writer {
         case .buttons: chance(0.6) ? .click : .shortcut
         case .piano: .piano
         case .keyboard: .typing
+        case .guitar: .guitar
         }
         let keystrokes: [Keystroke] = switch source {
         case .typing: [Keystroke(key: letter.name.lowercased(), ms: ms * 2 / 3, result: .typed)]
             + (accidental == .sharp ? [Keystroke(key: "#", ms: ms * 5 / 6, result: .typed)] : [])
             + [Keystroke(key: "Return", ms: ms, result: .submitted)]
         case .shortcut: [Keystroke(key: letter.name.lowercased(), ms: ms, result: .submitted)]
-        case .click, .piano: []
+        case .click, .piano, .guitar: []
         }
         return AnswerGiven(round: question.round, question: question.question, responseMs: ms, source: source,
                            letter: letter.name, accidental: accidental.rawValue,

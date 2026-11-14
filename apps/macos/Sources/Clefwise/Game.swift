@@ -77,7 +77,9 @@ final class Game {
     static let practiceNoteChoices = [50, 100, 250, 500, 1000]
 
     enum AnswerInput: String, CaseIterable, Identifiable, Codable {
-        case buttons, piano, keyboard
+        /// `guitar`: click where you'd play the note on a fretboard (any string and fret that
+        /// sounds it). Random notes are then written as guitar music, in the guitar clef.
+        case buttons, piano, keyboard, guitar
 
         var id: Self { self }
         var label: String {
@@ -85,6 +87,7 @@ final class Game {
             case .buttons: "Note buttons"
             case .piano: "Piano"
             case .keyboard: "Keyboard"
+            case .guitar: "Guitar"
             }
         }
         var symbol: String {
@@ -92,8 +95,11 @@ final class Game {
             case .buttons: "rectangle.split.3x1"
             case .piano: "pianokeys"
             case .keyboard: "keyboard"
+            case .guitar: "guitars"
             }
         }
+        /// Piano and guitar answers are exact pitches (judged by MIDI number); names count in any octave.
+        var answersPitch: Bool { self == .piano || self == .guitar }
     }
 
     enum Phase { case idle, playing, finished }
@@ -102,10 +108,12 @@ final class Game {
     struct Flash: Equatable {
         let letter: NoteLetter
         let accidental: Accidental
-        /// The exact key, when answered on the piano. Compare keys by `midiNumber`: a black key
-        /// may be spelled C♯ on the piano and D♭ in the question.
+        /// The exact key, when answered on the piano or the guitar. Compare keys by `midiNumber`: a
+        /// black key may be spelled C♯ on the piano and D♭ in the question.
         let pitch: Pitch?
         let isCorrect: Bool
+        /// Where on the neck, when answered on the guitar (`pitch` is what it sounds).
+        var position: GuitarPosition? = nil
         let id = UUID()
     }
 
@@ -136,6 +144,10 @@ final class Game {
         var appearance = Appearance.system
         /// The library entry of the open piece, reopened at launch from its copy.
         var pieceID: UUID?
+        /// How the guitar answer's strings are tuned for random notes. A piece has its own
+        /// (`PieceSettings.guitarTuning`, else the score's); read the one in use through
+        /// `Game.guitarTuning`.
+        var guitarTuning = GuitarTuning.standard
 
         init() {}
 
@@ -161,6 +173,8 @@ final class Game {
             appearance = try container.decodeIfPresent(Appearance.self, forKey: .appearance) ?? appearance
             // An id that doesn't read only loses the piece to reopen, not every setting.
             pieceID = (try? container.decodeIfPresent(UUID.self, forKey: .pieceID)) ?? nil
+            // Likewise a tuning this version doesn't know only loses the tuning.
+            guitarTuning = (try? container.decodeIfPresent(GuitarTuning.self, forKey: .guitarTuning)) ?? nil ?? guitarTuning
         }
     }
 
@@ -216,6 +230,9 @@ final class Game {
         /// Draw the whole bar the note is in, as the score has it, rather than the note on its own.
         /// Naming chords together always draws it, whatever this says (see `usesWholeBar`).
         var showsWholeBar = true
+        /// The guitar tuning chosen for this piece; nil = the score's (`ScorePart.guitarTuning`),
+        /// else `Settings.guitarTuning`. See `Game.guitarTuning`.
+        var guitarTuning: GuitarTuning?
 
         /// The old "One note per chord" checkbox, now `chords == .topOrBottom`. Switching it off
         /// goes back to note by note only from `topOrBottom`.
@@ -251,6 +268,7 @@ final class Game {
                 chords = .topOrBottom
             }
             showsWholeBar = try container.decodeIfPresent(Bool.self, forKey: .showsWholeBar) ?? showsWholeBar
+            guitarTuning = (try? container.decodeIfPresent(GuitarTuning.self, forKey: .guitarTuning)) ?? nil
         }
 
         private enum LegacyKeys: String, CodingKey {
@@ -304,9 +322,10 @@ final class Game {
         }
 
         /// How many entries make an answer: one name per note, so two Cs an octave apart are named
-        /// twice; on the piano one key per note, but notes that sound the same key share it.
+        /// twice; on the piano (or the guitar) one key (or place) per note, but notes that sound the
+        /// same key share it.
         func entriesNeeded(on input: AnswerInput) -> Int {
-            input == .piano ? Set(questions.map(\.pitch.midiNumber)).count : questions.count
+            input.answersPitch ? Set(questions.map(\.pitch.midiNumber)).count : questions.count
         }
     }
 
@@ -315,9 +334,11 @@ final class Game {
         let id = UUID()
         let letter: NoteLetter
         let accidental: Accidental
-        /// The key, for piano entries; nil for names, which count in any octave. The piano calls
-        /// black keys sharps: C♯, never D♭.
+        /// The key, for piano entries (the pitch sounded, for guitar ones); nil for names, which
+        /// count in any octave. The piano and the guitar call black keys sharps: C♯, never D♭.
         let pitch: Pitch?
+        /// Where on the neck, for guitar entries.
+        var position: GuitarPosition? = nil
     }
 
     /// How the entries for notes asked together were judged.
@@ -1040,6 +1061,50 @@ final class Game {
         return (indices.min()! / 7 * 7)...(indices.max()! / 7 * 7 + 6)
     }
 
+    // MARK: - Guitar
+
+    /// The clefs random notes come from: the guitar clef while answering on the guitar (guitar
+    /// music is written in it), otherwise the toolbar's choice. What picks, shows or compares random
+    /// notes reads this rather than `settings.clefChoice`.
+    var randomClefs: [Clef] {
+        settings.answerInput == .guitar ? [.treble8vb] : settings.clefChoice.clefs
+    }
+
+    /// The tuning the guitar answer uses. With a piece open: the piece's choice, else the score's
+    /// (`ScorePart.guitarTuning`, from its staff tuning or a "6=D" on it), else
+    /// `settings.guitarTuning`; with none, `settings.guitarTuning`. Setting it with a piece open
+    /// sets the piece's choice (saved with its other settings), otherwise the global one.
+    var guitarTuning: GuitarTuning {
+        get {
+            guard piece != nil else { return settings.guitarTuning }
+            return settings.piece.guitarTuning ?? piecePart?.guitarTuning ?? settings.guitarTuning
+        }
+        set {
+            if piece != nil {
+                settings.piece.guitarTuning = newValue
+            } else {
+                settings.guitarTuning = newValue
+            }
+        }
+    }
+
+    /// The fretboard the guitar answer shows: `guitarTuning`, with as many frets
+    /// (`Fretboard.fretsNeeded`) as the notes the round can ask need: a piece round's notes; for
+    /// random notes every note the settings can ask in `randomClefs`. Between rounds, as the next
+    /// round would be.
+    var fretboard: Fretboard {
+        // Contract stub (the game agent fills it in): always the shortest board.
+        Fretboard(tuning: guitarTuning)
+    }
+
+    /// Answering on the guitar with a piece open: how many of the notes chosen (part, hand, start
+    /// bar, chords) the tuning can't reach (`Fretboard.canPlay`). Rounds leave those notes out, and
+    /// the piece panel says how many. 0 otherwise.
+    var guitarNotesOutOfReach: Int {
+        // Contract stub (the game agent fills it in).
+        0
+    }
+
     // MARK: - Round flow
 
     /// Starts a round: on the loaded piece if there is one (or sets `pieceError` when the piece
@@ -1189,6 +1254,16 @@ final class Game {
         submit(Flash(letter: pitch.letter, accidental: pitch.accidental, pitch: pitch,
                      isCorrect: question.pitch.midiNumber == pitch.midiNumber),
                to: question, via: .piano)
+    }
+
+    /// Answers with a place on the guitar's neck, judged like a piano key by the pitch it sounds
+    /// (`fretboard.midiNumber(at:)` against the question's MIDI number), so any string and fret
+    /// that sounds the note is right. While a `group` is asked, the place is chosen, or taken back
+    /// if it's chosen already; a place sounding a pitch already chosen elsewhere moves that choice
+    /// there; the last one needed submits them. The flash and entries carry the `position`; the log
+    /// gets source `guitar`, the pitch sounded and `guitarString`/`guitarFret`.
+    func answer(at position: GuitarPosition) {
+        // Contract stub: the game agent fills it in.
     }
 
     /// Takes back an entry towards the notes asked together (a chip clicked), before they're judged.

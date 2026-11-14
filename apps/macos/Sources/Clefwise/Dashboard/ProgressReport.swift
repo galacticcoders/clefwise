@@ -257,7 +257,8 @@ extension ProgressReport {
                                   daysPractised: practised.count,
                                   medianResponseMs: practised.compactMap(\.medianResponseMs).sorted().dropFirst(practised.count / 2).first)
         }
-        let positions: [PositionProgress] = Clef.allCases.flatMap { clef in
+        // Treble and bass only, as before the guitar clef, so the demo stays the same.
+        let positions: [PositionProgress] = [Clef.treble, .bass].flatMap { clef in
             (-6...14).compactMap { position -> PositionProgress? in
                 // Ledger notes are seen less and known less well.
                 let ledger = position < 0 || position > 8

@@ -21,6 +21,7 @@ struct ContentView: View {
             case .buttons: AnswerPad(game: game)
             case .piano: PianoPad(game: game)
             case .keyboard: TypingPad(game: game)
+            case .guitar: GuitarPad(game: game)
             }
             HStack {
                 Text(shortcutHint)
@@ -104,6 +105,7 @@ struct ContentView: View {
         case (.buttons, _): parts = ["Press 1–7 to answer"]
         case (.piano, _): parts = ["Click the exact key"]
         case (.keyboard, _): parts = ["Type the note's name, ⌫ to fix"]
+        case (.guitar, _): parts = ["Click where you'd play it"]
         }
         // Naming notes together, entries can be taken back.
         if game.namesTogether {
@@ -111,6 +113,7 @@ struct ContentView: View {
             case .buttons: parts.append("⌫ take one back")
             case .piano: parts = ["Click the exact keys"]
             case .keyboard: parts = ["Type the names one after another, ⌫ to fix"]
+            case .guitar: parts = ["Click where you'd play them"]
             }
         }
         // Words rather than ♯/♭, which are too small to read at caption size.
@@ -122,6 +125,7 @@ struct ContentView: View {
         case .buttons: parts += ["H hints", "M mute"]
         case .piano: parts += ["H hints", "K key names", "M mute"]
         case .keyboard: break // letters are typed during a round, so H and M aren't shortcuts then
+        case .guitar: parts += ["H hints", "K note names", "M mute"]
         }
         return parts.joined(separator: "  ·  ")
     }
