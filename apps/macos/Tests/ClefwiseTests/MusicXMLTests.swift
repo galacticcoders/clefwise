@@ -122,11 +122,12 @@ private func importError(_ name: String) throws -> String {
 @Suite struct MusicXMLClefTests {
     @Test func otherClefsAreSkippedAndCounted() throws {
         let viola = try onlyPart("clefs.musicxml")
-        // Two notes in alto clef and one under a treble clef with an 8 below.
-        #expect(viola.skippedNoteCount == 3)
-        #expect(viola.notes.map(\.pitch.name) == ["A4", "A2"])
-        #expect(viola.notes.map(\.clef) == [.treble, .bass])
-        #expect(viola.notes.map(\.measure) == [2, 4])
+        // Two notes in alto clef. The treble clef with an 8 below is the guitar clef (since
+        // 2026-11-14), so its note is read, as it sounds.
+        #expect(viola.skippedNoteCount == 2)
+        #expect(viola.notes.map(\.pitch.name) == ["A4", "G3", "A2"])
+        #expect(viola.notes.map(\.clef) == [.treble, .treble8vb, .bass])
+        #expect(viola.notes.map(\.measure) == [2, 3, 4])
     }
 }
 

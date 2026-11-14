@@ -14,9 +14,12 @@ music or not music at all. Never add copyrighted scores.
 | `broken.mxl` | A damaged compressed file, which must be refused |
 | `clarinet-tune.musicxml` | "Clarinet Tune": one staff, written the way MuseScore exports (DOCTYPE, credits) |
 | `clarinet-tune.mxl` | The same tune compressed, with a `container.xml` pointing to `Scores/Clarinet Tune.musicxml` and a decoy XML file |
-| `clefs.musicxml` | Clefs that can't be shown (C clefs, octave clefs): their notes are skipped and counted |
+| `clefs.musicxml` | A clef change in every bar: alto, which can't be shown (its notes are skipped and counted), treble, a treble with an 8 below (the guitar clef), then bass |
 | `drums-only.musicxml` | Unpitched percussion only: nothing to practise, so it's refused |
 | `grand-staff.musicxml` | "Grand Staff Study": a piano part, read lower staff first and low to high; chords per staff; clef changes on the lower staff |
+| `guitar-drop-d.musicxml` | "Lowered String": guitar in drop D as MuseScore 4 exports its classical guitar, the treble clef with an 8 below (`clef-octave-change` -1) and every pitch as it sounds; "6=D" written as text in bar 1; a melody with stems up over a bass with stems down that reaches the open 6th string (D2); beams and a chord |
+| `guitar-tab.musicxml` | "Tab Study": a guitar with a linked tablature staff, as MuseScore 4 exports it: one part with two staves, notes in the guitar clef and a TAB staff in drop D (`staff-tuning`) repeating them with their strings and frets |
+| `guitar-transpose.musicxml` | "Open String Scale": guitar written in a plain treble clef with `<transpose>` an octave down (pitches as written, an octave above how they sound); a scale from the open low E, beams, a placed rest |
 | `no-container.mxl` | `accidentals.musicxml` compressed without a `container.xml` |
 | `ottava.musicxml` | 8va and 8vb lines: notes are written an octave away from how they sound |
 | `plain-text.musicxml` | Not XML, despite its name: refused |

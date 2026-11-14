@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
+<!-- Hand-written test piece for guitar written the other way: a plain treble clef and
+     <transpose> with octave-change -1, so every <pitch> is as written, an octave above how it
+     sounds (MuseScore 4's "Classical guitar (treble clef)" exports this way). In standard tuning,
+     a scale from the open 6th string (written E3, sounding E2) up an octave, then a placed rest. -->
+<score-partwise version="4.0">
+  <work>
+    <work-title>Open String Scale</work-title>
+  </work>
+  <part-list>
+    <score-part id="P1">
+      <part-name>Guitar</part-name>
+      <score-instrument id="P1-I1">
+        <instrument-name>Classical Guitar (treble clef)</instrument-name>
+        <instrument-sound>pluck.guitar.nylon-string</instrument-sound>
+      </score-instrument>
+    </score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>2</divisions>
+        <key><fifths>1</fifths></key>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+        <clef><sign>G</sign><line>2</line></clef>
+        <transpose>
+          <diatonic>0</diatonic>
+          <chromatic>0</chromatic>
+          <octave-change>-1</octave-change>
+        </transpose>
+      </attributes>
+      <note>
+        <pitch><step>E</step><octave>3</octave></pitch>
+        <duration>1</duration><voice>1</voice><type>eighth</type><stem>up</stem>
+        <beam number="1">begin</beam>
+      </note>
+      <note>
+        <pitch><step>F</step><alter>1</alter><octave>3</octave></pitch>
+        <duration>1</duration><voice>1</voice><type>eighth</type><stem>up</stem>
+        <beam number="1">continue</beam>
+      </note>
+      <note>
+        <pitch><step>G</step><octave>3</octave></pitch>
+        <duration>1</duration><voice>1</voice><type>eighth</type><stem>up</stem>
+        <beam number="1">continue</beam>
+      </note>
+      <note>
+        <pitch><step>A</step><octave>3</octave></pitch>
+        <duration>1</duration><voice>1</voice><type>eighth</type><stem>up</stem>
+        <beam number="1">end</beam>
+      </note>
+      <note>
+        <pitch><step>B</step><octave>3</octave></pitch>
+        <duration>1</duration><voice>1</voice><type>eighth</type><stem>down</stem>
+        <beam number="1">begin</beam>
+      </note>
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>1</duration><voice>1</voice><type>eighth</type><stem>down</stem>
+        <beam number="1">continue</beam>
+      </note>
+      <note>
+        <pitch><step>D</step><octave>4</octave></pitch>
+        <duration>1</duration><voice>1</voice><type>eighth</type><stem>down</stem>
+        <beam number="1">continue</beam>
+      </note>
+      <note>
+        <pitch><step>E</step><octave>4</octave></pitch>
+        <duration>1</duration><voice>1</voice><type>eighth</type><stem>down</stem>
+        <beam number="1">end</beam>
+      </note>
+    </measure>
+    <measure number="2">
+      <note>
+        <pitch><step>E</step><octave>4</octave></pitch>
+        <duration>4</duration><voice>1</voice><type>half</type><stem>down</stem>
+      </note>
+      <note>
+        <rest><display-step>B</display-step><display-octave>4</display-octave></rest>
+        <duration>2</duration><voice>1</voice><type>quarter</type>
+      </note>
+      <note>
+        <pitch><step>B</step><octave>3</octave></pitch>
+        <duration>2</duration><voice>1</voice><type>quarter</type><stem>up</stem>
+      </note>
+      <barline location="right"><bar-style>light-heavy</bar-style></barline>
+    </measure>
+  </part>
+</score-partwise>
