@@ -171,25 +171,30 @@ struct GuitarNeck: View {
                                markWidth: layout.markWidth(position), alignment: position.fret == 0 ? .leading : .center))
         .frame(width: target.width, height: target.height)
         .offset(x: target.minX, y: target.minY)
-        .accessibilityLabel(showsNames ? "\(position.label), \(naming.name(of: pitch))" : position.label)
+        .accessibilityLabel(showsNames ? "\(position.label), \(naming.name(of: pitch))\(pitch.octave)" : position.label)
     }
 
-    /// The name of the note at a place, in versions from the fullest to the shortest, each as its
-    /// lines: a note between the naturals is called both ways where there's room ("F♯/G♭", as the
-    /// piano's black keys are), otherwise the sharp (or `prefersFlats`, the flat). Sargam has one
-    /// name per note ("komal Re"), on two lines where it's narrow.
+    /// The name of the note at a place with its octave as it sounds (the open strings E2 A2 D3 G3
+    /// B3 E4), in versions from the fullest to the shortest, each as its lines: a note between the
+    /// naturals is called both ways where there's room ("F♯3/G♭3", as the piano's black keys are),
+    /// otherwise the sharp (or `prefersFlats`, the flat). Where even one name is too wide, the
+    /// octave goes under it ("Sol♯" over "5"), so it's never cut off. Sargam has one name per note
+    /// ("komal Re4"), on two lines where it's narrow.
     static func names(of pitch: Pitch, in naming: NamingSystem, prefersFlats: Bool) -> [[String]] {
-        guard pitch.accidental != .natural else { return [[naming.name(of: pitch)]] }
+        func named(_ pitch: Pitch) -> String { "\(naming.name(of: pitch))\(pitch.octave)" }
+        func stacked(_ pitch: Pitch) -> [String] { [naming.name(of: pitch), "\(pitch.octave)"] }
+        guard pitch.accidental != .natural else { return [[named(pitch)], stacked(pitch)] }
         if naming == .sargam {
-            let name = naming.name(of: pitch)
+            let name = named(pitch)
             let words = name.split(separator: " ").map(String.init)
-            return words.count > 1 ? [[name], words] : [[name]]
+            return words.count > 1 ? [[name], words] : [[name], stacked(pitch)]
         }
-        // Board pitches are spelled with sharps (C♯…A♯); the flat is the next letter's.
+        // Board pitches are spelled with sharps (C♯…A♯); the flat is the next letter's, in the same
+        // octave (the board never has B♯ or C♭).
         let sharp = pitch.with(.sharp)
         let flat = Pitch(NoteLetter(rawValue: (pitch.letter.rawValue + 1) % 7)!, pitch.octave, .flat)
-        let both = "\(naming.name(of: sharp))/\(naming.name(of: flat))"
-        return [[both], [naming.name(of: prefersFlats ? flat : sharp)]]
+        let one = prefersFlats ? flat : sharp
+        return [["\(named(sharp))/\(named(flat))"], [named(one)], stacked(one)]
     }
 }
 
