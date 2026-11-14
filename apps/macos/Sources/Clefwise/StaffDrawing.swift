@@ -267,13 +267,15 @@ enum StaffDrawing {
         return line.strokedPath(StrokeStyle(lineWidth: max(1, space * SMuFL.octaveLineThickness)))
     }
 
-    /// Hint names for `positions`, carrying the key signature's sharps and flats: in G major the
-    /// treble's top line reads "F♯".
+    /// Hint names for `positions`, with their octave and carrying the key signature's sharps and
+    /// flats: in G major the treble's top line reads "F♯5". Octaves are as the clef sounds, so the
+    /// guitar clef's bottom line is "E3", as the guitar's frets name it.
     static func hintNames(for positions: ClosedRange<Int>, clef: Clef, keySignature: KeySignature,
                           naming: NamingSystem) -> [String] {
         positions.map { position in
-            let pitch = clef.pitch(atPosition: position)
-            return naming.name(of: pitch.with(keySignature.accidental(for: pitch.letter)))
+            let natural = clef.pitch(atPosition: position)
+            let pitch = natural.with(keySignature.accidental(for: natural.letter))
+            return "\(naming.name(of: pitch))\(pitch.octave)"
         }
     }
 
