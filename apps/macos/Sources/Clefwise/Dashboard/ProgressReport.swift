@@ -26,8 +26,10 @@ struct ProgressFilter: Equatable, Codable {
         }
     }
 
+    /// Raw values are `Clef`'s: `treble8vb` is the guitar clef, offered only once there are answers
+    /// in it (`choices`).
     enum ClefFilter: String, CaseIterable, Identifiable, Codable {
-        case all, treble, bass
+        case all, treble, bass, treble8vb
 
         var id: Self { self }
         var label: String {
@@ -35,12 +37,30 @@ struct ProgressFilter: Equatable, Codable {
             case .all: "All clefs"
             case .treble: "Treble"
             case .bass: "Bass"
+            case .treble8vb: Clef.treble8vb.name
             }
+        }
+
+        /// The choices to offer: All, Treble and Bass as always, and Guitar once `report` has answers
+        /// in the guitar clef, or when it's the one `selected`.
+        static func choices(for report: ProgressReport, selected: ClefFilter) -> [ClefFilter] {
+            let hasGuitar = report.clefsPractised.contains(.treble8vb) || report.positions.contains { $0.clef == .treble8vb }
+            return hasGuitar || selected == .treble8vb ? [.all, .treble, .bass, .treble8vb] : [.all, .treble, .bass]
         }
     }
 
     var range = Range.month
     var clef = ClefFilter.all
+}
+
+extension ProgressFilter {
+    /// Tolerant: a range or clef this version doesn't know (saved by a later one) falls back to its
+    /// default alone.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        range = (try? container.decodeIfPresent(Range.self, forKey: .range)) ?? .month
+        clef = (try? container.decodeIfPresent(ClefFilter.self, forKey: .clef)) ?? .all
+    }
 }
 
 /// Everything the dashboard draws, worked out from the usage log for one filter.
@@ -79,6 +99,10 @@ struct ProgressReport: Equatable {
     /// Lines in the practice journal's files (or, read the old way, the usage log) that couldn't be
     /// read, and so are left out.
     var unreadableLines: Int
+    /// Every clef with an answer anywhere in the journal, whatever the filter (all time, every
+    /// clef): it decides which clef filters to offer, so the Guitar one shows once there are answers
+    /// in the guitar clef.
+    var clefsPractised: Set<Clef> = []
 
     var isEmpty: Bool { totals.answers == 0 && answersBeforeTracking == 0 }
 

@@ -49,13 +49,15 @@ struct DashboardView: View {
             .rebuiltOnAppearanceChange()
             .help("Which days the dashboard counts")
 
+            // Guitar joins Treble and Bass once there are answers in the guitar clef.
+            let clefs = ProgressFilter.ClefFilter.choices(for: store.report, selected: store.filter.clef)
             Picker("Clef", selection: clef) {
-                ForEach(ProgressFilter.ClefFilter.allCases) { Text($0.label).tag($0) }
+                ForEach(clefs) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
-            .help("Count notes in either clef, or only in one")
+            .help(clefs.count > 3 ? "Count notes in every clef, or only in one" : "Count notes in either clef, or only in one")
 
             Button {
                 game.recorder.recordUIAction("progressRefresh")
@@ -197,6 +199,7 @@ private struct EmptyDashboard: View {
         case .all: "No notes"
         case .treble: "No treble clef notes"
         case .bass: "No bass clef notes"
+        case .treble8vb: "No guitar clef notes"
         }
         return report.filter.range == .all ? "\(notes) yet" : "\(notes) in the \(report.filter.range.label.lowercased())"
     }
