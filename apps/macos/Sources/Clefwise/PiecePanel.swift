@@ -14,8 +14,12 @@ struct PiecePanel: View {
                     Text(title(of: piece))
                         .font(.title2.weight(.semibold))
                         .lineLimit(1)
-                    Text(details(of: part, showsName: piece.parts.count == 1))
-                        .foregroundStyle(.secondary)
+                    if answersOnGuitar {
+                        guitarDetails(of: part, showsName: piece.parts.count == 1)
+                    } else {
+                        Text(details(of: part, showsName: piece.parts.count == 1))
+                            .foregroundStyle(.secondary)
+                    }
                     if part.skippedNoteCount > 0 {
                         Label(skippedText(part.skippedNoteCount), systemImage: "exclamationmark.triangle.fill")
                             .font(.callout)
@@ -94,10 +98,12 @@ struct PiecePanel: View {
     }
 
     /// Two rows: which notes (part, hand), then how they come (order, start bar). Part and hand
-    /// only show when there's a choice to make.
+    /// only show when there's a choice to make. Answering on the guitar, the tuning goes with them:
+    /// in their row where there's room, so the panel is no taller than with the other inputs.
     private func settings(for piece: Score, _ part: ScorePart) -> some View {
-        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 10) {
-            if piece.parts.count > 1 || part.staffCount == 2 {
+        let hasPartAndHand = piece.parts.count > 1 && part.staffCount == 2
+        return Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 10) {
+            if piece.parts.count > 1 || part.staffCount == 2 || answersOnGuitar {
                 GridRow {
                     if piece.parts.count > 1 {
                         settingLabel("Part")
@@ -119,7 +125,14 @@ struct PiecePanel: View {
                         .fixedSize()
                         .help("Right hand reads the upper staff, left hand the lower one")
                     }
+                    // Only while answering on the guitar, so the panel looks as it always did otherwise.
+                    if answersOnGuitar, !hasPartAndHand {
+                        tuning
+                    }
                 }
+            }
+            if answersOnGuitar, hasPartAndHand {
+                GridRow { tuning }
             }
             GridRow {
                 settingLabel("Order")
@@ -235,6 +248,46 @@ struct PiecePanel: View {
 
     private func skippedText(_ count: Int) -> String {
         count == 1 ? "1 note can't be shown and was left out" : "\(count) notes can't be shown and were left out"
+    }
+
+    private var answersOnGuitar: Bool { game.settings.answerInput == .guitar }
+
+    /// The piece's tuning (the same as the one over the neck).
+    @ViewBuilder
+    private var tuning: some View {
+        settingLabel("Tuning")
+        GuitarTuningMenu(game: game, showsTitle: false)
+    }
+
+    /// The details line, answering on the guitar: with how many notes the tuning can't reach (they're
+    /// left out), or else that the score asks for another tuning ("6=D"). On the same line, so the
+    /// panel is no taller than with the other inputs.
+    private func guitarDetails(of part: ScorePart, showsName: Bool) -> some View {
+        let details = Text(details(of: part, showsName: showsName)).foregroundStyle(.secondary)
+        let tuning = game.guitarTuning
+        let asked = part.guitarTuning.flatMap { $0 == tuning ? nil : $0 }
+        let count = game.guitarNotesOutOfReach
+        var help = ""
+        let line: Text
+        if count > 0 {
+            let notes = count == 1 ? "1 note" : "\(count) notes"
+            let warning = Text("\(Image(systemName: "exclamationmark.triangle.fill")) \(notes) out of reach in \(Self.called(tuning))")
+                .foregroundStyle(.orange)
+            line = Text("\(details)  ·  \(warning)")
+            help = "\(count == 1 ? "It's" : "They're") left out: lower than the open 6th string or higher than the 1st string's "
+                + "\(Fretboard.maxFrets)th fret, with the strings tuned \(tuning.stringNames(in: game.settings.naming)). "
+                + (asked.map { "The score asks for \(Self.called($0))." } ?? "Another tuning may reach them.")
+        } else if let asked {
+            line = Text("\(details)  ·  \(Text("the score asks for \(Self.called(asked))").foregroundStyle(.secondary))")
+        } else {
+            line = details
+        }
+        return line.help(help)
+    }
+
+    /// "Drop D tuning"; a tuning that isn't a preset goes by its strings: "C G D G B D".
+    private static func called(_ tuning: GuitarTuning) -> String {
+        tuning.isPreset ? "\(tuning.name) tuning" : tuning.name
     }
 
     /// One line on how the chosen setting asks chords. With top or bottom notes, which note is
