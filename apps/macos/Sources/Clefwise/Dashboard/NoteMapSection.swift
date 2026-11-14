@@ -53,6 +53,14 @@ struct NoteMapSection: View {
                     staves(.regular)
                     key(.horizontal)
                 }
+                // With the guitar clef's staff too, a key across can be wider than the card (the speed
+                // map's is): then the key goes under the staves as a list.
+                if Self.clefs(for: report).count > 2 {
+                    VStack(alignment: .leading, spacing: 18) {
+                        staves(.regular)
+                        key(.vertical)
+                    }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .hoverTip(for: hovered) { tip }
@@ -63,19 +71,21 @@ struct NoteMapSection: View {
 
     // MARK: Model
 
-    /// The clefs the filter lets through, in staff order.
-    private var clefs: [Clef] {
+    /// The clefs `report`'s filter lets through, in staff order: with every clef, treble and bass
+    /// as always, and the guitar clef only where the report has places answered in it.
+    static func clefs(for report: ProgressReport) -> [Clef] {
         switch report.filter.clef {
-        case .all: Clef.allCases
+        case .all: [.treble, .bass] + (report.positions.contains { $0.clef == .treble8vb } ? [.treble8vb] : [])
         case .treble: [.treble]
         case .bass: [.bass]
+        case .treble8vb: [.treble8vb]
         }
     }
 
     /// Each clef's places, highest first: the five lines and four spaces, and out to the furthest
     /// ledger position answered.
     private var columns: [(clef: Clef, places: [NoteMapPlace])] {
-        clefs.map { clef in
+        Self.clefs(for: report).map { clef in
             let answered = report.positions.filter { $0.clef == clef }
             let byPosition = Dictionary(answered.map { ($0.position, $0) }, uniquingKeysWith: { first, _ in first })
             let lowest = min(0, answered.map(\.position).min() ?? 0)
