@@ -127,7 +127,7 @@ final class Game {
         var naming = NamingSystem.letters
         var answerInput = AnswerInput.buttons
         var showHints = false
-        /// Write note names on the piano keys.
+        /// Write note names on the piano keys, or on the guitar's frets.
         var showKeyNames = false
         var isMuted = false
         var key = KeyChoice.fixed(.cMajor)
@@ -380,6 +380,9 @@ final class Game {
                 updateSelection()
                 // The open piece keeps its own settings, as fitted, for the next time it's opened.
                 if let pieceEntryID { library.save(settings: settings.piece, for: pieceEntryID) }
+            } else if settings.answerInput != oldValue.answerInput || settings.guitarTuning != oldValue.guitarTuning {
+                // On the guitar a piece round leaves out the notes the tuning can't reach.
+                updateSelection()
             }
             save(settings, as: Keys.settings)
             recordSettingChanges()
@@ -434,7 +437,13 @@ final class Game {
     private var selectedNotes: [ScoreNote] = []
     /// The bar view's layout for `selectedNotes`, worked out with them; nil without a bar layout.
     private var selectedBarLayout: BarLayout?
-    /// How many notes the next piece round asks with the current hand, start bar and chord settings.
+    /// The sounding pitches of `selectedNotes`, by MIDI number, for the guitar's frets.
+    private var selectedMidiNumbers: Set<Int> = []
+    /// Answering on the guitar: how many notes the piece settings choose that the tuning can't
+    /// reach, left out of `selectedNotes`. 0 otherwise.
+    private var selectedOutOfReach = 0
+    /// How many notes the next piece round asks with the current hand, start bar and chord settings
+    /// (on the guitar, those its tuning reaches: see `guitarNotesOutOfReach`).
     var pieceRoundNoteCount: Int { selectedNotes.count }
     /// The round in progress when it's on a piece; nil between rounds and in random rounds.
     private var pieceRound: PieceRound?
@@ -462,11 +471,16 @@ final class Game {
         /// Shuffled rounds draw a question (by its key: a note, or the notes of a chord), then one of
         /// its places, so one the piece repeats often isn't asked any more often for it.
         let places: [(key: String, statKeys: [String], groups: [Int])]
+        /// The sounding pitches of `notes`, by MIDI number: what the guitar's frets have to reach.
+        let midiNumbers: Set<Int>
+        /// Answered on the guitar: the notes chosen that the tuning couldn't reach, left out of
+        /// `notes`; nil with other inputs.
+        let notesOutOfReach: Int?
         /// Index in `groups` of the question being asked.
         var groupIndex = 0
 
         init(title: String, part: ScorePart, notes: [ScoreNote], order: PieceSettings.Order, barLayout: BarLayout?,
-             namesTogether: Bool = false) {
+             namesTogether: Bool = false, notesOutOfReach: Int? = nil) {
             self.title = title
             self.part = part
             self.notes = notes
@@ -474,6 +488,8 @@ final class Game {
             self.order = order
             self.barLayout = barLayout
             self.namesTogether = namesTogether
+            midiNumbers = Set(notes.map(\.pitch.midiNumber))
+            self.notesOutOfReach = notesOutOfReach
             let groups = namesTogether ? Self.groups(of: notes, in: part, layout: barLayout) : notes.indices.map { $0..<($0 + 1) }
             self.groups = groups
             let statKeys = groups.map { notes[$0].map { Game.statKey($0.clef, $0.pitch) } }
@@ -607,7 +623,7 @@ final class Game {
 
     /// The clef on screen: the current question's, or between rounds the first selected clef
     /// (with a piece, the clef of the note the next round starts on).
-    var displayedClef: Clef { question?.clef ?? leadingPieceNote?.clef ?? settings.clefChoice.clefs[0] }
+    var displayedClef: Clef { question?.clef ?? leadingPieceNote?.clef ?? randomClefs[0] }
     var timeRemaining: TimeInterval { max(0, (roundTimeLimit ?? 0) - elapsed) }
 
     /// The limit on a round started now: only rounds of random notes take one.
@@ -716,8 +732,9 @@ final class Game {
     }
 
     /// What a missed note is labelled with on the staff: its name in the naming system in use
-    /// ("Fa♯", "Middle Do" for C4), and when it was answered with a piano `key` of the right name
-    /// in another octave, "· wrong octave". The same for one note and for notes asked together.
+    /// ("Fa♯", "Middle Do" for C4), and when it was answered with a piano `key` (or the pitch of a
+    /// place on the guitar) of the right name in another octave, "· wrong octave". The same for one
+    /// note and for notes asked together.
     func missLabel(for pitch: Pitch, answeredWith key: Pitch?) -> String {
         let name = settings.naming.name(of: pitch)
         let label = pitch == Pitch(.c, 4) ? "Middle \(name)" : name
@@ -929,6 +946,8 @@ final class Game {
             newSettings.piece = saved
         } else if url.path != settings.piecePath {
             newSettings.piece.startBar = 1
+            // The tuning belongs to the piece: another one starts from its score's, not the last one's choice.
+            newSettings.piece.guitarTuning = nil
         }
         newSettings.piece = Self.fitting(newSettings.piece, to: score)
         newSettings.piecePath = url.path
@@ -1001,9 +1020,26 @@ final class Game {
         return options
     }
 
+    /// The notes the next piece round asks, as the piece settings choose them; on the guitar, only
+    /// those the tuning can reach (before notes struck together are grouped, at `start()`).
     private func updateSelection() {
-        selectedNotes = piecePart.map { Self.notes(of: $0, with: settings.piece) } ?? []
+        let chosen = piecePart.map { Self.notes(of: $0, with: settings.piece) } ?? []
+        selectedNotes = settings.answerInput == .guitar ? Self.notes(chosen, reachableIn: guitarTuning) : chosen
+        selectedOutOfReach = chosen.count - selectedNotes.count
+        selectedMidiNumbers = Set(selectedNotes.map(\.pitch.midiNumber))
         selectedBarLayout = piecePart.flatMap { Self.barLayout(of: selectedNotes, in: $0) }
+    }
+
+    /// `notes` without those `tuning` can't play anywhere on a full neck.
+    private static func notes(_ notes: [ScoreNote], reachableIn tuning: GuitarTuning) -> [ScoreNote] {
+        notes.filter { Fretboard.canPlay($0.pitch.midiNumber, in: tuning) }
+    }
+
+    /// The tuning a round with `settings` answers on the guitar with: the piece's choice, else the
+    /// score's (`part`), else the global one. As `guitarTuning`, for settings other than the ones in use.
+    private static func guitarTuning(for settings: Settings, part: ScorePart?) -> GuitarTuning {
+        guard let part else { return settings.guitarTuning }
+        return settings.piece.guitarTuning ?? part.guitarTuning ?? settings.guitarTuning
     }
 
     /// The notes a round on `part` asks, in reading order: from the start bar on, on the hand's
@@ -1046,6 +1082,11 @@ final class Game {
             : "This part has no \(hand)-hand notes. Choose another hand."
     }
 
+    /// Why a piece round can't start on the guitar: the tuning reaches none of the notes chosen.
+    private var outOfReachMessage: String {
+        "None of these notes can be played in \(guitarTuning.name) tuning. Choose another tuning."
+    }
+
     /// White keys (as diatonic indices) for the piano: whole octaves covering every note the
     /// settings can ask, or a piece round's notes as they sound (an 8va note is played up the octave).
     var pianoKeys: ClosedRange<Int> {
@@ -1054,7 +1095,7 @@ final class Game {
             // By MIDI number rather than staff step, so a C♭ brings in the B below.
             return ((low / 12 - 1) * 7)...((high / 12 - 1) * 7 + 6)
         }
-        let indices = settings.clefChoice.clefs.flatMap { clef in
+        let indices = randomClefs.flatMap { clef in
             [settings.range.span.lowerBound, settings.range.span.upperBound]
                 .map { clef.pitch(atPosition: $0).diatonicIndex }
         }
@@ -1066,9 +1107,7 @@ final class Game {
     /// The clefs random notes come from: the guitar clef while answering on the guitar (guitar
     /// music is written in it), otherwise the toolbar's choice. What picks, shows or compares random
     /// notes reads this rather than `settings.clefChoice`.
-    var randomClefs: [Clef] {
-        settings.answerInput == .guitar ? [.treble8vb] : settings.clefChoice.clefs
-    }
+    var randomClefs: [Clef] { Self.randomClefs(settings) }
 
     /// The tuning the guitar answer uses. With a piece open: the piece's choice, else the score's
     /// (`ScorePart.guitarTuning`, from its staff tuning or a "6=D" on it), else
@@ -1093,16 +1132,52 @@ final class Game {
     /// random notes every note the settings can ask in `randomClefs`. Between rounds, as the next
     /// round would be.
     var fretboard: Fretboard {
-        // Contract stub (the game agent fills it in): always the shortest board.
-        Fretboard(tuning: guitarTuning)
+        let tuning = guitarTuning
+        let midiNumbers: Set<Int>
+        if let pieceRound {
+            midiNumbers = pieceRound.midiNumbers
+        } else if piece != nil {
+            midiNumbers = selectedMidiNumbers
+        } else {
+            midiNumbers = randomMidiNumbers
+        }
+        return Fretboard(tuning: tuning, frets: Fretboard.fretsNeeded(for: midiNumbers, in: tuning))
+    }
+
+    /// Every pitch random notes can sound with the settings, by MIDI number: each position of the
+    /// range in `randomClefs`, with what any key the setting allows gives its letter and, with added
+    /// accidentals, the signs that may be printed on it. A few dozen numbers, worked out as asked.
+    private var randomMidiNumbers: Set<Int> {
+        let keys: [KeySignature] = switch settings.key {
+        case .fixed(let key): [key]
+        case .random: KeySignature.all
+        }
+        var accidentals: [NoteLetter: Set<Accidental>] = [:]
+        for letter in NoteLetter.allCases {
+            for fromKey in Set(keys.map { $0.accidental(for: letter) }) {
+                accidentals[letter, default: []].insert(fromKey)
+                if settings.addsAccidentals {
+                    accidentals[letter, default: []].formUnion(Self.printableAccidentals(on: letter, besides: fromKey))
+                }
+            }
+        }
+        var midiNumbers = Set<Int>()
+        for clef in randomClefs {
+            for position in settings.range.positions {
+                let natural = clef.pitch(atPosition: position)
+                for accidental in accidentals[natural.letter] ?? [.natural] {
+                    midiNumbers.insert(natural.with(accidental).midiNumber)
+                }
+            }
+        }
+        return midiNumbers
     }
 
     /// Answering on the guitar with a piece open: how many of the notes chosen (part, hand, start
     /// bar, chords) the tuning can't reach (`Fretboard.canPlay`). Rounds leave those notes out, and
     /// the piece panel says how many. 0 otherwise.
     var guitarNotesOutOfReach: Int {
-        // Contract stub (the game agent fills it in).
-        0
+        piece != nil && settings.answerInput == .guitar ? selectedOutOfReach : 0
     }
 
     // MARK: - Round flow
@@ -1113,13 +1188,14 @@ final class Game {
     func start(via source: StartSource = .button) {
         if let piece, let part = piecePart {
             guard !selectedNotes.isEmpty else {
-                pieceError = emptySelectionMessage
+                pieceError = guitarNotesOutOfReach > 0 ? outOfReachMessage : emptySelectionMessage
                 return
             }
             pieceError = nil
             pieceRound = PieceRound(title: piece.title, part: part, notes: selectedNotes, order: settings.piece.order,
                                     barLayout: settings.piece.usesWholeBar ? selectedBarLayout : nil,
-                                    namesTogether: settings.piece.chords == .together)
+                                    namesTogether: settings.piece.chords == .together,
+                                    notesOutOfReach: settings.answerInput == .guitar ? selectedOutOfReach : nil)
         } else {
             pieceRound = nil
             roundKey = pickRoundKey()
@@ -1263,7 +1339,46 @@ final class Game {
     /// there; the last one needed submits them. The flash and entries carry the `position`; the log
     /// gets source `guitar`, the pitch sounded and `guitarString`/`guitarFret`.
     func answer(at position: GuitarPosition) {
-        // Contract stub: the game agent fills it in.
+        // Only a place on a neck: the six strings, up to the top fret.
+        guard (1...6).contains(position.string), (0...Fretboard.maxFrets).contains(position.fret) else {
+            recordIgnored("noPlace", from: .guitar, detail: "string \(position.string) fret \(position.fret)")
+            return
+        }
+        let pitch = fretboard.pitch(at: position)
+        let click = Self.guitarClick(pitch, at: position)
+        guard let question = questionTakingAnswers(from: .guitar, detail: click) else { return }
+        if group != nil {
+            toggleGroupPlace(position, sounding: pitch)
+            return
+        }
+        submit(Flash(letter: pitch.letter, accidental: pitch.accidental, pitch: pitch,
+                     isCorrect: question.pitch.midiNumber == pitch.midiNumber, position: position),
+               to: question, via: .guitar)
+    }
+
+    /// How a place on the guitar is written in the log (keystrokes, ignored input): "guitar E3
+    /// string 4 fret 2", the open string as fret 0.
+    private static func guitarClick(_ pitch: Pitch, at position: GuitarPosition) -> String {
+        "guitar \(pitch.name) string \(position.string) fret \(position.fret)"
+    }
+
+    /// A place on the guitar while notes are asked together: chosen, or taken back if it's chosen
+    /// already. A place sounding a pitch chosen at another place moves that choice here, so each
+    /// pitch is chosen once, as a piano key is.
+    private func toggleGroupPlace(_ position: GuitarPosition, sounding pitch: Pitch) {
+        guard let entries = group?.entries else { return }
+        let entry = GroupEntry(letter: pitch.letter, accidental: pitch.accidental, pitch: pitch, position: position)
+        if let index = entries.firstIndex(where: { $0.position == position }) {
+            noteClick(Self.guitarClick(pitch, at: position))
+            group?.entries.remove(at: index)
+            settleKeystroke(.deleted)
+        } else if let index = entries.firstIndex(where: { $0.pitch?.midiNumber == pitch.midiNumber }) {
+            noteClick(Self.guitarClick(pitch, at: position))
+            group?.entries[index] = entry
+            settleKeystroke(.typed)
+        } else {
+            addGroupEntry(entry, via: .guitar)
+        }
     }
 
     /// Takes back an entry towards the notes asked together (a chip clicked), before they're judged.
@@ -1276,7 +1391,7 @@ final class Game {
         settleKeystroke(.deleted)
     }
 
-    /// Delete with the note buttons or the piano: takes back the last entry towards the notes
+    /// Delete with the note buttons, the piano or the guitar: takes back the last entry towards the notes
     /// asked together. Paused, or once they're judged, nothing changes.
     private func removeLastGroupEntry() {
         guard isTakingAnswers, !isShowingMiss, let entries = group?.entries, !entries.isEmpty else { return }
@@ -1299,7 +1414,12 @@ final class Game {
     /// Adds an entry towards the notes asked together; the last one needed submits them.
     private func addGroupEntry(_ entry: GroupEntry, via source: AnswerSource) {
         guard var group else { return }
-        noteClick("\(source == .piano ? "piano" : "click") \(label(of: entry))")
+        switch source {
+        case .piano: noteClick("piano \(label(of: entry))")
+        case .guitar:
+            if let pitch = entry.pitch, let position = entry.position { noteClick(Self.guitarClick(pitch, at: position)) }
+        default: noteClick("click \(label(of: entry))")
+        }
         group.entries.append(entry)
         self.group = group
         if group.entries.count >= group.entriesNeeded(on: settings.answerInput) {
@@ -1459,9 +1579,9 @@ final class Game {
     }
 
     /// Matches `entries` to the notes asked together (`questions`) so that the most notes are
-    /// right. A name names one note, in any octave (`NamingSystem.accepts`); a piano key names
-    /// every note that sounds it. Notes left without a match are wrong, and each is paired with
-    /// an entry left over, in order.
+    /// right. A name names one note, in any octave (`NamingSystem.accepts`); a piano key (or a place
+    /// on the guitar) names every note that sounds it. Notes left without a match are wrong, and
+    /// each is paired with an entry left over, in order.
     nonisolated static func judge(_ entries: [GroupEntry], against questions: [Question],
                                   naming: NamingSystem) -> GroupResult {
         var matched = [Int?](repeating: nil, count: questions.count)
@@ -1545,7 +1665,7 @@ final class Game {
                 settleKeystroke(.deleted)
             }
             return true
-        case 51 where group != nil: // Delete with the note buttons or the piano: takes back an entry
+        case 51 where group != nil: // Delete with the note buttons, the piano or the guitar: takes back an entry
             removeLastGroupEntry()
             return true
         default:
@@ -1580,7 +1700,8 @@ final class Game {
         }
         switch character {
         case "h": settings.showHints.toggle()
-        case "k" where settings.answerInput == .piano: settings.showKeyNames.toggle()
+        // Names on the piano's keys, or on the guitar's frets.
+        case "k" where settings.answerInput.answersPitch: settings.showKeyNames.toggle()
         case "m": settings.isMuted.toggle()
         default:
             // Typing a name with no round going (during one it would have been typed above).
@@ -1761,7 +1882,7 @@ final class Game {
             timeRanOut: timeRanOut,
             notesToReview: notesToReview,
             mixedClefs: pieceRound.map { round in round.notes.contains { $0.clef != round.notes[0].clef } }
-                ?? (settings.clefChoice == .both),
+                ?? (randomClefs.count > 1),
             pieceTitle: pieceRound?.title,
             finishedPiece: finishedPiece,
             hadLimit: practiceRoundLimit != .endless,
@@ -1959,11 +2080,15 @@ final class Game {
         let options = saved.piece
         guard let piece, piece.parts.indices.contains(options.part) else { return nil }
         let part = piece.parts[options.part]
-        let notes = Self.notes(of: part, with: options)
+        let chosen = Self.notes(of: part, with: options)
+        // On the guitar, without the notes its tuning then couldn't reach.
+        let onGuitar = saved.answerInput == .guitar
+        let notes = onGuitar ? Self.notes(chosen, reachableIn: Self.guitarTuning(for: saved, part: part)) : chosen
         guard !notes.isEmpty else { return nil }
         var round = PieceRound(title: piece.title, part: part, notes: notes, order: options.order,
                                barLayout: options.usesWholeBar ? Self.barLayout(of: notes, in: part) : nil,
-                               namesTogether: options.chords == .together)
+                               namesTogether: options.chords == .together,
+                               notesOutOfReach: onGuitar ? chosen.count - notes.count : nil)
         guard let context = pieceContext(for: round), Self.isSamePiece(round, known: context, as: logged),
               let index = Self.groupIndex(of: replay.lastQuestion, in: round) else { return nil }
         round.groupIndex = index
@@ -2021,13 +2146,22 @@ final class Game {
 
     /// `a` and `b` make the same round: what it asks, how it ends, and the piece open. Naming, the
     /// answer input, hints, sound and looks don't come into it, nor the piece settings: a piece
-    /// round is rebuilt from its own. A 60-second sprint from a version until 2026-11-07 comes
-    /// back as a practice round: its settings read without their `mode`.
+    /// round is rebuilt from its own. Except the guitar: answering on it asks in the guitar clef
+    /// (`randomClefs`) and only what its tuning reaches, so a round on it is only the same round on
+    /// it, in the same tuning. A 60-second sprint from a version until 2026-11-07 comes back as a
+    /// practice round: its settings read without their `mode`.
     private static func shapeRoundsAlike(_ a: Settings, _ b: Settings) -> Bool {
-        a.clefChoice == b.clefChoice && a.range == b.range && a.key == b.key
+        randomClefs(a) == randomClefs(b) && a.range == b.range && a.key == b.key
             && a.addsAccidentals == b.addsAccidentals && a.practiceLimit == b.practiceLimit
             && a.practiceMinutes == b.practiceMinutes && a.practiceNotes == b.practiceNotes
             && a.pieceID == b.pieceID && a.piecePath == b.piecePath
+            && (a.answerInput == .guitar) == (b.answerInput == .guitar)
+            && (a.answerInput != .guitar || a.guitarTuning == b.guitarTuning)
+    }
+
+    /// `randomClefs` with `settings`.
+    private static func randomClefs(_ settings: Settings) -> [Clef] {
+        settings.answerInput == .guitar ? [.treble8vb] : settings.clefChoice.clefs
     }
 
     /// `round`, rebuilt on the piece open now (`current` says how the app knows it), is on the one
@@ -2145,7 +2279,7 @@ final class Game {
         let key = roundKey ?? .cMajor
         // With added accidentals on, about 30% of notes get a printed sign; the rest follow the key.
         let printsAccidental = settings.addsAccidentals && Double.random(in: 0..<1) < 0.3
-        let candidates = settings.clefChoice.clefs.flatMap { clef in
+        let all = randomClefs.flatMap { clef in
             settings.range.positions.flatMap { position in
                 let natural = clef.pitch(atPosition: position)
                 let fromKey = key.accidental(for: natural.letter)
@@ -2157,7 +2291,18 @@ final class Game {
                      share: 1 / Double(accidentals.count))
                 }
             }
-        }.filter { $0.question.clef != previous?.clef || $0.question.pitch != previous?.pitch }
+        }
+        // On the guitar, only notes its tuning can play: far ledger notes below the low string aren't
+        // asked. Should a tuning reach none of them, the notes are asked all the same.
+        var playable = all
+        if settings.answerInput == .guitar {
+            let tuning = guitarTuning
+            playable = all.filter { Fretboard.canPlay($0.question.pitch.midiNumber, in: tuning) }
+        }
+        let pool = playable.isEmpty ? all : playable
+        let others = pool.filter { $0.question.clef != previous?.clef || $0.question.pitch != previous?.pitch }
+        // Never the note just asked, unless it's the only one.
+        let candidates = others.isEmpty ? pool : others
 
         let weights = candidates.map { $0.share * weight(forStatKey: statKey(for: $0.question)) }
         let pick = Self.weightedIndex(weights)
@@ -2276,7 +2421,8 @@ final class Game {
                             hand: options.hand.rawValue, order: options.order.rawValue, startBar: options.startBar,
                             oneNotePerChord: options.oneNotePerChord, noteCount: round.notes.count,
                             measureCount: part.measureCount, chords: options.chords.rawValue, libraryID: pieceEntryID,
-                            id: entry?.pieceID, file: entry?.contentHash, staves: part.staffCount)
+                            id: entry?.pieceID, file: entry?.contentHash, staves: part.staffCount,
+                            guitarNotesOutOfReach: round.notesOutOfReach)
     }
 
     /// One `questionShown` per note on screen: notes asked together are logged one by one, with
@@ -2287,6 +2433,8 @@ final class Game {
         let questions = group?.questions ?? [question]
         let notes = pieceRound.map { Array($0.groupNotes) }
         let bar = pieceRound?.barDisplay
+        // The neck the answer is given on, when it's the guitar's.
+        let board = settings.answerInput == .guitar ? fretboard : nil
         for (offset, question) in questions.enumerated() {
             let index = roundLog.questionsShown + offset
             let note = notes.flatMap { $0.indices.contains(offset) ? $0[offset] : nil }
@@ -2301,10 +2449,11 @@ final class Game {
                 },
                 pickChance: pickChance, naming: settings.naming.rawValue, input: settings.answerInput.rawValue,
                 hintsVisible: settings.showHints,
-                // Key names are only drawn on the piano.
-                keyNamesVisible: settings.answerInput == .piano && settings.showKeyNames,
+                // Note names are only drawn on the piano's keys and the guitar's frets.
+                keyNamesVisible: settings.answerInput.answersPitch && settings.showKeyNames,
                 barView: pieceRound.map { _ in bar != nil }, barStaves: bar?.staves.map(\.number),
-                group: group?.id, groupSize: group?.questions.count)))
+                group: group?.id, groupSize: group?.questions.count,
+                guitarTuning: board?.tuning.key, guitarFrets: board?.frets)))
         }
         self.roundLog?.questionsShown += questions.count
     }
@@ -2338,7 +2487,8 @@ final class Game {
                 $0.pitchClass == question.pitch.pitchClass && $0.midiNumber != question.pitch.midiNumber
             },
             keystrokes: questionLog.keystrokes, scoreAfter: score, streakAfter: streak,
-            pausedMs: pausedMilliseconds(questionPaused))))
+            pausedMs: pausedMilliseconds(questionPaused),
+            guitarString: response.position?.string, guitarFret: response.position?.fret)))
     }
 
     /// One `answerGiven` per note asked together, each right or wrong on its own, with the entry
@@ -2361,7 +2511,8 @@ final class Game {
                     $0.pitchClass == question.pitch.pitchClass && $0.midiNumber != question.pitch.midiNumber
                 },
                 keystrokes: offset == 0 ? questionLog.keystrokes : [], scoreAfter: score, streakAfter: streak,
-                pausedMs: pausedMs, group: group.id, groupSize: group.questions.count)))
+                pausedMs: pausedMs, group: group.id, groupSize: group.questions.count,
+                guitarString: entry.position?.string, guitarFret: entry.position?.fret)))
         }
     }
 

@@ -131,6 +131,9 @@ struct PieceContext: Codable, Equatable {
     /// Staves in the part practised: 1, or 2 for a grand staff. Nil in rounds logged before the
     /// journal.
     var staves: Int? = nil
+    /// Answering on the guitar (since 2026-11-14): how many of the notes chosen its tuning can't
+    /// reach, left out of the round (`noteCount` doesn't count them). Nil with other inputs.
+    var guitarNotesOutOfReach: Int? = nil
 }
 
 struct QuestionShown: Codable, Equatable {
