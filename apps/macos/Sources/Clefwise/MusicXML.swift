@@ -40,7 +40,7 @@ enum MusicXMLImporter {
             throw ScoreImportError(message: "“\(fileName)” looks damaged and couldn't be read.")
         }
         guard !reader.parts.isEmpty else {
-            throw ScoreImportError(message: "“\(fileName)” has no notes in treble or bass clef to practise.")
+            throw ScoreImportError(message: "“\(fileName)” has no notes in the treble, bass or guitar clef to practise.")
         }
         let title = [reader.workTitle, reader.movementTitle].compactMap { $0 }.first { !$0.isEmpty }
         return Score(title: title ?? fallbackTitle, parts: reader.parts)

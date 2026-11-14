@@ -1,10 +1,10 @@
 # Clefwise
 
 Learn to read sheet music. A note appears on the staff, or a whole bar of a real piece with one
-note highlighted, and you name it: by clicking its name, playing it on a piano keyboard, or typing
-it. Notes can be named with letters (C D E), fixed solfège (Do Re Mi) or sargam (Sa Re Ga). Practise
-random notes in any key, or the notes of your own MusicXML scores, and follow your progress over
-time.
+note highlighted, and you name it: by clicking its name, playing it on a piano keyboard, typing
+it, or finding it on a guitar's fretboard. Notes can be named with letters (C D E), fixed solfège
+(Do Re Mi) or sargam (Sa Re Ga). Practise random notes in any key, or the notes of your own MusicXML
+scores (guitar scores too, in their tuning), and follow your progress over time.
 
 ## Versions
 
