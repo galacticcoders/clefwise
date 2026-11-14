@@ -604,6 +604,13 @@ struct BarLayout {
 
         // Room for what this bar draws beyond the staff's usual room, if anything.
         var content = bar.staves.map { _ in CGFloat(0)...CGFloat(8) }
+        // The guitar clef's 8 hangs further below the staff than any other clef's ink: on a grand
+        // staff's upper staff it needs more of the gap than the stems do. (Elsewhere the staff's
+        // room below always holds it.)
+        for (index, staff) in bar.staves.enumerated() where staff.clef == .treble8vb {
+            let eight = 2 * StaffMetrics.clefExtent(staff.clef).bottom
+            content[index] = min(content[index].lowerBound, eight)...content[index].upperBound
+        }
         for chord in planned {
             let reach = Self.extent(of: chord, symbols: symbols, multiVoice: multiVoice[chord.staff])
             let old = content[chord.staff]

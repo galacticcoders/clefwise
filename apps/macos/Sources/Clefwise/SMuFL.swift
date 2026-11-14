@@ -84,7 +84,8 @@ enum SMuFL {
             switch clef {
             case .treble: change ? .gClefChange : .gClef
             case .bass: change ? .fClefChange : .fClef
-            // SMuFL has no smaller guitar clef for a change partway through a bar.
+            // SMuFL has no smaller guitar clef for a change partway through a bar: the full one is
+            // drawn smaller (`StaffMetrics.clefScale`).
             case .treble8vb: .gClef8vb
             }
         }

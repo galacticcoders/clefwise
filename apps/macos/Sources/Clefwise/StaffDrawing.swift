@@ -90,17 +90,26 @@ enum StaffMetrics {
         clef == .bass ? 6 : 2
     }
 
+    /// How much the clef's glyph is scaled: 1, except for a change to the guitar clef partway
+    /// through a bar. SMuFL has no smaller guitar clef, so that one is the full glyph at the size of
+    /// the G clef's change glyph.
+    static func clefScale(_ clef: Clef, change: Bool = false) -> CGFloat {
+        guard change, clef == .treble8vb else { return 1 }
+        return MusicGlyph.bounds(.gClefChange).height / MusicGlyph.bounds(.gClef).height
+    }
+
     /// Vertical extent of each clef, in staff spaces above the bottom line; `change` for the smaller
     /// clef of a change partway through a bar.
     static func clefExtent(_ clef: Clef, change: Bool = false) -> (bottom: CGFloat, top: CGFloat) {
         let box = MusicGlyph.bounds(.clef(clef, change: change))
+        let scale = clefScale(clef, change: change)
         let line = CGFloat(clefPosition(clef)) / 2
-        return (line - box.maxY, line - box.minY)
+        return (line - box.maxY * scale, line - box.minY * scale)
     }
 
     /// The clef's inked width.
     static func clefWidth(_ clef: Clef, change: Bool = false) -> CGFloat {
-        MusicGlyph.bounds(.clef(clef, change: change)).width
+        MusicGlyph.bounds(.clef(clef, change: change)).width * clefScale(clef, change: change)
     }
 
     /// The sign's height in spaces, and how much of it hangs below its line or space.
@@ -178,8 +187,10 @@ enum StaffDrawing {
     /// change partway through a bar.
     static func clefPath(_ clef: Clef, left: CGFloat, _ staff: StaffGeometry, change: Bool = false) -> Path {
         let glyph = SMuFL.Glyph.clef(clef, change: change)
-        let origin = CGPoint(x: left - MusicGlyph.bounds(glyph).minX * staff.space, y: staff.y(StaffMetrics.clefPosition(clef)))
-        return MusicGlyph.path(glyph, at: origin, space: staff.space)
+        let scale = StaffMetrics.clefScale(clef, change: change)
+        let origin = CGPoint(x: left - MusicGlyph.bounds(glyph).minX * staff.space * scale,
+                             y: staff.y(StaffMetrics.clefPosition(clef)))
+        return MusicGlyph.path(glyph, at: origin, space: staff.space, scale: scale)
     }
 
     /// Draws the clef at the start of the staff and returns its right edge.
