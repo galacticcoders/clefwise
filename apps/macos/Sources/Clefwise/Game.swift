@@ -1350,7 +1350,8 @@ final class Game {
 
     /// A real key pressed this soon after a question appears was struck with the key that
     /// answered the one before: another key of a chord, or a neighbour brushed. Nobody reads a note
-    /// that fast: of the user's 12,945 right answers by 2026-11-15, the fastest took 386 ms.
+    /// that fast: in a real practice log of 12,945 right answers (2026-11-15), the fastest took
+    /// 386 ms.
     /// Tests that play at once set it to 0.
     @ObservationIgnored var realKeyGraceMs = 150
 

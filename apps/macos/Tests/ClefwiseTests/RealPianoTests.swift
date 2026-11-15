@@ -20,7 +20,7 @@ import Testing
     }
 
     @Test func everythingElseIsPassedOver() {
-        // Active sensing (the user's Yamaha sends it five times a second), the sustain pedal, then two keys.
+        // Active sensing (a Yamaha digital piano sends it five times a second), the sustain pedal, then two keys.
         let words: [UInt32] = [0x10FE_0000, 0x20B0_407F, 0x2090_3C64, 0x10FE_0000, 0x2090_4050]
         #expect(MIDIMessages.keyPresses(in: words) == [MIDIKeyPress(note: 60, velocity: 100), MIDIKeyPress(note: 64, velocity: 80)])
     }
