@@ -9,7 +9,7 @@ struct BreakdownSection: View {
     @State private var hovered: String?
 
     var body: some View {
-        DashboardCard(title: "How you answer", subtitle: "Accuracy and speed by answer method and naming system") {
+        DashboardCard(title: "How you answer", subtitle: "Accuracy and speed by answer method and note names") {
             if groups.isEmpty {
                 NothingYetText(emptyText)
             } else {
@@ -59,9 +59,15 @@ struct BreakdownSection: View {
 
     /// Each group's rows, most accurate first.
     private var groups: [RowGroup] {
+        // Answer methods under their family: naming says the note's name, playing finds it on an
+        // instrument. A method this version doesn't know goes with naming, as the setting did.
         let methods = report.byInput.map { Row(id: "input.\($0.key)", name: BreakdownRow.inputLabel($0.key), source: $0) }
+        let isPlaying = { (row: Row) in AnswerMethod(rawValue: row.source.key)?.family == .playing }
         let namings = report.byNaming.map { Row(id: "naming.\($0.key)", name: NamingSystem(rawValue: $0.key)?.label ?? $0.key.capitalized, source: $0) }
-        return [RowGroup(title: "Answer method", rows: ranked(methods)), RowGroup(title: "Naming system", rows: ranked(namings))]
+        return [RowGroup(title: AnswerMethod.Family.naming.label, rows: ranked(methods.filter { !isPlaying($0) })),
+                RowGroup(title: AnswerMethod.Family.playing.label, rows: ranked(methods.filter(isPlaying))),
+                // As the toolbar calls the setting.
+                RowGroup(title: "Note names", rows: ranked(namings))]
             .filter { !$0.rows.isEmpty }
     }
 

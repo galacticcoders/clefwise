@@ -75,3 +75,28 @@ import Testing
         #expect(sample.recentRounds.contains { $0.realPianoAnswers > 0 })
     }
 }
+
+/// The note above Progress's sections when a range mixes answer methods.
+@Suite struct MixedMethodsNoteTests {
+    private func report(_ keys: [String], method: AnswerMethod? = nil) -> ProgressReport {
+        var report = ProgressReport.empty(ProgressFilter())
+        report.filter.method = method
+        report.byInput = keys.map { BreakdownRow(key: $0, answers: 10, correct: 9, medianResponseMs: 1500) }
+        return report
+    }
+
+    @Test func itShowsOnlyWhenEveryMethodCountsAndThereAreTwoOrMore() {
+        #expect(MixedMethodsNote.methods(in: report(["keyboard"])) == nil)
+        // In `AnswerMethod` order, whatever the breakdown's.
+        #expect(MixedMethodsNote.methods(in: report(["guitar", "keyboard", "midi"])) == [.keyboard, .realPiano, .guitar])
+        // One method chosen: nothing is mixed.
+        #expect(MixedMethodsNote.methods(in: report(["keyboard", "midi"], method: .realPiano)) == nil)
+        // An input this version doesn't know isn't named.
+        #expect(MixedMethodsNote.methods(in: report(["keyboard", "harp"])) == nil)
+    }
+
+    @Test func methodsAreListedInWords() {
+        #expect(MixedMethodsNote.list([.keyboard, .realPiano]) == "Keyboard and Real piano")
+        #expect(MixedMethodsNote.list([.keyboard, .buttons, .guitar]) == "Keyboard, Note buttons and Guitar")
+    }
+}

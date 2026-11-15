@@ -1,6 +1,8 @@
 import SwiftUI
 
 /// The headline tiles: practice time, notes answered, accuracy and typical response time against the previous period, and the daily streak.
+/// With every method counted and more than one in the range, accuracy and time are per method
+/// (`MethodTile`): one figure for them together would move with the mix, not with progress.
 struct KPISection: View {
     let report: ProgressReport
     /// Note names on the dashboard follow the naming system in use.
@@ -35,8 +37,9 @@ struct KPISection: View {
 
     private var subtitle: String {
         let clef = report.filter.clef == .all ? "" : " · \(report.filter.clef.label) clef"
-        guard let days = report.filter.range.days else { return "All time\(clef)" }
-        return "\(report.filter.range.label)\(clef), against the \(days) days before"
+        let method = report.filter.method.map { " · \($0.label)" } ?? ""
+        guard let days = report.filter.range.days else { return "All time\(clef)\(method)" }
+        return "\(report.filter.range.label)\(clef)\(method), against the \(days) days before"
     }
 
     /// "previous 30 days"; nil for all time, which has nothing before it.
@@ -46,35 +49,82 @@ struct KPISection: View {
 
     private var totals: ProgressTotals { report.totals }
 
-    private var tiles: [StatTile] {
+    private var tiles: [AnyView] {
         let previous = report.previousTotals
+        let mixed = MixedMethodsNote.methods(in: report)
         return [
-            StatTile(label: "Practice time", value: DashboardFormat.duration(totals.practiceSeconds),
+            AnyView(StatTile(label: "Practice time", value: DashboardFormat.duration(totals.practiceSeconds),
                      delta: previous.flatMap { previous in
                          delta(Double(totals.practiceSeconds), Double(previous.practiceSeconds), previous: previous, upIsGood: true,
                                format: { DashboardFormat.duration($0) }, threshold: 30)
                      },
                      trend: trend(sum: { $0.practiceSeconds }),
-                     trendHelp: "Practice time per day"),
-            StatTile(label: "Notes answered", value: DashboardFormat.count(totals.answers),
+                     trendHelp: "Practice time per day")),
+            AnyView(StatTile(label: "Notes answered", value: DashboardFormat.count(totals.answers),
                      delta: previous.flatMap { previous in
                          delta(Double(totals.answers), Double(previous.answers), previous: previous, upIsGood: true,
                                format: { DashboardFormat.count(Int($0.rounded())) }, threshold: 0.5)
                      },
                      trend: trend(sum: { Double($0.answers) }),
-                     trendHelp: "Notes answered per day"),
-            StatTile(label: "Accuracy", value: totals.accuracy.map(DashboardFormat.percent) ?? "–",
-                     delta: accuracyDelta(previous),
-                     trend: trendOfAccuracy,
-                     trendHelp: "Accuracy per day; gaps are days without practice"),
-            StatTile(label: "Typical response time",
-                     value: totals.medianResponseMs.map { DashboardFormat.seconds(milliseconds: $0) } ?? "–",
-                     delta: responseDelta(previous),
-                     trend: trendOfResponse,
-                     trendHelp: "Median time to a right answer per day; gaps are days without practice"),
-            StatTile(label: "Day streak", value: report.currentStreakDays == 1 ? "1 day" : "\(report.currentStreakDays) days",
-                     secondary: "Longest \(report.longestStreakDays == 1 ? "1 day" : "\(report.longestStreakDays) days")"),
+                     trendHelp: "Notes answered per day")),
+            mixed.map { methods in
+                AnyView(MethodTile(label: "Accuracy", rows: methodRows(methods, value: { $0.accuracy.map(DashboardFormat.percent) },
+                                                                        change: accuracyChange),
+                                   footnote: changeFootnote))
+            } ?? AnyView(StatTile(label: "Accuracy", value: totals.accuracy.map(DashboardFormat.percent) ?? "–",
+                                  delta: accuracyDelta(previous),
+                                  trend: trendOfAccuracy,
+                                  trendHelp: "Accuracy per day; gaps are days without practice")),
+            mixed.map { methods in
+                AnyView(MethodTile(label: "Typical response time",
+                                   rows: methodRows(methods, value: { $0.medianResponseMs.map { DashboardFormat.seconds(milliseconds: $0) } },
+                                                    change: responseChange),
+                                   footnote: changeFootnote))
+            } ?? AnyView(StatTile(label: "Typical response time",
+                                  value: totals.medianResponseMs.map { DashboardFormat.seconds(milliseconds: $0) } ?? "–",
+                                  delta: responseDelta(previous),
+                                  trend: trendOfResponse,
+                                  trendHelp: "Median time to a right answer per day; gaps are days without practice")),
+            AnyView(StatTile(label: "Day streak", value: report.currentStreakDays == 1 ? "1 day" : "\(report.currentStreakDays) days",
+                             secondary: "Longest \(report.longestStreakDays == 1 ? "1 day" : "\(report.longestStreakDays) days")")),
         ]
+    }
+
+    // MARK: - Per method
+
+    /// "Changes are against the previous 30 days"; nil for all time.
+    private var changeFootnote: String? {
+        previousName.map { "Changes against the \($0)" }
+    }
+
+    /// One row per method: its value in the range, and its change against the same method in the
+    /// window before.
+    private func methodRows(_ methods: [AnswerMethod], value: (BreakdownRow) -> String?,
+                            change: (BreakdownRow, BreakdownRow?) -> MethodTile.Change?) -> [MethodTile.Row] {
+        methods.compactMap { method in
+            guard let now = report.byInput.first(where: { $0.key == method.rawValue }) else { return nil }
+            let before = report.previousByInput?.first { $0.key == method.rawValue }
+            return MethodTile.Row(method: method, value: value(now) ?? "–",
+                                  change: report.previousByInput == nil ? nil : change(now, before))
+        }
+    }
+
+    /// In whole points, from the rounded percentages shown, as the tile for all answers does.
+    private func accuracyChange(_ now: BreakdownRow, _ before: BreakdownRow?) -> MethodTile.Change? {
+        guard let current = now.accuracy else { return nil }
+        guard let previous = before?.accuracy else { return .new }
+        let points = Int((current * 100).rounded()) - Int((previous * 100).rounded())
+        guard points != 0 else { return .same }
+        return .change(isUp: points > 0, isBetter: points > 0, amount: abs(points) == 1 ? "1 pt" : "\(abs(points)) pts")
+    }
+
+    /// In tenths of a second; faster is better.
+    private func responseChange(_ now: BreakdownRow, _ before: BreakdownRow?) -> MethodTile.Change? {
+        guard let current = now.medianResponseMs else { return nil }
+        guard let previous = before?.medianResponseMs else { return .new }
+        let tenths = Int((Double(current) / 100).rounded()) - Int((Double(previous) / 100).rounded())
+        guard tenths != 0 else { return .same }
+        return .change(isUp: tenths > 0, isBetter: tenths < 0, amount: DashboardFormat.seconds(Double(abs(tenths)) / 10))
     }
 
     // MARK: - Deltas
@@ -145,6 +195,85 @@ struct KPISection: View {
         return buckets.map { bucket in
             let medians = bucket.compactMap(\.medianResponseMs).sorted()
             return medians.isEmpty ? nil : Double(medians[medians.count / 2])
+        }
+    }
+}
+
+/// A headline measure per answer method: a row each with the method's swatch and name, its value,
+/// and its change against the window before, said once under the rows.
+private struct MethodTile: View {
+    struct Row: Identifiable {
+        let method: AnswerMethod
+        let value: String
+        let change: Change?
+
+        var id: AnswerMethod { method }
+    }
+
+    enum Change {
+        /// Arrow for the direction; status colour for whether that's better.
+        case change(isUp: Bool, isBetter: Bool, amount: String)
+        /// None of this method in the window before.
+        case new
+        case same
+    }
+
+    let label: String
+    let rows: [Row]
+    var footnote: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.callout)
+                .foregroundStyle(DashboardTheme.textSecondary)
+                .lineLimit(1)
+            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 4) {
+                ForEach(rows) { row in
+                    GridRow(alignment: .firstTextBaseline) {
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(row.method.color)
+                            .frame(width: 10, height: 10)
+                            .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+                        Text(row.method.label)
+                            .font(.callout)
+                            .foregroundStyle(DashboardTheme.textSecondary)
+                            .lineLimit(1)
+                        Text(row.value)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(DashboardTheme.textPrimary)
+                            .lineLimit(1)
+                            .gridColumnAlignment(.trailing)
+                        changeText(row.change)
+                            .font(.caption)
+                            .lineLimit(1)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            if let footnote, rows.contains(where: { $0.change != nil }) {
+                Text(footnote)
+                    .font(.caption)
+                    .foregroundStyle(DashboardTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func changeText(_ change: Change?) -> some View {
+        switch change {
+        case .change(let isUp, let isBetter, let amount):
+            Text("\(isUp ? "▲" : "▼") \(amount)")
+                .foregroundStyle(isBetter ? DashboardTheme.goodText : DashboardTheme.critical)
+                .fontWeight(.medium)
+                .accessibilityLabel("\(isUp ? "Up" : "Down") \(amount), \(isBetter ? "better" : "worse")")
+        case .new:
+            Text("new").foregroundStyle(DashboardTheme.textSecondary)
+        case .same:
+            Text("same").foregroundStyle(DashboardTheme.textSecondary)
+        case nil:
+            Text("")
         }
     }
 }
