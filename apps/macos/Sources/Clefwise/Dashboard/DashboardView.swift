@@ -114,6 +114,7 @@ struct DashboardView: View {
         let column = isWide ? (width - Self.spacing) / 2 : width
         return VStack(alignment: .leading, spacing: Self.spacing) {
             KPISection(report: report, naming: naming)
+            PracticeMixSection(report: report, naming: naming)
             TrendSection(report: report, naming: naming)
             AutomaticSection(report: report, naming: naming)
             // Side by side, so a line or space sits at the same height in both: how well it's known

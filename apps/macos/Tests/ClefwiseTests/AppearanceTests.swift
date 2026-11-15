@@ -41,7 +41,7 @@ extension Color {
             #expect(white.hex(in: .aqua) == 0xFFFFFF)
         }
         #expect(DashboardTheme.textPrimary.hex(in: .aqua) == 0x0B0B0B)
-        #expect(DashboardTheme.series.map { $0.hex(in: .aqua) } == [0x2A78D6, 0xEB6834, 0x1BAF7A])
+        #expect(DashboardTheme.series.map { $0.hex(in: .aqua) } == [0x2A78D6, 0xEB6834, 0x1BAF7A, 0xEDA100, 0xE87BA4])
     }
 
     @Test func darkModeTurnsTheStaffDark() {
@@ -53,7 +53,7 @@ extension Color {
         #expect(Theme.blackKeyBottom.hex(in: .darkAqua) == 0x0E0E10)
         // The dashboard takes the palette's dark steps.
         #expect(DashboardTheme.surface.hex(in: .darkAqua) == 0x1A1A19)
-        #expect(DashboardTheme.series.map { $0.hex(in: .darkAqua) } == [0x3987E5, 0xD95926, 0x199E70])
+        #expect(DashboardTheme.series.map { $0.hex(in: .darkAqua) } == [0x3987E5, 0xD95926, 0x199E70, 0xC98500, 0xD55181])
     }
 
     @Test func theSettingDefaultsToMatchingMacOS() throws {
