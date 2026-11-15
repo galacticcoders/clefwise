@@ -745,6 +745,24 @@ private extension GameTestBench {
         #expect(answers[0].keystrokes.map(\.result) == [.typed, .deleted, .typed, .submitted])
     }
 
+    @Test func aRealPianosChordIsPlayedTogether() throws {
+        together(.right, input: .piano)
+        game.realKeyGraceMs = 0 // played at once, faster than anyone reads
+        game.start()
+        // Its keys come one by one; one pressed again is taken back, as a click is.
+        game.playedOnPiano(MIDIKeyPress(note: b4.midiNumber, velocity: 70))
+        game.playedOnPiano(MIDIKeyPress(note: b4.midiNumber, velocity: 70))
+        game.playedOnPiano(MIDIKeyPress(note: b4.midiNumber, velocity: 70))
+        game.playedOnPiano(MIDIKeyPress(note: g5.midiNumber, velocity: 90))
+        #expect(game.score == 2 && game.attempts == 2)
+        let answers = logged(AnswerGiven.self)
+        try #require(answers.count == 2)
+        #expect(answers.map(\.source) == [.midi, .midi] && answers.allSatisfy(\.correct))
+        #expect(Set(answers.compactMap(\.midiVelocity)) == [70, 90])
+        #expect(answers[0].keystrokes.map(\.key) == ["midi B4", "midi B4", "midi B4", "midi G5"])
+        #expect(answers[0].keystrokes.map(\.result) == [.typed, .deleted, .typed, .submitted])
+    }
+
     @Test func aRoundEndingMidGroupKeepsItsGroup() throws {
         together(.right)
         game.start()

@@ -114,6 +114,8 @@ final class Game {
         let isCorrect: Bool
         /// Where on the neck, when answered on the guitar (`pitch` is what it sounds).
         var position: GuitarPosition? = nil
+        /// How hard the key was pressed, when answered on a real piano (MIDI).
+        var velocity: Int? = nil
         let id = UUID()
     }
 
@@ -339,6 +341,8 @@ final class Game {
         let pitch: Pitch?
         /// Where on the neck, for guitar entries.
         var position: GuitarPosition? = nil
+        /// How hard the key was pressed, for entries from a real piano (MIDI).
+        var velocity: Int? = nil
     }
 
     /// How the entries for notes asked together were judged.
@@ -1322,14 +1326,44 @@ final class Game {
     /// black key counts whether the question spells it C♯ or D♭. While a `group` is asked, the
     /// key is chosen, or taken back if it was chosen already; the last one needed submits them.
     func answer(_ pitch: Pitch) {
-        guard let question = questionTakingAnswers(from: .piano, detail: pitch.name) else { return }
+        answerKey(pitch, via: .piano)
+    }
+
+    /// A key pressed on a real piano or keyboard plugged in (MIDI). With "Piano" chosen it answers
+    /// as a key of the piano on screen does: the exact key, octave included, logged as source
+    /// `midi` with its velocity. A right answer makes no sound, since the piano sounds itself; a
+    /// miss still thuds. Outside a round it isn't an answer and isn't logged: someone playing. In a
+    /// round with another input chosen it's ignored (`notPiano`).
+    func playedOnPiano(_ press: MIDIKeyPress) {
+        guard phase == .playing else { return }
+        guard settings.answerInput == .piano else {
+            recordIgnored("notPiano", from: .midi, detail: press.pitch.name)
+            return
+        }
+        // Struck with the key that answered the question before: ignored (`tooSoon`).
+        if question != nil, !isPaused, !isShowingMiss, activeMilliseconds(since: questionStart) < realKeyGraceMs {
+            recordIgnored("tooSoon", from: .midi, detail: press.pitch.name)
+            return
+        }
+        answerKey(press.pitch, via: .midi, velocity: press.velocity)
+    }
+
+    /// A real key pressed this soon after a question appears was struck with the key that
+    /// answered the one before: another key of a chord, or a neighbour brushed. Nobody reads a note
+    /// that fast: of the user's 12,945 right answers by 2026-11-15, the fastest took 386 ms.
+    /// Tests that play at once set it to 0.
+    @ObservationIgnored var realKeyGraceMs = 150
+
+    /// A piano key, on screen (`piano`) or real (`midi`), judged by its MIDI number.
+    private func answerKey(_ pitch: Pitch, via source: AnswerSource, velocity: Int? = nil) {
+        guard let question = questionTakingAnswers(from: source, detail: pitch.name) else { return }
         if group != nil {
-            toggleGroupKey(pitch)
+            toggleGroupKey(pitch, via: source, velocity: velocity)
             return
         }
         submit(Flash(letter: pitch.letter, accidental: pitch.accidental, pitch: pitch,
-                     isCorrect: question.pitch.midiNumber == pitch.midiNumber),
-               to: question, via: .piano)
+                     isCorrect: question.pitch.midiNumber == pitch.midiNumber, velocity: velocity),
+               to: question, via: source)
     }
 
     /// Answers with a place on the guitar's neck, judged like a piano key by the pitch it sounds
@@ -1400,14 +1434,15 @@ final class Game {
     }
 
     /// A piano key while notes are asked together: chosen, or taken back if it's chosen already.
-    private func toggleGroupKey(_ pitch: Pitch) {
+    private func toggleGroupKey(_ pitch: Pitch, via source: AnswerSource, velocity: Int?) {
         guard let entries = group?.entries else { return }
         if let index = entries.firstIndex(where: { $0.pitch?.midiNumber == pitch.midiNumber }) {
-            noteClick("piano \(pitch.name)")
+            noteClick("\(source == .midi ? "midi" : "piano") \(pitch.name)")
             group?.entries.remove(at: index)
             settleKeystroke(.deleted)
         } else {
-            addGroupEntry(GroupEntry(letter: pitch.letter, accidental: pitch.accidental, pitch: pitch), via: .piano)
+            addGroupEntry(GroupEntry(letter: pitch.letter, accidental: pitch.accidental, pitch: pitch, velocity: velocity),
+                          via: source)
         }
     }
 
@@ -1416,6 +1451,7 @@ final class Game {
         guard var group else { return }
         switch source {
         case .piano: noteClick("piano \(label(of: entry))")
+        case .midi: noteClick("midi \(label(of: entry))")
         case .guitar:
             if let pitch = entry.pitch, let position = entry.position { noteClick(Self.guitarClick(pitch, at: position)) }
         default: noteClick("click \(label(of: entry))")
@@ -1508,7 +1544,7 @@ final class Game {
             bestStreak = max(bestStreak, streak)
             responseTimes.append(Self.seconds(from: questionStart))
             recordAnswer(response, to: question, via: source)
-            if !settings.isMuted { synth.play(question.pitch) }
+            if Self.playsRightAnswer(via: source, muted: settings.isMuted) { synth.play(question.pitch) }
             nextQuestion()
         } else {
             streak = 0
@@ -1517,6 +1553,12 @@ final class Game {
             if !settings.isMuted { synth.playMiss() }
             showMiss()
         }
+    }
+
+    /// Whether a right answer plays its note (or chord): not when muted, nor on a real piano, which
+    /// sounds the note itself. A miss's thud plays either way.
+    static func playsRightAnswer(via source: AnswerSource, muted: Bool) -> Bool {
+        !muted && source != .midi
     }
 
     /// Judges the entries towards the notes asked together, each note right or wrong on its own.
@@ -1543,7 +1585,7 @@ final class Game {
             responseTimes.append(Self.seconds(from: questionStart))
             recordGroupAnswer(group, via: source)
             showGroupFlash(group)
-            if !settings.isMuted { synth.play(group.questions.map(\.pitch)) }
+            if Self.playsRightAnswer(via: source, muted: settings.isMuted) { synth.play(group.questions.map(\.pitch)) }
             nextQuestion()
         } else {
             streak = 0
@@ -2488,7 +2530,8 @@ final class Game {
             },
             keystrokes: questionLog.keystrokes, scoreAfter: score, streakAfter: streak,
             pausedMs: pausedMilliseconds(questionPaused),
-            guitarString: response.position?.string, guitarFret: response.position?.fret)))
+            guitarString: response.position?.string, guitarFret: response.position?.fret,
+            midiVelocity: response.velocity)))
     }
 
     /// One `answerGiven` per note asked together, each right or wrong on its own, with the entry
@@ -2512,7 +2555,8 @@ final class Game {
                 },
                 keystrokes: offset == 0 ? questionLog.keystrokes : [], scoreAfter: score, streakAfter: streak,
                 pausedMs: pausedMs, group: group.id, groupSize: group.questions.count,
-                guitarString: entry.position?.string, guitarFret: entry.position?.fret)))
+                guitarString: entry.position?.string, guitarFret: entry.position?.fret,
+                midiVelocity: entry.velocity)))
         }
     }
 

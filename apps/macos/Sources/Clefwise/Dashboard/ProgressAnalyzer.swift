@@ -296,7 +296,7 @@ private struct Analysis {
         if isSingleNote { times.add(answer, stepsFromPrevious: waiting.stepsFromPrevious) }
         firstDay = min(firstDay ?? day.start, day.start)
         lastDay = max(lastDay ?? day.start, day.start)
-        inputs[question.input, default: Tally()].add(answer)
+        inputs[answer.source == .midi ? BreakdownRow.realPianoKey : question.input, default: Tally()].add(answer)
         namings[question.naming, default: Tally()].add(answer)
         if let clef = Clef(rawValue: question.clef) {
             positions[ClefKey(clef: clef, value: question.position), default: PositionTally()].add(answer, singleNote: isSingleNote)

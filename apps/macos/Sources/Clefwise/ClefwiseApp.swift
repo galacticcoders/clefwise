@@ -12,6 +12,8 @@ struct ClefwiseApp: App {
     var body: some Scene {
         Window("Clefwise", id: "main") {
             MainWindowContent(model: model) { appDelegate.mainWindow = $0 }
+                // The footer names the piano plugged in.
+                .environment(appDelegate.piano)
         }
         .defaultSize(width: 1000, height: 780)
         .windowResizability(.contentMinSize)
@@ -237,6 +239,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// long as the journal is in use, so reopening the Progress window shows the last numbers while
     /// it reads again.
     let model: AppModel
+    /// The pianos and keyboards plugged in over USB (MIDI): their keys answer in the game in use.
+    let piano: PianoConnection
     private let launchDate = Date()
 
     /// The game's window. Closing it still quits, as when it was the only window: the Progress
@@ -258,6 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // anything is logged), logs the launch, then makes the game and restores the run: see
         // `AppModel.init`. A new journal brings in the usage log so far, if it's the first.
         model = AppModel(defaults: .standard, log: .shared, device: DeviceID.current(in: .standard), launch: .current)
+        piano = PianoConnection()
         super.init()
     }
 
@@ -266,6 +271,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         // From now on the journal in use is watched, and read again as files arrive.
         model.didFinishLaunching()
+        // Read from the model each time: a journal switch replaces the game.
+        piano.onKeyPress = { [model] in model.game.playedOnPiano($0) }
+        piano.onChange = { [model] old, new in
+            for name in new where !old.contains(name) { model.game.recorder.recordUIAction("pianoConnected", detail: name) }
+            for name in old where !new.contains(name) { model.game.recorder.recordUIAction("pianoDisconnected", detail: name) }
+        }
+        piano.start()
         NSApp.activate()
     }
 

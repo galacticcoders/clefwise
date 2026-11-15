@@ -84,7 +84,8 @@ struct ProgressReport: Equatable {
     /// One per clef and spelled pitch (F♯5 apart from F5), for "most missed" and "slowest".
     var pitches: [PitchProgress]
     /// By answer method ("buttons", "piano", "keyboard") and by naming system ("letters"…),
-    /// as `Game.AnswerInput` / `NamingSystem` raw values.
+    /// as `Game.AnswerInput` / `NamingSystem` raw values; answers on a real piano have their own
+    /// method, `BreakdownRow.realPianoKey`.
     var byInput: [BreakdownRow]
     var byNaming: [BreakdownRow]
     /// Pieces practised in the window, most recently practised first.
@@ -189,6 +190,15 @@ struct BreakdownRow: Equatable, Identifiable {
 
     var id: String { key }
     var accuracy: Double? { answers > 0 ? Double(correct) / Double(answers) : nil }
+
+    /// The `byInput` key for answers on a real piano (source `midi`): they count apart from the
+    /// piano on screen.
+    static let realPianoKey = "midi"
+
+    /// What an answer method is called on the dashboard: "Note buttons", "Real piano".
+    static func inputLabel(_ key: String) -> String {
+        key == realPianoKey ? "Real piano" : Game.AnswerInput(rawValue: key)?.label ?? key.capitalized
+    }
 }
 
 struct PieceProgressSummary: Equatable, Identifiable {

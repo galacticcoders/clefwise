@@ -44,7 +44,7 @@ struct Log {
     /// log lost it), and its answer at `time`.
     mutating func answer(_ round: UUID, at time: Date, _ written: Pitch, clef: Clef = .treble, correct: Bool = true,
                          ms: Int = 1000, octaveShift: Int = 0, input: String = "buttons", naming: String = "letters",
-                         bar: Int? = nil, logQuestion: Bool = true) {
+                         bar: Int? = nil, logQuestion: Bool = true, source: AnswerSource = .click) {
         let question = UUID()
         if logQuestion {
             let played = Pitch(written.letter, written.octave + octaveShift, written.accidental)
@@ -55,7 +55,7 @@ struct Log {
                 pickChance: nil, naming: naming, input: input, hintsVisible: false, keyNamesVisible: false)),
                 at: time.addingTimeInterval(-Double(ms) / 1000))
         }
-        add(.answerGiven(AnswerGiven(round: round, question: question, responseMs: ms, source: .click,
+        add(.answerGiven(AnswerGiven(round: round, question: question, responseMs: ms, source: source,
                                      letter: written.letter.name, accidental: 0, name: written.letter.name, pitch: nil,
                                      correct: correct, wrongOctave: nil, keystrokes: [], scoreAfter: 0, streakAfter: 0)),
             at: time)

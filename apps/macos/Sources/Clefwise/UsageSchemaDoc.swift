@@ -189,14 +189,15 @@ extension UsageExport {
         |---|---|
         | `round`, `question` | Ids of the round and the question answered. |
         | `responseMs` | From the question appearing to the answer, pauses left out. |
-        | `source` | `click` (note buttons clicked), `shortcut` (keyboard shortcuts for the buttons: letters, 1–7), `typing` (typed names), `piano` (piano keys), `guitar` (a place on the guitar's neck, since 2026-11-14). |
+        | `source` | `click` (note buttons clicked), `shortcut` (keyboard shortcuts for the buttons: letters, 1–7), `typing` (typed names), `piano` (piano keys), `guitar` (a place on the guitar's neck, since 2026-11-14), `midi` (a key on a real piano or keyboard plugged in over USB, since 2026-11-15; see Answering on a real piano). |
         | `letter`, `accidental` | What was answered: letter and sign. |
         | `name` | Its name in the naming system in use: `F♯`, `Fa♯`, `komal Re`. |
-        | `pitch` | The exact key, for piano answers; for guitar answers the pitch the place sounds (see Pitch). Both spell the notes between the naturals as sharps: C♯, never D♭. |
+        | `pitch` | The exact key, for piano answers (on screen or real); for guitar answers the pitch the place sounds (see Pitch). Both spell the notes between the naturals as sharps: C♯, never D♭. |
         | `correct` | Whether it was right. |
         | `wrongOctave` | Piano and guitar only: the right note in the wrong octave. |
         | `guitarString`, `guitarFret` | Guitar answers only (since 2026-11-14): where on the neck, string 1 (the highest) to 6 (the lowest), and fret (0 = the open string). |
-        | `keystrokes` | Every key pressed while the question was up, in order, each with `key`, `ms` (since the question appeared) and `result`: `typed` (kept as part of a name, or an entry towards notes asked together), `rejected` (refused; the box shook), `deleted` (Backspace, or an entry taken back), `submitted` (Return, or a completed name submitting), `armed` (♯/♭ armed or disarmed on the note buttons; clicks on those buttons appear as keys `click ♯` / `click ♭`), `other` (pressed but not part of answering). Towards notes asked together, clicks appear as keys too: `click Sol♯` (a note button), `piano G♯4` (a piano key chosen, or clicked again to take it back), `guitar E3 string 4 fret 2` (a place on the guitar chosen, clicked again to take it back, or chosen instead of another place that sounds the same pitch; an open string is fret 0) and `remove Sol♯` (an entry clicked to take it back). |
+        | `midiVelocity` | Answers on a real piano only (since 2026-11-15): how hard the key was pressed, 1 (softest) to 127. |
+        | `keystrokes` | Every key pressed while the question was up, in order, each with `key`, `ms` (since the question appeared) and `result`: `typed` (kept as part of a name, or an entry towards notes asked together), `rejected` (refused; the box shook), `deleted` (Backspace, or an entry taken back), `submitted` (Return, or a completed name submitting), `armed` (♯/♭ armed or disarmed on the note buttons; clicks on those buttons appear as keys `click ♯` / `click ♭`), `other` (pressed but not part of answering). Towards notes asked together, clicks appear as keys too: `click Sol♯` (a note button), `piano G♯4` (a piano key chosen, or clicked again to take it back), `midi G♯4` (the same on a real piano, pressed again to take it back), `guitar E3 string 4 fret 2` (a place on the guitar chosen, clicked again to take it back, or chosen instead of another place that sounds the same pitch; an open string is fret 0) and `remove Sol♯` (an entry clicked to take it back). |
         | `scoreAfter`, `streakAfter` | Score and current streak after this answer; for notes asked together, after the whole group. |
         | `pausedMs` | How long the round was paused while the question was up (absent when it wasn't). |
         | `group`, `groupSize` | For notes asked together: as in their `questionShown`. Absent for a note answered on its own. |
@@ -232,11 +233,21 @@ extension UsageExport {
         its rounds (`piece.guitarNotesOutOfReach`). The neck shows 12 frets, or more (up to 24)
         when the notes asked need them (`guitarFrets`).
 
+        **Answering on a real piano** (since 2026-11-15). With `answerInput` `piano`, a key pressed
+        on a piano or keyboard plugged in over USB (MIDI) answers as a key of the piano on screen
+        does: the exact key, octave included. Its answers have `source` `midi` and a
+        `midiVelocity`; the round's settings are the piano's, so only `source` tells the two
+        apart. The app makes no sound for a right one, since the piano sounds the note itself.
+
         ### `inputIgnored`: an answer or keystroke that didn't count
 
         While the round is paused (`reason` `paused`), during the pause after a miss, a sign with
         no name in the naming system, and so on. A place on the guitar has `detail` as its
-        keystroke has it: `guitar E3 string 4 fret 2`.
+        keystroke has it: `guitar E3 string 4 fret 2`. A key on a real piano pressed during a round
+        while another input than the piano is chosen is `notPiano`, with the key as `detail`
+        (`G♯4`); one pressed under 150 ms after the question appeared is `tooSoon` (struck with the
+        key that answered the question before: a chord's other keys, or a neighbour brushed); one
+        pressed between rounds isn't logged at all.
 
         | Field | Meaning |
         |---|---|
@@ -376,6 +387,10 @@ extension UsageExport {
         | `name` | Which one. |
         | `detail` | More about it, when there is more. |
 
+        `pianoConnected` and `pianoDisconnected` (since 2026-11-15) aren't buttons: a piano or
+        keyboard was plugged in or unplugged (or was already there at launch), with the name macOS
+        gives it as `detail`.
+
         ### `statsSnapshot`: what the app knew before the usage log existed
 
         Recorded once, so the log starts from everything the app knew.
@@ -479,6 +494,7 @@ extension UsageExport {
         | `pieceTitle` | The piece, for piece rounds. |
         | `guitarTuning`, `guitarFrets` | Answering on the guitar: the question's `guitarTuning` and `guitarFrets`; empty otherwise. |
         | `answerString`, `answerFret` | Guitar answers: `guitarString` and `guitarFret`, where on the neck; empty otherwise. |
+        | `answerVelocity` | Answers on a real piano: `midiVelocity`, how hard the key was pressed; empty otherwise. |
 
         The question's columns are empty if its `questionShown` line is missing from the log, and
         the round's if its `roundStarted` is.

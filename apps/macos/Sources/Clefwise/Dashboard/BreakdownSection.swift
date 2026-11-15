@@ -59,7 +59,7 @@ struct BreakdownSection: View {
 
     /// Each group's rows, most accurate first.
     private var groups: [RowGroup] {
-        let methods = report.byInput.map { Row(id: "input.\($0.key)", name: Game.AnswerInput(rawValue: $0.key)?.label ?? $0.key.capitalized, source: $0) }
+        let methods = report.byInput.map { Row(id: "input.\($0.key)", name: BreakdownRow.inputLabel($0.key), source: $0) }
         let namings = report.byNaming.map { Row(id: "naming.\($0.key)", name: NamingSystem(rawValue: $0.key)?.label ?? $0.key.capitalized, source: $0) }
         return [RowGroup(title: "Answer method", rows: ranked(methods)), RowGroup(title: "Naming system", rows: ranked(namings))]
             .filter { !$0.rows.isEmpty }
