@@ -329,7 +329,8 @@ struct BarProgress: Equatable, Identifiable {
 ///   round that goes in order (`PieceContext.order` `inOrder`). Not the round's first question (its
 ///   time includes getting ready), and right answers only. Notes named together count once: only the
 ///   group's first question can start a bar, and its answer's time is the group's.
-/// - **The rest of the bar:** every other right answer to a single note in an in-order round.
+/// - **The rest of the bar:** every other right answer to a single note in an in-order round (not
+///   the round's first question either).
 /// Shuffled rounds count in `answers` and `correct` only. As the start of a bar comes down towards
 /// the rest, bars are being read ahead rather than worked out on arrival.
 struct PieceDay: Equatable, Identifiable {
