@@ -187,9 +187,10 @@ import Testing
         let real = report(log, method: .realPiano)
         #expect(real.pieces.count == 1)
         #expect(real.pieces.first.map { [$0.rounds, $0.answers, $0.correct] } == [1, 2, 1])
-        #expect(real.pieces.first?.bars == [BarProgress(bar: 1, attempts: 1, correct: 1), BarProgress(bar: 2, attempts: 1, correct: 0)])
+        #expect(real.pieces.first?.bars == [BarProgress(bar: 1, attempts: 1, correct: 1, medianResponseMs: 2000, rightSingleNotes: 1),
+                                            BarProgress(bar: 2, attempts: 1, correct: 0)])
         let screen = report(log, method: .piano)
-        #expect(screen.pieces.first?.bars == [BarProgress(bar: 2, attempts: 1, correct: 1)])
+        #expect(screen.pieces.first?.bars == [BarProgress(bar: 2, attempts: 1, correct: 1, medianResponseMs: 2500, rightSingleNotes: 1)])
         #expect(report(log, method: .keyboard).pieces.isEmpty)
         #expect(report(log).pieces.first.map { [$0.rounds, $0.answers] } == [1, 3])
     }

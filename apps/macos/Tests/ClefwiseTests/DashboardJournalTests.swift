@@ -281,14 +281,23 @@ struct TestJournal {
         try TestJournal(folder: journalFolder).write(log.events)
 
         let pieces = report(JournalReader(folder: journalFolder).read()).pieces
+        // One answer a round, each its round's first question: in neither time.
+        let day = { (daysAgo: Int, correct: Int) in
+            PieceDay(day: self.calendar.startOfDay(for: self.at(daysAgo, 9)), answers: 1, correct: correct, barStartMs: nil,
+                     restOfBarMs: nil, methods: [.buttons])
+        }
         #expect(pieces == [
             PieceProgressSummary(title: "Minuet in G", path: "/Users/b/Music/Minuet.musicxml", lastPractised: at(0, 9, 1),
                                  rounds: 4, answers: 4, correct: 3, measureCount: 32,
-                                 bars: [BarProgress(bar: 1, attempts: 1, correct: 1), BarProgress(bar: 2, attempts: 2, correct: 1),
-                                        BarProgress(bar: 3, attempts: 1, correct: 1)],
+                                 bars: [BarProgress(bar: 1, attempts: 1, correct: 1, medianResponseMs: 1000, rightSingleNotes: 1),
+                                        BarProgress(bar: 2, attempts: 2, correct: 1, medianResponseMs: 1000, rightSingleNotes: 1),
+                                        BarProgress(bar: 3, attempts: 1, correct: 1, medianResponseMs: 1000, rightSingleNotes: 1)],
+                                 days: [day(3, 1), day(2, 0), day(1, 1), day(0, 1)],
                                  pieceID: minuet),
             PieceProgressSummary(title: "Gavotte", path: "/gavotte.musicxml", lastPractised: at(0, 8, 1), rounds: 1,
-                                 answers: 1, correct: 1, measureCount: 32, bars: [BarProgress(bar: 1, attempts: 1, correct: 1)]),
+                                 answers: 1, correct: 1, measureCount: 32,
+                                 bars: [BarProgress(bar: 1, attempts: 1, correct: 1, medianResponseMs: 1000, rightSingleNotes: 1)],
+                                 days: [day(0, 1)]),
         ])
         #expect(pieces.map(\.id) == [minuet, "/gavotte.musicxml"])
 

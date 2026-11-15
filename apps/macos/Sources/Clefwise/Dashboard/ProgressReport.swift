@@ -296,6 +296,9 @@ struct PieceProgressSummary: Equatable, Identifiable {
     var measureCount: Int?
     /// Bars with at least one answer, in order.
     var bars: [BarProgress]
+    /// Days with an answer in the window, oldest first: how much was practised and how fast bars were
+    /// read, day by day (2026-11-15).
+    var days: [PieceDay] = []
     /// The piece's id in the practice journal (the SHA-256 of the file it was first added with),
     /// whatever path each Mac practised it from; nil for a piece known only by its path.
     var pieceID: String? = nil
@@ -309,9 +312,43 @@ struct BarProgress: Equatable, Identifiable {
     var bar: Int
     var attempts: Int
     var correct: Int
+    /// Median time of its right answers to single notes; nil without any.
+    var medianResponseMs: Int? = nil
+    /// Its right answers to single notes: how many times the median comes from (the speed map's
+    /// rule: fewer than `MethodDay.minimumForTrend` is too few to judge).
+    var rightSingleNotes = 0
 
     var id: Int { bar }
     var accuracy: Double? { attempts > 0 ? Double(correct) / Double(attempts) : nil }
+}
+
+/// One day of a piece (`PieceProgressSummary.days`). A piece's notes come quicker once its patterns
+/// are familiar: what still takes time is reading a bar not yet played in the round. So its times are
+/// split in two:
+/// - **The start of a bar:** the first question shown after the round moves into another bar, in a
+///   round that goes in order (`PieceContext.order` `inOrder`). Not the round's first question (its
+///   time includes getting ready), and right answers only. Notes named together count once: only the
+///   group's first question can start a bar, and its answer's time is the group's.
+/// - **The rest of the bar:** every other right answer to a single note in an in-order round (not
+///   the round's first question either).
+/// Shuffled rounds count in `answers` and `correct` only. As the start of a bar comes down towards
+/// the rest, bars are being read ahead rather than worked out on arrival.
+struct PieceDay: Equatable, Identifiable {
+    /// Start of the local day.
+    var day: Date
+    var answers: Int
+    var correct: Int
+    /// Median time of the day's right answers that start a bar, and how many there were.
+    var barStartMs: Int?
+    var barStarts = 0
+    /// Median time of the other right answers to single notes, and how many there were.
+    var restOfBarMs: Int?
+    var restOfBar = 0
+    /// How the day's answers were given, in `AnswerMethod` order (none for an unknown input).
+    var methods: [AnswerMethod] = []
+
+    var id: Date { day }
+    var accuracy: Double? { answers > 0 ? Double(correct) / Double(answers) : nil }
 }
 
 struct RecentRound: Equatable, Identifiable {
@@ -422,6 +459,7 @@ extension ProgressReport {
         }
         let bars = (1...16).map { BarProgress(bar: $0, attempts: 6 + Int(random.next() * 10), correct: 0) }
             .map { BarProgress(bar: $0.bar, attempts: $0.attempts, correct: Int(Double($0.attempts) * (0.55 + random.next() * 0.45))) }
+            .map(sampleBarTime)
         return ProgressReport(
             filter: ProgressFilter(), generatedAt: now, periodStart: window.first?.day,
             totals: totals(window[...]), previousTotals: totals(days.dropLast(30).suffix(30)),
@@ -432,9 +470,36 @@ extension ProgressReport {
             previousByInput: sampleBreakdown(days.dropLast(30).suffix(30)),
             pieces: [PieceProgressSummary(title: "Minuet in G", path: "/tmp/minuet.mxl", lastPractised: now.addingTimeInterval(-7200),
                                           rounds: 6, answers: bars.map(\.attempts).reduce(0, +),
-                                          correct: bars.map(\.correct).reduce(0, +), measureCount: 16, bars: bars)],
+                                          correct: bars.map(\.correct).reduce(0, +), measureCount: 16, bars: bars,
+                                          days: samplePieceDays(now: now, calendar: calendar))],
             recentRounds: rounds, responseTimes: sampleResponseTimes(), answersBeforeTracking: 0, unreadableLines: 0,
             methodsPractised: Set(days.flatMap { $0.methods.map(\.method) }))
+    }
+
+    /// A sample bar's time, from a random sequence of its own so the rest stays as it was: bars 5–8
+    /// slower (a new passage), bar 12 with too few right answers to judge.
+    private static func sampleBarTime(_ bar: BarProgress) -> BarProgress {
+        var random = SeededRandom(seed: 2000 + UInt64(bar.bar))
+        var bar = bar
+        bar.rightSingleNotes = bar.bar == 12 ? 3 : bar.correct
+        bar.medianResponseMs = Int(((5...8).contains(bar.bar) ? 2600 : 1100) + random.next() * 900)
+        return bar
+    }
+
+    /// The minuet day by day over three weeks of practice: the start of a bar comes down from 4.6 s to
+    /// 1.9 s, the rest of the bar from 1.3 s to 0.8 s; on the real piano from the ninth day.
+    private static func samplePieceDays(now: Date, calendar: Calendar) -> [PieceDay] {
+        let today = calendar.startOfDay(for: now)
+        let back = [20, 18, 17, 15, 12, 10, 8, 6, 5, 3, 2, 0]
+        return back.enumerated().map { index, daysAgo in
+            let progress = Double(index) / Double(back.count - 1)
+            let answers = 40 + (index * 37) % 50
+            return PieceDay(day: calendar.date(byAdding: .day, value: -daysAgo, to: today)!, answers: answers,
+                            correct: Int(Double(answers) * (0.7 + 0.25 * progress)),
+                            barStartMs: Int(4600 - 2700 * progress), barStarts: 8 + index % 5,
+                            restOfBarMs: Int(1300 - 500 * progress), restOfBar: answers - 12,
+                            methods: index >= 8 ? [.realPiano] : [.keyboard])
+        }
     }
 
     /// Splits a sample day's answers by method, with a random sequence of its own so the rest of

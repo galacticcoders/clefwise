@@ -417,8 +417,16 @@ struct Log {
                                  correct: 0, measureCount: 20, bars: []),
             PieceProgressSummary(title: "Minuet in G", path: "/minuet.musicxml", lastPractised: at(1, 18, 1), rounds: 2,
                                  answers: 4, correct: 3, measureCount: 34,
-                                 bars: [BarProgress(bar: 1, attempts: 2, correct: 1), BarProgress(bar: 2, attempts: 1, correct: 1),
-                                        BarProgress(bar: 3, attempts: 1, correct: 1)]),
+                                 bars: [BarProgress(bar: 1, attempts: 2, correct: 1, medianResponseMs: 1000, rightSingleNotes: 1),
+                                        BarProgress(bar: 2, attempts: 1, correct: 1, medianResponseMs: 1000, rightSingleNotes: 1),
+                                        BarProgress(bar: 3, attempts: 1, correct: 1, medianResponseMs: 1000, rightSingleNotes: 1)],
+                                 // Each round's first question is in neither time; bar 3 is reached from bar 1.
+                                 days: [PieceDay(day: calendar.startOfDay(for: at(2, 18)), answers: 3, correct: 2,
+                                                 barStartMs: 1000, barStarts: 1, restOfBarMs: nil, restOfBar: 0,
+                                                 methods: [.buttons]),
+                                        PieceDay(day: calendar.startOfDay(for: at(1, 18)), answers: 1, correct: 1,
+                                                 barStartMs: nil, barStarts: 0, restOfBarMs: nil, restOfBar: 0,
+                                                 methods: [.buttons])]),
         ])
         // Neither has a bass answer.
         #expect(report(log, clef: .bass).pieces.isEmpty)
