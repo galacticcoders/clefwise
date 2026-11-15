@@ -188,6 +188,8 @@ enum UsageExport {
         Column("guitarFrets") { $0.question?.guitarFrets },
         Column("answerString") { $0.answer.guitarString },
         Column("answerFret") { $0.answer.guitarFret },
+        // Answering on a real piano (since 2026-11-15); last, for the same reason.
+        Column("answerVelocity") { $0.answer.midiVelocity },
     ] }
 
     private static func roundColumns(_ times: TimeFormat) -> [Column<RoundRow>] { [

@@ -53,7 +53,11 @@ Requires macOS 14+ and Xcode (or the Swift toolchain).
     which names white and black keys (C♯/D♭…, Do♯/Re♭…, or komal/tivra swaras in sargam; black
     keys stay blank when the keyboard is too wide to fit them). Black keys become answers when
     notes can be sharp or flat. A miss lights up the right key and tells you if you only got the
-    octave wrong.
+    octave wrong. **A real piano** or MIDI keyboard plugged into the Mac (USB, no setup) answers
+    too: play the exact key on it, and the key on screen lights up. The hint under the keys names
+    it once it's connected. The app stays quiet when you're right, since the piano sounds the note
+    itself; a key struck together with the answer (a chord, or a neighbour brushed) is ignored
+    for the next note. Progress shows these answers as *Real piano*.
   - *Keyboard*: type the note's name in the current naming system (`c`, `sol`, `dha`); it
     answers as soon as a whole name is typed. Add `#` for sharp or `b` for flat (`f#`, `sib`;
     sargam `reb` = komal Re, `ma#` = tivra Ma). No Return needed: a right name goes in at once and
@@ -215,6 +219,7 @@ Sources/Clefwise/
   NoteShapes.swift    note heads, flags, rests, brace and ties as paths
   BarDisplay.swift    what the bar view shows: the bar, its staves, the note asked, notes answered
   PianoKeyboard.swift piano answer input
+  PianoConnection.swift a real piano or keyboard plugged in (MIDI): its key presses
   TypingPad.swift     keyboard (typing) answer input
   Game.swift          round logic (random and piece rounds), adaptive note picking, persistence
   RoundReplay.swift   a round as its run file tells it, to bring it back after a crash

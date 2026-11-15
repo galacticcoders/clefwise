@@ -584,8 +584,10 @@ private let chordsURL = URL(fileURLWithPath: "/tmp/clefwise-tests/guitar-chords.
         let top = unzipped.appendingPathComponent(try #require(try FileManager.default.contentsOfDirectory(atPath: unzipped.path).first))
 
         let answers = try csv(top.appendingPathComponent("answers.csv"))
-        #expect(answers.header.suffix(5) == ["pieceTitle", "guitarTuning", "guitarFrets", "answerString", "answerFret"])
+        // The real piano's column (2026-11-15) comes after the guitar's.
+        #expect(answers.header.suffix(6) == ["pieceTitle", "guitarTuning", "guitarFrets", "answerString", "answerFret", "answerVelocity"])
         try #require(answers.rows.count == 2)
+        #expect(answers.rows.map { $0["answerVelocity"] } == ["", ""])
         #expect(answers.rows.map { $0["guitarTuning"] } == ["standard", "standard"])
         #expect(answers.rows.map { $0["guitarFrets"] } == ["12", "12"])
         #expect(answers.rows.map { $0["answerString"] } == ["4", "1"])

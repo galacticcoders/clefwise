@@ -277,7 +277,7 @@ private struct Writer {
             + (accidental == .sharp ? [Keystroke(key: "#", ms: ms * 5 / 6, result: .typed)] : [])
             + [Keystroke(key: "Return", ms: ms, result: .submitted)]
         case .shortcut: [Keystroke(key: letter.name.lowercased(), ms: ms, result: .submitted)]
-        case .click, .piano, .guitar: []
+        case .click, .piano, .guitar, .midi: []
         }
         return AnswerGiven(round: question.round, question: question.question, responseMs: ms, source: source,
                            letter: letter.name, accidental: accidental.rawValue,

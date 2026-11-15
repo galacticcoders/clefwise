@@ -235,13 +235,16 @@ struct AnswerGiven: Codable, Equatable {
     /// (0 = open). `pitch` is what it sounds. Nil for other sources.
     var guitarString: Int? = nil
     var guitarFret: Int? = nil
+    /// Answers on a real piano (source `midi`, since 2026-11-15): how hard the key was pressed,
+    /// 1–127. Nil for other sources.
+    var midiVelocity: Int? = nil
 }
 
 struct Keystroke: Codable, Equatable {
     /// The character typed, a key name ("Return", "Delete"…), or "click ♯" / "click ♭" for the
     /// note buttons' sign buttons. While notes are asked together, also clicks towards them:
-    /// "click Sol♯" (a note button), "piano G♯4" (a key chosen or taken back), "remove Sol♯" (an
-    /// entry taken back).
+    /// "click Sol♯" (a note button), "piano G♯4" (a key chosen or taken back), "midi G♯4" (the same
+    /// on a real piano), "remove Sol♯" (an entry taken back).
     var key: String
     /// Since the question appeared.
     var ms: Int
@@ -426,8 +429,9 @@ enum PauseSource: String, Codable, Equatable {
 
 enum AnswerSource: String, Codable, Equatable {
     /// Note buttons clicked; keyboard shortcuts (letters, 1–7) for them; typed names; piano keys;
-    /// places on the guitar's neck (since 2026-11-14).
-    case click, shortcut, typing, piano, guitar
+    /// places on the guitar's neck (since 2026-11-14); keys on a real piano or keyboard plugged in
+    /// over USB, MIDI (since 2026-11-15).
+    case click, shortcut, typing, piano, guitar, midi
 }
 
 enum KeystrokeResult: String, Codable, Equatable {

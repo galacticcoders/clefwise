@@ -5,6 +5,8 @@ struct ContentView: View {
     @Bindable var game: Game
     /// The journals, for the title; nil in a view made without them.
     @Environment(AppModel.self) private var model: AppModel?
+    /// The pianos plugged in, for the footer's hint; nil in a view made without them.
+    @Environment(PianoConnection.self) private var piano: PianoConnection?
     @State private var keyMonitor: Any?
     /// The window this view is in: keys typed in another one (Progress) aren't answers.
     @State private var hostWindow = WeakWindow()
@@ -108,12 +110,15 @@ struct ContentView: View {
         $game.settings.answerInput.recordingChanges(as: "answerInputSwitch", to: game.recorder) { $0.rawValue }
     }
 
+    /// The name of the real piano plugged in ("Digital Piano"), the first if there are several.
+    private var realPiano: String? { piano?.names.first }
+
     private var shortcutHint: String {
         var parts: [String]
         switch (game.settings.answerInput, game.settings.naming) {
         case (.buttons, .letters): parts = ["Type the note's letter or 1–7"]
         case (.buttons, _): parts = ["Press 1–7 to answer"]
-        case (.piano, _): parts = ["Click the exact key"]
+        case (.piano, _): parts = [realPiano.map { "Play the exact key on \($0), or click it" } ?? "Click the exact key"]
         case (.keyboard, _): parts = ["Type the note's name, ⌫ to fix"]
         case (.guitar, _): parts = ["Click where you'd play it"]
         }
@@ -121,7 +126,7 @@ struct ContentView: View {
         if game.namesTogether {
             switch game.settings.answerInput {
             case .buttons: parts.append("⌫ take one back")
-            case .piano: parts = ["Click the exact keys"]
+            case .piano: parts = [realPiano.map { "Play the exact keys on \($0), or click them" } ?? "Click the exact keys"]
             case .keyboard: parts = ["Type the names one after another, ⌫ to fix"]
             case .guitar: parts = ["Click where you'd play them"]
             }
