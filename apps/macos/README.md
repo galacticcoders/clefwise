@@ -157,8 +157,11 @@ all methods counted a note says which are mixed in the range.
   answers, so the notes that are still slow stand out; hollow until a place has 5 right answers.
 - **Notes to work on**: your most-missed and slowest notes, sharps and flats included.
 - **Practice calendar**, **how you answer** (naming and playing methods, random notes against
-  pieces, and note names),
-  **pieces** bar by bar, and **recent rounds**.
+  pieces, and note names), and **recent rounds**.
+- **Pieces**: each piece's bars, how often you're right and your median time in each, and
+  **Reading a new bar**: day by day, the time to the first note after you move into a new bar
+  against the time for the rest of the bar. Once a piece's patterns are familiar the rest comes
+  quickly; as the start of a bar comes down towards it, you're reading ahead.
 
 Every chart has a **Table** view with the numbers. The dashboard refreshes whenever practice
 reaches the journal (a round ending, or another device's) and can stay open beside the game.
