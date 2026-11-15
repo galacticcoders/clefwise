@@ -38,64 +38,124 @@ struct DashboardView: View {
 
     // MARK: - Filters
 
+    /// One row when it fits; else two, when and what first, then how and which practice (the four
+    /// filters and Refresh don't fit a narrow window on one line).
     private var filterRow: some View {
-        HStack(spacing: 12) {
-            Picker("Range", selection: range) {
-                ForEach(ProgressFilter.Range.allCases) { Text($0.label).tag($0) }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                rangePicker
+                clefPicker
+                methodPicker
+                practicePicker
+                refreshControls
+                Spacer(minLength: 0)
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    rangePicker
+                    clefPicker
+                    Spacer(minLength: 0)
+                }
+                HStack(spacing: 12) {
+                    methodPicker
+                    practicePicker
+                    refreshControls
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    private var rangePicker: some View {
+        Picker("Range", selection: range) {
+            ForEach(ProgressFilter.Range.allCases) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .fixedSize()
+        .rebuiltOnAppearanceChange()
+        .help("Which days the dashboard counts")
+    }
+
+    /// Guitar joins Treble and Bass once there are answers in the guitar clef.
+    private var clefPicker: some View {
+        let clefs = ProgressFilter.ClefFilter.choices(for: store.report, selected: store.filter.clef)
+        return Picker("Clef", selection: clef) {
+            ForEach(clefs) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .help(clefs.count > 3 ? "Count notes in every clef, or only in one" : "Count notes in either clef, or only in one")
+    }
+
+    /// Once there's more than one way of answering to tell apart.
+    @ViewBuilder
+    private var methodPicker: some View {
+        let methods = ProgressFilter.methodChoices(for: store.report, selected: store.filter.method)
+        if methods.count > 1 || store.filter.method != nil {
+            Picker("Answer method", selection: method) {
+                Text("All answer methods").tag(AnswerMethod?.none)
+                ForEach(AnswerMethod.byFamily(methods), id: \.family) { group in
+                    Section(group.family.label) {
+                        ForEach(group.methods) { Text($0.label).tag(AnswerMethod?.some($0)) }
+                    }
+                }
             }
             .pickerStyle(.menu)
             .labelsHidden()
             .fixedSize()
             .rebuiltOnAppearanceChange()
-            .help("Which days the dashboard counts")
+            .help("Count every answer, or only those given one way: naming (keyboard, note buttons) or playing (a piano, the guitar)")
+        }
+    }
 
-            // Guitar joins Treble and Bass once there are answers in the guitar clef.
-            let clefs = ProgressFilter.ClefFilter.choices(for: store.report, selected: store.filter.clef)
-            Picker("Clef", selection: clef) {
-                ForEach(clefs) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .help(clefs.count > 3 ? "Count notes in every clef, or only in one" : "Count notes in either clef, or only in one")
-
-            // Once there's more than one way of answering to tell apart.
-            let methods = ProgressFilter.methodChoices(for: store.report, selected: store.filter.method)
-            if methods.count > 1 || store.filter.method != nil {
-                Picker("Answer method", selection: method) {
-                    Text("All answer methods").tag(AnswerMethod?.none)
-                    ForEach(AnswerMethod.byFamily(methods), id: \.family) { group in
-                        Section(group.family.label) {
-                            ForEach(group.methods) { Text($0.label).tag(AnswerMethod?.some($0)) }
-                        }
+    /// Once there are random notes and a piece to tell apart.
+    @ViewBuilder
+    private var practicePicker: some View {
+        let report = store.report
+        if report.hasRandomPractice && !report.piecesPractised.isEmpty || store.filter.practice != nil {
+            Picker("Practice", selection: practice) {
+                Text("All practice").tag(PracticeFilter?.none)
+                Text(PracticeFilter.random.label(in: report)).tag(PracticeFilter?.some(.random))
+                if report.piecesPractised.count > 1 {
+                    Text(PracticeFilter.pieces.label(in: report)).tag(PracticeFilter?.some(.pieces))
+                }
+                Section("Pieces") {
+                    ForEach(pieceChoices(report)) { piece in
+                        Text(piece.title).tag(PracticeFilter?.some(.piece(piece.id)))
                     }
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .fixedSize()
-                .rebuiltOnAppearanceChange()
-                .help("Count every answer, or only those given one way: naming (keyboard, note buttons) or playing (a piano, the guitar)")
             }
-
-            Button {
-                game.recorder.recordUIAction("progressRefresh")
-                store.reload()
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .help("Read the journal again")
-
-            if store.hasLoaded {
-                Text("Updated \(store.report.generatedAt.formatted(date: .omitted, time: .shortened))")
-                    .font(.callout)
-                    .foregroundStyle(DashboardTheme.textSecondary)
-            }
-            ProgressView()
-                .controlSize(.small)
-                .opacity(store.isLoading ? 1 : 0)
-                .accessibilityHidden(!store.isLoading)
-            Spacer(minLength: 0)
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
+            .rebuiltOnAppearanceChange()
+            .help("Count all practice, or only random notes (read cold), or only pieces (where patterns get familiar)")
         }
+    }
+
+    @ViewBuilder
+    private var refreshControls: some View {
+        Button {
+            game.recorder.recordUIAction("progressRefresh")
+            store.reload()
+        } label: {
+            Label("Refresh", systemImage: "arrow.clockwise")
+        }
+        .fixedSize()
+        .help("Read the journal again")
+
+        if store.hasLoaded {
+            Text("Updated \(store.report.generatedAt.formatted(date: .omitted, time: .shortened))")
+                .font(.callout)
+                .foregroundStyle(DashboardTheme.textSecondary)
+                .fixedSize()
+        }
+        ProgressView()
+            .controlSize(.small)
+            .opacity(store.isLoading ? 1 : 0)
+            .accessibilityHidden(!store.isLoading)
     }
 
     // The store saves and reloads; these also log which control changed it.
@@ -105,6 +165,25 @@ struct DashboardView: View {
 
     private var clef: Binding<ProgressFilter.ClefFilter> {
         $store.filter.clef.recordingChanges(as: "progressClef", to: game.recorder) { $0.rawValue }
+    }
+
+    private var practice: Binding<PracticeFilter?> {
+        $store.filter.practice.recordingChanges(as: "progressPractice", to: game.recorder) { practice in
+            switch practice {
+            case nil: "all"
+            case .random: "random"
+            case .pieces: "pieces"
+            case .piece: "piece"
+            }
+        }
+    }
+
+    /// Every piece practised, and the one chosen even when it's no longer among them.
+    private func pieceChoices(_ report: ProgressReport) -> [PracticedPiece] {
+        guard case .piece(let id) = store.filter.practice, !report.piecesPractised.contains(where: { $0.id == id }) else {
+            return report.piecesPractised
+        }
+        return report.piecesPractised + [PracticedPiece(id: id, title: PracticeFilter.piece(id).label(in: report), lastPractised: .distantPast)]
     }
 
     private var method: Binding<AnswerMethod?> {
@@ -135,8 +214,10 @@ struct DashboardView: View {
         let isWide = width >= Self.twoColumnWidth
         let column = isWide ? (width - Self.spacing) / 2 : width
         return VStack(alignment: .leading, spacing: Self.spacing) {
-            if let mixed = MixedMethodsNote.methods(in: report) {
-                MixedMethodsNote(methods: mixed)
+            let mixedMethods = MixedMethodsNote.methods(in: report)
+            let mixesPractice = MixedMethodsNote.mixesPractice(in: report)
+            if mixedMethods != nil || mixesPractice {
+                MixedMethodsNote(methods: mixedMethods ?? [], mixesPractice: mixesPractice)
             }
             KPISection(report: report, naming: naming)
             PracticeMixSection(report: report, naming: naming)
@@ -227,25 +308,34 @@ private struct EmptyDashboard: View {
         case .bass: "No bass clef notes"
         case .treble8vb: "No guitar clef notes"
         }
-        // "No notes answered on the Real piano"
+        // "No notes answered on the Real piano", "No notes from random notes"
         let method = report.filter.method.map { " answered on the \($0.label)" } ?? ""
-        return report.filter.range == .all ? "\(notes)\(method) yet" : "\(notes)\(method) in the \(report.filter.range.label.lowercased())"
+        let practice = report.filter.practice.map { " from \($0 == .random ? "random notes" : $0 == .pieces ? "pieces" : $0.label(in: report))" } ?? ""
+        let what = "\(notes)\(method)\(practice)"
+        return report.filter.range == .all ? "\(what) yet" : "\(what) in the \(report.filter.range.label.lowercased())"
     }
 
     private var message: String {
         guard hasPractisedBefore, report.filter != ProgressFilter(range: .all, clef: .all) else {
             return "Practise a round and your progress appears here."
         }
-        return report.filter.method == nil
+        return report.filter.method == nil && report.filter.practice == nil
             ? "Practise a round and your progress appears here, or pick another range or clef above."
-            : "Practise a round and your progress appears here, or pick another range, clef or answer method above."
+            : "Practise a round and your progress appears here, or pick another range, clef, answer method or practice above."
     }
 }
 
-/// Said above the sections when every method is counted and the range has answers given more than
-/// one way: their times differ, so the charts show them apart and the rest mixes them.
+/// Said above the sections when the range mixes answers whose times differ: given more than one way
+/// (with every method counted), or from random notes and pieces (with all practice counted).
 struct MixedMethodsNote: View {
+    /// The methods mixed; empty when they aren't.
     let methods: [AnswerMethod]
+    var mixesPractice = false
+
+    /// All practice is counted, and the range has both random notes and pieces.
+    static func mixesPractice(in report: ProgressReport) -> Bool {
+        report.filter.practice == nil && report.byPractice.filter { $0.answers > 0 }.count > 1
+    }
 
     /// The methods answered in the range, in `AnswerMethod` order, when the filter counts every
     /// method and there are two or more; nil otherwise.
@@ -263,9 +353,20 @@ struct MixedMethodsNote: View {
         return labels.dropLast().joined(separator: ", ") + " and " + labels.last!
     }
 
+    /// What's mixed, and where to see one kind alone.
+    var text: String {
+        switch (methods.count > 1, mixesPractice) {
+        case (true, true):
+            "This range has answers from \(Self.list(methods)), from random notes and from pieces, and each has its own speed. The overview's accuracy and time, What you practised and Over time show the methods apart; the other sections count everything together. To see one kind alone, choose it in the menus above."
+        case (false, true):
+            "This range has random notes and pieces. A piece's notes come quicker once its patterns are familiar, so its times don't measure reading a note cold, and the sections below count both together. To see random notes alone, choose them in the practice menu above."
+        default:
+            "This range has answers from \(Self.list(methods)), and each way of answering has its own speed. The overview's accuracy and time, What you practised and Over time show them apart; the other sections count them together. To see one alone, choose it in the menu above."
+        }
+    }
+
     var body: some View {
-        Label("This range has answers from \(Self.list(methods)), and each way of answering has its own speed. The overview's accuracy and time, What you practised and Over time show them apart; the other sections count them together. To see one alone, choose it in the menu above.",
-              systemImage: "info.circle")
+        Label(text, systemImage: "info.circle")
             .font(.callout)
             .foregroundStyle(DashboardTheme.textSecondary)
             .fixedSize(horizontal: false, vertical: true)

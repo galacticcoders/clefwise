@@ -130,8 +130,10 @@ a new journal.
 
 **Window → Progress** (⇧⌘P), or the **Progress** button next to the hints and mute buttons, opens
 a dashboard built from your practice journal. Pick a range (last 7 / 30 / 90 days, all time), a clef
-and, once you've answered more than one way, an answer method; everything on the page follows that
-choice. Answer methods come in two kinds: **naming** the note (Keyboard, Note buttons) and
+and, once you've answered more than one way, an answer method, and once you've practised a piece,
+the practice: random notes, all pieces or one piece. Everything on the page follows that choice.
+Random notes are read cold, while a piece's notes come quicker once its patterns are familiar, so
+their times measure different things: "Random notes" shows your reading speed alone. Answer methods come in two kinds: **naming** the note (Keyboard, Note buttons) and
 **playing** it (Real piano, Piano, Guitar). Each has its own speed (finding a key takes longer
 than typing a name), so wherever times are compared, each method keeps its own colour, and with
 all methods counted a note says which are mixed in the range.
@@ -154,7 +156,8 @@ all methods counted a note says which are mixed in the range.
 - **Speed map**, laid out the same: each line and space's median time over its last 20 right
   answers, so the notes that are still slow stand out; hollow until a place has 5 right answers.
 - **Notes to work on**: your most-missed and slowest notes, sharps and flats included.
-- **Practice calendar**, **how you answer** (naming and playing methods, and note names),
+- **Practice calendar**, **how you answer** (naming and playing methods, random notes against
+  pieces, and note names),
   **pieces** bar by bar, and **recent rounds**.
 
 Every chart has a **Table** view with the numbers. The dashboard refreshes whenever practice
