@@ -13,7 +13,9 @@ enum ProgressAnalyzer {
     /// when it started in the window and, with one clef or method chosen, has at least one answer
     /// that counts; its time, score and attempts are then the whole round's, every clef and method
     /// included. The stats snapshot, which has no method, counts only with every method. Streaks,
-    /// `clefsPractised`, `methodsPractised`, `piecesPractised` and `hasRandomPractice` ignore the filter.
+    /// `clefsPractised`, `methodsPractised`, `piecesPractised` and `hasRandomPractice` ignore the filter,
+    /// and so does the note before a question (`ResponseTimes.byPreviousNote`, the start of a bar in
+    /// `PieceDay`): it's the one shown before it in its round.
     ///
     /// Besides the rounds' own events, it uses two kinds from outside them: `statsSnapshot` (the
     /// opening balances: several, one per device, add up) and `pieceOpened` (each part's staves, for
@@ -152,7 +154,8 @@ private struct Analysis {
 
     /// Questions waiting for their answer.
     private var questions: [UUID: WaitingQuestion] = [:]
-    /// The latest question shown in each round, for `ResponseTimes.byPreviousNote`.
+    /// The latest question shown in each round, whatever the filter: for `ResponseTimes.byPreviousNote`
+    /// and for the start of a bar (`PieceDay`).
     private var lastShown: [UUID: ShownNote] = [:]
     private var rounds: [RoundRecord] = []
     private var roundIndex: [UUID: Int] = [:]
@@ -254,6 +257,7 @@ private struct Analysis {
             if let piece = start.piece {
                 let id = pieceIDs.id(of: piece)
                 rounds[index].piece = (key: id ?? piece.path, id: id)
+                rounds[index].inOrder = piece.order == Game.PieceSettings.Order.inOrder.rawValue
                 if let staves = piece.staves {
                     rounds[index].singleStaff = staves == 1
                 } else if let staves = partStaves[piece.path], staves.indices.contains(piece.partIndex) {
@@ -261,7 +265,12 @@ private struct Analysis {
                 }
             }
         case .questionShown(let question):
-            questions[question.question] = WaitingQuestion(shown: question, stepsFromPrevious: stepsFromPrevious(to: question))
+            let shown = ShownNote(question)
+            // The round's question shown before, whatever the filter: the note before, and moving
+            // into another bar, are the round's.
+            let before = lastShown.updateValue(shown, forKey: question.round)
+            questions[question.question] = WaitingQuestion(shown: question, stepsFromPrevious: shown.steps(after: before),
+                                                           place: place(of: shown, after: before, in: question.round))
         case .answerGiven(let answer):
             add(answer, at: logged.time)
         case .roundPaused(let pause):
@@ -272,7 +281,8 @@ private struct Analysis {
         case .roundRestored(let restore):
             // Back after a crash, paused: the time since its last event counts for nothing. The
             // question left on screen is asked again as a new one, so it never gets an answer, and
-            // the new one doesn't follow on from it.
+            // the new one doesn't follow on from it: like a round's first question, it's neither the
+            // start of a bar nor the rest of one (its time includes finding the place again).
             rounds[round(restore.round)].clock = RoundClock(time: logged.time, activeMs: restore.activeMs, running: false)
             if let question = restore.unansweredQuestion { questions[question] = nil }
             lastShown[restore.round] = nil
@@ -287,14 +297,16 @@ private struct Analysis {
         }
     }
 
-    /// Staff steps from the question shown just before `question` in its round, when both are single
-    /// notes on the same staff; nil otherwise. Makes `question` the round's latest.
-    private mutating func stepsFromPrevious(to question: QuestionShown) -> Int? {
-        let shown = ShownNote(question)
-        let before = lastShown.updateValue(shown, forKey: question.round)
-        guard shown.isSingleNote, let before, before.index == shown.index - 1, before.isSingleNote,
-              before.clef == shown.clef, before.staff == shown.staff else { return nil }
-        return shown.position - before.position
+    /// Where `shown` stands in its bar (`PieceDay`), from the question shown `before` it in its round.
+    /// Only in a piece round going in order, and never its first question (nor the first after a
+    /// restore): its time includes getting ready. Of notes named together, only the group's first
+    /// question can start a bar; the rest of the bar is single notes.
+    private func place(of shown: ShownNote, after before: ShownNote?, in round: UUID) -> BarPlace {
+        guard let before, let bar = shown.bar, let barBefore = before.bar,
+              let index = roundIndex[round], rounds[index].inOrder else { return .neither }
+        if shown.isSingleNote { return bar == barBefore ? .rest : .start }
+        let firstOfGroup = shown.group == nil || shown.group != before.group
+        return firstOfGroup && bar != barBefore ? .start : .neither
     }
 
     private mutating func add(_ answer: AnswerGiven, at time: Date) {
@@ -351,8 +363,9 @@ private struct Analysis {
             }
         }
         if let started = rounds[index].started, let piece = rounds[index].start?.piece, let key = rounds[index].piece {
-            pieces[key.key, default: PieceTally(id: key.id)].add(answer, at: time, bar: question.pieceNote?.measure,
-                                                                 in: piece, startedAt: started)
+            pieces[key.key, default: PieceTally(id: key.id)].add(answer, at: time, on: day.start, bar: question.pieceNote?.measure,
+                                                                 singleNote: isSingleNote, place: waiting.place,
+                                                                 method: method, in: piece, startedAt: started)
         }
     }
 
@@ -721,27 +734,50 @@ private extension QuestionShown {
     var isSingleNote: Bool { group == nil && groupSize == nil }
 }
 
-/// A question waiting for its answer, and how far it is from the one before (`stepsFromPrevious(to:)`).
+/// A question waiting for its answer, how far it is from the one before (`ShownNote.steps(after:)`)
+/// and where it stands in its bar (`Analysis.place(of:after:in:)`), both decided when it was shown.
 private struct WaitingQuestion {
     let shown: QuestionShown
     let stepsFromPrevious: Int?
+    let place: BarPlace
 }
 
-/// What the previous-note statistics need of a question once the next one is shown.
+/// A question's place for `PieceDay`: the first question shown after an in-order round moves into
+/// another bar, another single note of such a round, or neither (anything else).
+private enum BarPlace {
+    case start, rest, neither
+}
+
+/// What the previous-note statistics and the start of a bar need of a question once the next one
+/// is shown.
 private struct ShownNote {
     let index: Int
     let clef: String
     /// A piece's staff (nil for random notes), so two treble staves of a grand staff stay apart.
     let staff: Int?
+    /// A piece's bar (nil for random notes).
+    let bar: Int?
     let position: Int
     let isSingleNote: Bool
+    /// Notes named together share one; nil for a note asked on its own.
+    let group: UUID?
 
     init(_ question: QuestionShown) {
         index = question.index
         clef = question.clef
         staff = question.pieceNote?.staff
+        bar = question.pieceNote?.measure
         position = question.position
         isSingleNote = question.isSingleNote
+        group = question.group
+    }
+
+    /// Staff steps from `before`, the question shown just before it in its round, when both are
+    /// single notes on the same staff; nil otherwise.
+    func steps(after before: ShownNote?) -> Int? {
+        guard isSingleNote, let before, before.index == index - 1, before.isSingleNote,
+              before.clef == clef, before.staff == staff else { return nil }
+        return position - before.position
     }
 }
 
@@ -758,7 +794,9 @@ private struct PieceTally {
     var contextStart = Date.distantPast
     var rounds = 0, answers = 0, correct = 0
     var lastAnswer: Date?, lastRoundStart: Date?
-    var bars: [Int: BarProgress] = [:]
+    var bars: [Int: BarTally] = [:]
+    /// By the start of the local day answered on.
+    var days: [Date: PieceDayTally] = [:]
 
     mutating func addRound(_ piece: PieceContext, startedAt start: Date) {
         rounds += 1
@@ -766,14 +804,14 @@ private struct PieceTally {
         note(piece, startedAt: start)
     }
 
-    mutating func add(_ answer: AnswerGiven, at time: Date, bar: Int?, in piece: PieceContext, startedAt start: Date) {
+    /// An answer that counts, given at `time` on the local day starting `day`.
+    mutating func add(_ answer: AnswerGiven, at time: Date, on day: Date, bar: Int?, singleNote: Bool, place: BarPlace,
+                      method: AnswerMethod?, in piece: PieceContext, startedAt start: Date) {
         answers += 1
         if answer.correct { correct += 1 }
         lastAnswer = max(lastAnswer ?? time, time)
-        if let bar {
-            bars[bar, default: BarProgress(bar: bar, attempts: 0, correct: 0)].attempts += 1
-            if answer.correct { bars[bar]!.correct += 1 }
-        }
+        if let bar { bars[bar, default: BarTally()].add(answer, singleNote: singleNote) }
+        days[day, default: PieceDayTally()].add(answer, place: place, method: method)
         note(piece, startedAt: start)
     }
 
@@ -787,7 +825,53 @@ private struct PieceTally {
         guard let context, let lastPractised = lastAnswer ?? lastRoundStart else { return nil }
         return PieceProgressSummary(title: context.title, path: context.path, lastPractised: lastPractised, rounds: rounds,
                                     answers: answers, correct: correct, measureCount: context.measureCount,
-                                    bars: bars.values.sorted { $0.bar < $1.bar }, pieceID: id)
+                                    bars: bars.map { $1.progress(bar: $0) }.sorted { $0.bar < $1.bar },
+                                    days: days.map { $1.progress(day: $0) }.sorted { $0.day < $1.day }, pieceID: id)
+    }
+}
+
+/// A bar's answers, and the times of its right answers to single notes, whatever the round's order.
+private struct BarTally {
+    var attempts = 0, correct = 0
+    var singleNoteMs: [Int] = []
+
+    mutating func add(_ answer: AnswerGiven, singleNote: Bool) {
+        attempts += 1
+        guard answer.correct else { return }
+        correct += 1
+        if singleNote { singleNoteMs.append(answer.responseMs) }
+    }
+
+    func progress(bar: Int) -> BarProgress {
+        BarProgress(bar: bar, attempts: attempts, correct: correct, medianResponseMs: ProgressAnalyzer.median(singleNoteMs),
+                    rightSingleNotes: singleNoteMs.count)
+    }
+}
+
+/// One day of a piece: its answers, the right ones' times at the start of a bar and in the rest of
+/// it, and the methods answered in.
+private struct PieceDayTally {
+    var answers = 0, correct = 0
+    var barStartMs: [Int] = [], restOfBarMs: [Int] = []
+    var methods: Set<AnswerMethod> = []
+
+    mutating func add(_ answer: AnswerGiven, place: BarPlace, method: AnswerMethod?) {
+        answers += 1
+        if let method { methods.insert(method) }
+        guard answer.correct else { return }
+        correct += 1
+        switch place {
+        case .start: barStartMs.append(answer.responseMs)
+        case .rest: restOfBarMs.append(answer.responseMs)
+        case .neither: break
+        }
+    }
+
+    func progress(day: Date) -> PieceDay {
+        PieceDay(day: day, answers: answers, correct: correct,
+                 barStartMs: ProgressAnalyzer.median(barStartMs), barStarts: barStartMs.count,
+                 restOfBarMs: ProgressAnalyzer.median(restOfBarMs), restOfBar: restOfBarMs.count,
+                 methods: AnswerMethod.allCases.filter(methods.contains))
     }
 }
 
@@ -809,6 +893,9 @@ private struct RoundRecord {
     /// It has an answer the filter's clef and method let through.
     var hasAnswerInFilter = false
     var singleStaff = false
+    /// A piece round asking its notes in order (`PieceContext.order` `inOrder`), so its bars come one
+    /// after another: the start of a bar is told apart from the rest (`PieceDay`).
+    var inOrder = false
     /// A piece round's piece: its key in the report (its journal id, or failing that its path),
     /// and its journal id.
     var piece: (key: String, id: String?)?
