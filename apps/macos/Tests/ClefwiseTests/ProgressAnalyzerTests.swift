@@ -156,10 +156,15 @@ struct Log {
         #expect(week.previousTotals == ProgressTotals(answers: 5, correct: 4, rounds: 3, practiceSeconds: 1560,
                                                       daysPractised: 3, medianResponseMs: 1300))
         #expect(week.days.map(\.day) == (0..<7).reversed().map { at($0, 0) })
+        // Every answer on the note buttons: the one method is the whole day.
         #expect(week.days.first == DayProgress(day: at(6, 0), answers: 2, correct: 2, practiceSeconds: 90, medianResponseMs: 850,
-                                               lowerQuartileMs: 725, upperQuartileMs: 975))
+                                               lowerQuartileMs: 725, upperQuartileMs: 975,
+                                               methods: [MethodDay(method: .buttons, answers: 2, correct: 2, medianResponseMs: 850,
+                                                                   lowerQuartileMs: 725, upperQuartileMs: 975, rightSingleNotes: 2)]))
         #expect(week.days.last == DayProgress(day: at(0, 0), answers: 3, correct: 2, practiceSeconds: 600, medianResponseMs: 2000,
-                                              lowerQuartileMs: 1500, upperQuartileMs: 2500))
+                                              lowerQuartileMs: 1500, upperQuartileMs: 2500,
+                                              methods: [MethodDay(method: .buttons, answers: 3, correct: 2, medianResponseMs: 2000,
+                                                                  lowerQuartileMs: 1500, upperQuartileMs: 2500, rightSingleNotes: 2)]))
         #expect(week.days.dropFirst().dropLast().allSatisfy { $0.answers == 0 && $0.practiceSeconds == 0 && $0.medianResponseMs == nil })
         #expect(week.recentRounds == [
             RecentRound(id: f, started: at(0, 15, 50), durationMs: 600_000, input: "buttons", naming: "letters",
@@ -207,9 +212,13 @@ struct Log {
                                          "2026-10-26T23:00:00.000Z", "2026-10-27T23:00:00.000Z", "2026-10-28T23:00:00.000Z",
                                          "2026-10-29T23:00:00.000Z"].map(usageTestTime))
         #expect(week.days[1] == DayProgress(day: at(5, 0), answers: 1, correct: 1, practiceSeconds: 120, medianResponseMs: 1000,
-                                            lowerQuartileMs: 1000, upperQuartileMs: 1000))
+                                            lowerQuartileMs: 1000, upperQuartileMs: 1000,
+                                            methods: [MethodDay(method: .buttons, answers: 1, correct: 1, medianResponseMs: 1000,
+                                                                lowerQuartileMs: 1000, upperQuartileMs: 1000, rightSingleNotes: 1)]))
         #expect(week.days[2] == DayProgress(day: at(4, 0), answers: 1, correct: 1, practiceSeconds: 0, medianResponseMs: 2000,
-                                            lowerQuartileMs: 2000, upperQuartileMs: 2000))
+                                            lowerQuartileMs: 2000, upperQuartileMs: 2000,
+                                            methods: [MethodDay(method: .buttons, answers: 1, correct: 1, medianResponseMs: 2000,
+                                                                lowerQuartileMs: 2000, upperQuartileMs: 2000, rightSingleNotes: 1)]))
         #expect(week.days[0].answers == 1)
         // Saturday, Sunday and Monday in a row, the 25-hour Sunday included.
         #expect(week.longestStreakDays == 3 && week.currentStreakDays == 0)
