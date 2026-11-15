@@ -6,11 +6,14 @@ enum ProgressAnalyzer {
     /// the events, then over the rounds, so years of log take well under a second.
     ///
     /// The window runs from the start of its first local day through `now` (all time: the whole
-    /// log). An answer counts when it was given in the window and its question is in the filter's
-    /// clef; answers whose `questionShown` isn't in the log are left out everywhere. A round counts
-    /// (rounds, practice time, days, pieces, recent rounds) when it started in the window and, with
-    /// one clef chosen, has at least one answer in that clef; its time, score and attempts are then
-    /// the whole round's, both clefs included. Streaks ignore the filter.
+    /// log). An answer counts when it was given in the window, its question is in the filter's clef,
+    /// and it was given in the filter's answer method (`AnswerMethod.of`: an input this version
+    /// doesn't know counts only with every method); answers whose `questionShown` isn't in the log
+    /// are left out everywhere. A round counts (rounds, practice time, days, pieces, recent rounds)
+    /// when it started in the window and, with one clef or method chosen, has at least one answer
+    /// that counts; its time, score and attempts are then the whole round's, every clef and method
+    /// included. The stats snapshot, which has no method, counts only with every method. Streaks,
+    /// `clefsPractised` and `methodsPractised` ignore the filter.
     ///
     /// Besides the rounds' own events, it uses two kinds from outside them: `statsSnapshot` (the
     /// opening balances: several, one per device, add up) and `pieceOpened` (each part's staves, for
@@ -168,9 +171,12 @@ private struct Analysis {
     private var positions: [ClefKey<Int>: PositionTally] = [:]
     private var pitches: [ClefKey<Pitch>: Tally] = [:]
     private var inputs: [String: Tally] = [:], namings: [String: Tally] = [:]
+    /// `inputs` for the window before, for `previousByInput`.
+    private var previousInputs: [String: Tally] = [:]
     private var pieces: [String: PieceTally] = [:]
-    /// Every clef answered in, whatever the filter.
+    /// Every clef and answer method answered in, whatever the filter.
     private var clefsPractised: Set<Clef> = []
+    private var methodsPractised: Set<AnswerMethod> = []
     /// Right answers to single notes in the window and in the one before, and the window's answers
     /// by speed and by the previous note: for `ResponseTimes`.
     private var times = TimesTally()
@@ -206,6 +212,14 @@ private struct Analysis {
     private func inClef(_ clef: String) -> Bool {
         filter.clef == .all || clef == filter.clef.rawValue
     }
+
+    /// An answer in an input this version doesn't know (no method) counts only with every method.
+    private func inMethod(_ method: AnswerMethod?) -> Bool {
+        filter.method == nil || method == filter.method
+    }
+
+    /// One clef or one method chosen: only some answers count, and only the rounds with one of them.
+    private var picksAnswers: Bool { filter.clef != .all || filter.method != nil }
 
     private mutating func round(_ id: UUID) -> Int {
         if let index = roundIndex[id] { return index }
@@ -271,6 +285,7 @@ private struct Analysis {
         let index = round(answer.round)
         rounds[index].answers += 1
         if answer.correct { rounds[index].correct += 1 }
+        if answer.source == .midi { rounds[index].realPianoAnswers += 1 }
         if let active = rounds[index].clock?.activeMs(at: time) {
             rounds[index].activeMsAtLastAnswer = max(rounds[index].activeMsAtLastAnswer ?? active, active)
         }
@@ -281,22 +296,27 @@ private struct Analysis {
         let day = days.day(of: time)
         practised[day.start] = day.end
         if let clef = Clef(rawValue: question.clef) { clefsPractised.insert(clef) }
-        guard inClef(question.clef) else { return }
-        rounds[index].hasAnswerInClef = true
+        let method = AnswerMethod.of(source: answer.source, input: question.input)
+        if let method { methodsPractised.insert(method) }
+        guard inClef(question.clef), inMethod(method) else { return }
+        rounds[index].hasAnswerInFilter = true
         // Notes named together share one time, so the time statistics leave them out.
         let isSingleNote = question.isSingleNote
+        // The method's key (`midi` for a real piano), or the input this version doesn't know.
+        let inputKey = method?.rawValue ?? question.input
         if inPreviousWindow(time) {
             previous.add(answer, on: day.start)
             if isSingleNote, answer.correct { previousTimes.add(answer.responseMs) }
+            previousInputs[inputKey, default: Tally()].add(answer)
         }
         guard inWindow(time) else { return }
 
         current.add(answer, on: day.start)
-        dayTallies[day.start, default: DayTally()].add(answer, singleNote: isSingleNote)
+        dayTallies[day.start, default: DayTally()].add(answer, singleNote: isSingleNote, method: method)
         if isSingleNote { times.add(answer, stepsFromPrevious: waiting.stepsFromPrevious) }
         firstDay = min(firstDay ?? day.start, day.start)
         lastDay = max(lastDay ?? day.start, day.start)
-        inputs[answer.source == .midi ? BreakdownRow.realPianoKey : question.input, default: Tally()].add(answer)
+        inputs[inputKey, default: Tally()].add(answer)
         namings[question.naming, default: Tally()].add(answer)
         if let clef = Clef(rawValue: question.clef) {
             positions[ClefKey(clef: clef, value: question.position), default: PositionTally()].add(answer, singleNote: isSingleNote)
@@ -313,11 +333,11 @@ private struct Analysis {
     // MARK: - The report
 
     mutating func report() -> ProgressReport {
-        // Rounds once all their answers are in, as the clef filter needs them.
+        // Rounds once all their answers are in, as the clef and method filters need them.
         var roundDays = LocalDays(calendar)
         var recent: [Int] = []
         for (index, round) in rounds.enumerated() {
-            guard let started = round.started, filter.clef == .all || round.hasAnswerInClef else { continue }
+            guard let started = round.started, !picksAnswers || round.hasAnswerInFilter else { continue }
             let seconds = Double(round.durationMs ?? 0) / 1000
             if inPreviousWindow(started) {
                 previous.rounds += 1
@@ -334,7 +354,8 @@ private struct Analysis {
         }
         recent.sort { (rounds[$0].started!, $0) > (rounds[$1].started!, $1) }
 
-        let answersBeforeTracking = filter.range == .all ? addSnapshot() : 0
+        // The snapshot has no dates, and no methods.
+        let answersBeforeTracking = filter.range == .all && filter.method == nil ? addSnapshot() : 0
         for (key, stat) in openingBalance.noteStats where stat.attempts > 0 {
             if let (clef, _) = ProgressAnalyzer.parseStatKey(key) { clefsPractised.insert(clef) }
         }
@@ -361,12 +382,14 @@ private struct Analysis {
                         < ($1.clef.order, $1.pitch.diatonicIndex, $1.pitch.accidental.rawValue)
                 },
             byInput: Self.breakdown(inputs), byNaming: Self.breakdown(namings),
+            previousByInput: periodStart == nil ? nil : Self.breakdown(previousInputs),
             pieces: pieces.values
                 .compactMap { $0.summary() }
                 .sorted { ($0.lastPractised, $1.id) > ($1.lastPractised, $0.id) },
             recentRounds: recent.prefix(50).map { Self.recentRound(rounds[$0]) },
             responseTimes: times.responseTimes(previous: periodStart == nil ? nil : previousTimes),
-            answersBeforeTracking: answersBeforeTracking, unreadableLines: 0, clefsPractised: clefsPractised)
+            answersBeforeTracking: answersBeforeTracking, unreadableLines: 0, clefsPractised: clefsPractised,
+            methodsPractised: methodsPractised)
     }
 
     /// Adds the stats kept before the log (every device's opening balance) to the note map and pitch
@@ -419,7 +442,8 @@ private struct Analysis {
             let spread = TimeSpread(times: tally?.singleNoteMs ?? [])
             list.append(DayProgress(day: day, answers: tally?.tally.answers ?? 0, correct: tally?.tally.correct ?? 0,
                                     practiceSeconds: tally?.practiceSeconds ?? 0, medianResponseMs: tally?.tally.medianMs,
-                                    lowerQuartileMs: spread.lowerQuartileMs, upperQuartileMs: spread.upperQuartileMs))
+                                    lowerQuartileMs: spread.lowerQuartileMs, upperQuartileMs: spread.upperQuartileMs,
+                                    methods: tally?.methodDays() ?? []))
             guard let next = calendar.dateInterval(of: .day, for: day)?.end, next > day else { break }
             day = next
         }
@@ -443,7 +467,8 @@ private struct Analysis {
             naming: settings.string("naming") ?? defaults.naming.rawValue,
             description: description(of: round, settings),
             score: round.end?.score ?? round.correct, attempts: round.end?.attempts ?? round.answers,
-            endReason: round.end?.reason, practiceLength: practiceLength(of: round, settings))
+            endReason: round.end?.reason, practiceLength: practiceLength(of: round, settings),
+            realPianoAnswers: round.realPianoAnswers)
     }
 
     /// "5 min" or "100 notes" for a round of random notes with a limit. An old sprint had none,
@@ -536,6 +561,32 @@ private struct DayTally {
     var tally = Tally()
     var practiceSeconds = 0.0
     /// Times of the right answers to single notes, for the quartiles.
+    var singleNoteMs: [Int] = []
+    /// The same by answer method; answers in an input this version doesn't know are in none.
+    private var methods: [AnswerMethod: MethodTally] = [:]
+
+    mutating func add(_ answer: AnswerGiven, singleNote: Bool, method: AnswerMethod?) {
+        tally.add(answer)
+        if singleNote, answer.correct { singleNoteMs.append(answer.responseMs) }
+        if let method { methods[method, default: MethodTally()].add(answer, singleNote: singleNote) }
+    }
+
+    /// One per method answered in, in `AnswerMethod` order, worked out as the day's own numbers are.
+    func methodDays() -> [MethodDay] {
+        guard !methods.isEmpty else { return [] }
+        return AnswerMethod.allCases.compactMap { method in
+            guard let part = methods[method] else { return nil }
+            let spread = TimeSpread(times: part.singleNoteMs)
+            return MethodDay(method: method, answers: part.tally.answers, correct: part.tally.correct,
+                             medianResponseMs: part.tally.medianMs, lowerQuartileMs: spread.lowerQuartileMs,
+                             upperQuartileMs: spread.upperQuartileMs, rightSingleNotes: spread.rightAnswers)
+        }
+    }
+}
+
+/// One answer method's part of a day: its answers, and its right single notes' times.
+private struct MethodTally {
+    var tally = Tally()
     var singleNoteMs: [Int] = []
 
     mutating func add(_ answer: AnswerGiven, singleNote: Bool) {
@@ -719,11 +770,14 @@ private struct RoundRecord {
     var end: RoundEnded?
     /// Every `answerGiven` for it, for a round that never ended.
     var answers = 0, correct = 0
+    /// Of them, those on a real piano (source `midi`), whatever the filter.
+    var realPianoAnswers = 0
     /// The round time as of its latest start, pause, resume or restore; nil before its start.
     var clock: RoundClock?
     /// The round time at its last answer, for a round that never ended.
     var activeMsAtLastAnswer: Int?
-    var hasAnswerInClef = false
+    /// It has an answer the filter's clef and method let through.
+    var hasAnswerInFilter = false
     var singleStaff = false
     /// A piece round's piece: its key in the report (its journal id, or failing that its path),
     /// and its journal id.

@@ -59,6 +59,24 @@ struct DashboardView: View {
             .fixedSize()
             .help(clefs.count > 3 ? "Count notes in every clef, or only in one" : "Count notes in either clef, or only in one")
 
+            // Once there's more than one way of answering to tell apart.
+            let methods = ProgressFilter.methodChoices(for: store.report, selected: store.filter.method)
+            if methods.count > 1 || store.filter.method != nil {
+                Picker("Answer method", selection: method) {
+                    Text("All answer methods").tag(AnswerMethod?.none)
+                    ForEach(AnswerMethod.byFamily(methods), id: \.family) { group in
+                        Section(group.family.label) {
+                            ForEach(group.methods) { Text($0.label).tag(AnswerMethod?.some($0)) }
+                        }
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+                .rebuiltOnAppearanceChange()
+                .help("Count every answer, or only those given one way: naming (keyboard, note buttons) or playing (a piano, the guitar)")
+            }
+
             Button {
                 game.recorder.recordUIAction("progressRefresh")
                 store.reload()
@@ -89,6 +107,10 @@ struct DashboardView: View {
         $store.filter.clef.recordingChanges(as: "progressClef", to: game.recorder) { $0.rawValue }
     }
 
+    private var method: Binding<AnswerMethod?> {
+        $store.filter.method.recordingChanges(as: "progressMethod", to: game.recorder) { $0?.rawValue ?? "all" }
+    }
+
     // MARK: - Sections
 
     @ViewBuilder
@@ -113,7 +135,11 @@ struct DashboardView: View {
         let isWide = width >= Self.twoColumnWidth
         let column = isWide ? (width - Self.spacing) / 2 : width
         return VStack(alignment: .leading, spacing: Self.spacing) {
+            if let mixed = MixedMethodsNote.methods(in: report) {
+                MixedMethodsNote(methods: mixed)
+            }
             KPISection(report: report, naming: naming)
+            PracticeMixSection(report: report, naming: naming)
             TrendSection(report: report, naming: naming)
             AutomaticSection(report: report, naming: naming)
             // Side by side, so a line or space sits at the same height in both: how well it's known
@@ -201,14 +227,48 @@ private struct EmptyDashboard: View {
         case .bass: "No bass clef notes"
         case .treble8vb: "No guitar clef notes"
         }
-        return report.filter.range == .all ? "\(notes) yet" : "\(notes) in the \(report.filter.range.label.lowercased())"
+        // "No notes answered on the Real piano"
+        let method = report.filter.method.map { " answered on the \($0.label)" } ?? ""
+        return report.filter.range == .all ? "\(notes)\(method) yet" : "\(notes)\(method) in the \(report.filter.range.label.lowercased())"
     }
 
     private var message: String {
         guard hasPractisedBefore, report.filter != ProgressFilter(range: .all, clef: .all) else {
             return "Practise a round and your progress appears here."
         }
-        return "Practise a round and your progress appears here, or pick another range or clef above."
+        return report.filter.method == nil
+            ? "Practise a round and your progress appears here, or pick another range or clef above."
+            : "Practise a round and your progress appears here, or pick another range, clef or answer method above."
+    }
+}
+
+/// Said above the sections when every method is counted and the range has answers given more than
+/// one way: their times differ, so the charts show them apart and the rest mixes them.
+struct MixedMethodsNote: View {
+    let methods: [AnswerMethod]
+
+    /// The methods answered in the range, in `AnswerMethod` order, when the filter counts every
+    /// method and there are two or more; nil otherwise.
+    static func methods(in report: ProgressReport) -> [AnswerMethod]? {
+        guard report.filter.method == nil else { return nil }
+        let answered = Set(report.byInput.filter { $0.answers > 0 }.compactMap { AnswerMethod(rawValue: $0.key) })
+        let methods = AnswerMethod.allCases.filter(answered.contains)
+        return methods.count > 1 ? methods : nil
+    }
+
+    /// "Keyboard and Real piano", "Keyboard, Real piano and Guitar".
+    static func list(_ methods: [AnswerMethod]) -> String {
+        let labels = methods.map(\.label)
+        guard labels.count > 1 else { return labels.first ?? "" }
+        return labels.dropLast().joined(separator: ", ") + " and " + labels.last!
+    }
+
+    var body: some View {
+        Label("This range has answers from \(Self.list(methods)), and each way of answering has its own speed. The overview's accuracy and time, What you practised and Over time show them apart; the other sections count them together. To see one alone, choose it in the menu above.",
+              systemImage: "info.circle")
+            .font(.callout)
+            .foregroundStyle(DashboardTheme.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

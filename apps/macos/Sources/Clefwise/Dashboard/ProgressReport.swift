@@ -1,7 +1,7 @@
 import Foundation
 
-/// What the dashboard shows: a time window, and which clef's notes count. Every number on the
-/// dashboard is computed for the same filter, so they always agree.
+/// What the dashboard shows: a time window, which clef's notes count, and which answer method's.
+/// Every number on the dashboard is computed for the same filter, so they always agree.
 struct ProgressFilter: Equatable, Codable {
     enum Range: String, CaseIterable, Identifiable, Codable {
         case week, month, quarter, all
@@ -51,6 +51,14 @@ struct ProgressFilter: Equatable, Codable {
 
     var range = Range.month
     var clef = ClefFilter.all
+    /// Only answers given this way; nil for every method (the default).
+    var method: AnswerMethod? = nil
+
+    /// The methods to offer besides All: every one with an answer in the journal
+    /// (`ProgressReport.methodsPractised`), and the one `selected`, in `AnswerMethod` order.
+    static func methodChoices(for report: ProgressReport, selected: AnswerMethod?) -> [AnswerMethod] {
+        AnswerMethod.allCases.filter { report.methodsPractised.contains($0) || $0 == selected }
+    }
 }
 
 extension ProgressFilter {
@@ -60,6 +68,7 @@ extension ProgressFilter {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         range = (try? container.decodeIfPresent(Range.self, forKey: .range)) ?? .month
         clef = (try? container.decodeIfPresent(ClefFilter.self, forKey: .clef)) ?? .all
+        method = (try? container.decodeIfPresent(AnswerMethod.self, forKey: .method)) ?? nil
     }
 }
 
@@ -83,11 +92,13 @@ struct ProgressReport: Equatable {
     var positions: [PositionProgress]
     /// One per clef and spelled pitch (F♯5 apart from F5), for "most missed" and "slowest".
     var pitches: [PitchProgress]
-    /// By answer method ("buttons", "piano", "keyboard") and by naming system ("letters"…),
-    /// as `Game.AnswerInput` / `NamingSystem` raw values; answers on a real piano have their own
-    /// method, `BreakdownRow.realPianoKey`.
+    /// By answer method and by naming system ("letters"…): keys are `AnswerMethod` and
+    /// `NamingSystem` raw values (answers on a real piano under `midi`, `BreakdownRow.realPianoKey`).
     var byInput: [BreakdownRow]
     var byNaming: [BreakdownRow]
+    /// `byInput` for the same-length window just before this one, for each method's change; nil
+    /// for all time.
+    var previousByInput: [BreakdownRow]? = nil
     /// Pieces practised in the window, most recently practised first.
     var pieces: [PieceProgressSummary]
     /// Rounds in the window, newest first, at most 50.
@@ -104,6 +115,9 @@ struct ProgressReport: Equatable {
     /// clef): it decides which clef filters to offer, so the Guitar one shows once there are answers
     /// in the guitar clef.
     var clefsPractised: Set<Clef> = []
+    /// Every answer method with an answer anywhere in the journal, whatever the filter: it decides
+    /// which methods the filter offers (`ProgressFilter.methodChoices`).
+    var methodsPractised: Set<AnswerMethod> = []
 
     var isEmpty: Bool { totals.answers == 0 && answersBeforeTracking == 0 }
 
@@ -139,10 +153,35 @@ struct DayProgress: Equatable, Identifiable {
     /// says which answers): the middle half of its times lies between them. Nil without any.
     var lowerQuartileMs: Int? = nil
     var upperQuartileMs: Int? = nil
+    /// The day's answers by method, in `AnswerMethod` order, only methods with an answer that day.
+    /// Their answers add up to `answers` but for answers in an input this version doesn't know.
+    var methods: [MethodDay] = []
 
     var id: Date { day }
     var accuracy: Double? { answers > 0 ? Double(correct) / Double(answers) : nil }
     /// How far apart the middle half of the day's times are: upper minus lower quartile.
+    var spreadMs: Int? { lowerQuartileMs.flatMap { lower in upperQuartileMs.map { $0 - lower } } }
+}
+
+/// One answer method's part of a day (`DayProgress.methods`), counted as the day is.
+struct MethodDay: Equatable, Identifiable {
+    var method: AnswerMethod
+    var answers: Int
+    var correct: Int
+    /// Median time of its right answers (notes named together included, as the day's).
+    var medianResponseMs: Int?
+    /// Quartiles of its right answers to single notes, as the day's.
+    var lowerQuartileMs: Int? = nil
+    var upperQuartileMs: Int? = nil
+    /// Its right answers to single notes: how many times the quartiles come from.
+    var rightSingleNotes = 0
+
+    /// A method's point on a trend needs at least this many: answers for its accuracy, right
+    /// answers for its typical time, right single notes for its spread. Fewer is a gap.
+    static let minimumForTrend = 5
+
+    var id: AnswerMethod { method }
+    var accuracy: Double? { answers > 0 ? Double(correct) / Double(answers) : nil }
     var spreadMs: Int? { lowerQuartileMs.flatMap { lower in upperQuartileMs.map { $0 - lower } } }
 }
 
@@ -193,11 +232,11 @@ struct BreakdownRow: Equatable, Identifiable {
 
     /// The `byInput` key for answers on a real piano (source `midi`): they count apart from the
     /// piano on screen.
-    static let realPianoKey = "midi"
+    static let realPianoKey = AnswerMethod.realPiano.rawValue
 
     /// What an answer method is called on the dashboard: "Note buttons", "Real piano".
     static func inputLabel(_ key: String) -> String {
-        key == realPianoKey ? "Real piano" : Game.AnswerInput(rawValue: key)?.label ?? key.capitalized
+        AnswerMethod(rawValue: key)?.label ?? key.capitalized
     }
 }
 
@@ -250,6 +289,9 @@ struct RecentRound: Equatable, Identifiable {
     var endReason: RoundEndReason?
     /// A practice round's limit: "5 min", "100 notes"; nil without one.
     var practiceLength: String? = nil
+    /// Its answers on a real piano (source `midi`), every answer of the round counted, whatever the
+    /// filter: with `input` `piano`, Recent Rounds says which piano it was played on.
+    var realPianoAnswers = 0
 
     var accuracy: Double? { attempts > 0 ? Double(score) / Double(attempts) : nil }
 
@@ -283,6 +325,7 @@ extension ProgressReport {
                                practiceSeconds: Double(answers) * (2.4 - progress), medianResponseMs: median,
                                lowerQuartileMs: max(250, median - halfSpread * 2 / 3), upperQuartileMs: median + halfSpread)
         }
+        .enumerated().map { sampleMethods($1, daysAgo: 59 - $0) }
         let window = Array(days.suffix(30))
         func totals(_ days: ArraySlice<DayProgress>) -> ProgressTotals {
             let practised = days.filter { $0.answers > 0 }
@@ -329,7 +372,9 @@ extension ProgressReport {
                             description: isPiece ? "Minuet in G · Right hand" : "Treble · On the staff · G major",
                             score: Int(Double(attempts) * (0.7 + random.next() * 0.28)), attempts: attempts,
                             endReason: isTimed ? .timeUp : isPiece ? .pieceComplete : .stopped,
-                            practiceLength: isTimed ? "2 min" : nil)
+                            practiceLength: isTimed ? "2 min" : nil,
+                            // The latest piano rounds were played on a real piano.
+                            realPianoAnswers: index % 3 == 1 && index < 9 ? attempts : 0)
         }
         let bars = (1...16).map { BarProgress(bar: $0, attempts: 6 + Int(random.next() * 10), correct: 0) }
             .map { BarProgress(bar: $0.bar, attempts: $0.attempts, correct: Int(Double($0.attempts) * (0.55 + random.next() * 0.45))) }
@@ -337,15 +382,68 @@ extension ProgressReport {
             filter: ProgressFilter(), generatedAt: now, periodStart: window.first?.day,
             totals: totals(window[...]), previousTotals: totals(days.dropLast(30).suffix(30)),
             currentStreakDays: 4, longestStreakDays: 11, days: window, positions: positions, pitches: pitches,
-            byInput: [BreakdownRow(key: "buttons", answers: 1240, correct: 1130, medianResponseMs: 980),
-                      BreakdownRow(key: "piano", answers: 610, correct: 480, medianResponseMs: 1650),
-                      BreakdownRow(key: "keyboard", answers: 320, correct: 290, medianResponseMs: 1420)],
+            byInput: sampleBreakdown(window[...]),
             byNaming: [BreakdownRow(key: "letters", answers: 1700, correct: 1520, medianResponseMs: 1100),
                        BreakdownRow(key: "solfege", answers: 470, correct: 380, medianResponseMs: 1500)],
+            previousByInput: sampleBreakdown(days.dropLast(30).suffix(30)),
             pieces: [PieceProgressSummary(title: "Minuet in G", path: "/tmp/minuet.mxl", lastPractised: now.addingTimeInterval(-7200),
                                           rounds: 6, answers: bars.map(\.attempts).reduce(0, +),
                                           correct: bars.map(\.correct).reduce(0, +), measureCount: 16, bars: bars)],
-            recentRounds: rounds, responseTimes: sampleResponseTimes(), answersBeforeTracking: 0, unreadableLines: 0)
+            recentRounds: rounds, responseTimes: sampleResponseTimes(), answersBeforeTracking: 0, unreadableLines: 0,
+            methodsPractised: Set(days.flatMap { $0.methods.map(\.method) }))
+    }
+
+    /// Splits a sample day's answers by method, with a random sequence of its own so the rest of
+    /// the sample stays as it was: mostly the keyboard; note buttons now and then in the middle
+    /// weeks; the piano on screen for a few days, then a real piano over the last two weeks, slower
+    /// than typing and getting faster; the guitar on two days, much slower.
+    private static func sampleMethods(_ day: DayProgress, daysAgo back: Int) -> DayProgress {
+        guard day.answers > 0, let median = day.medianResponseMs else { return day }
+        var random = SeededRandom(seed: 1000 + UInt64(back))
+        func part(_ method: AnswerMethod, _ answers: Int, accuracy: Double, medianMs: Int) -> MethodDay {
+            let correct = Int((Double(answers) * min(1, accuracy)).rounded())
+            let half = medianMs / 3
+            return MethodDay(method: method, answers: answers, correct: correct, medianResponseMs: medianMs,
+                             lowerQuartileMs: medianMs - half * 2 / 3, upperQuartileMs: medianMs + half,
+                             rightSingleNotes: correct)
+        }
+        var others: [MethodDay] = []
+        if (25...40).contains(back), random.next() < 0.4 {
+            others.append(part(.buttons, 8 + Int(random.next() * 12), accuracy: 0.85, medianMs: median * 6 / 5))
+        }
+        if back <= 12 {
+            let speed = Double(12 - back) / 12
+            others.append(part(.realPiano, 20 + Int(random.next() * 40), accuracy: 0.9 + 0.07 * speed,
+                               medianMs: Int(5200 - 1800 * speed)))
+        } else if (13...18).contains(back) {
+            others.append(part(.piano, 10 + Int(random.next() * 15), accuracy: 0.8, medianMs: 3800))
+        }
+        if back == 3 || back == 1 {
+            others.append(part(.guitar, 25 + Int(random.next() * 10), accuracy: back == 1 ? 0.62 : 0.5,
+                               medianMs: back == 1 ? 12_500 : 16_000))
+        }
+        let keyboardAnswers = max(5, day.answers - others.map(\.answers).reduce(0, +))
+        let keyboard = MethodDay(method: .keyboard, answers: keyboardAnswers, correct: Int(Double(keyboardAnswers) * (day.accuracy ?? 0.9)),
+                                 medianResponseMs: median, lowerQuartileMs: day.lowerQuartileMs, upperQuartileMs: day.upperQuartileMs,
+                                 rightSingleNotes: Int(Double(keyboardAnswers) * (day.accuracy ?? 0.9)))
+        var day = day
+        day.methods = ([keyboard] + others).sorted { AnswerMethod.allCases.firstIndex(of: $0.method)! < AnswerMethod.allCases.firstIndex(of: $1.method)! }
+        day.answers = day.methods.map(\.answers).reduce(0, +)
+        day.correct = day.methods.map(\.correct).reduce(0, +)
+        return day
+    }
+
+    /// The sample's "How you answer" rows for some days: each method's answers added up, its time the
+    /// middle of its days' medians.
+    private static func sampleBreakdown(_ days: ArraySlice<DayProgress>) -> [BreakdownRow] {
+        AnswerMethod.allCases.compactMap { method in
+            let parts = days.flatMap(\.methods).filter { $0.method == method }
+            guard !parts.isEmpty else { return nil }
+            let medians = parts.compactMap(\.medianResponseMs).sorted()
+            return BreakdownRow(key: method.rawValue, answers: parts.map(\.answers).reduce(0, +),
+                                correct: parts.map(\.correct).reduce(0, +), medianResponseMs: medians[medians.count / 2])
+        }
+        .sorted { ($0.answers, $1.key) > ($1.answers, $0.key) }
     }
 
     /// Times bunched around 1.1 s now, spread out around 1.8 s the window before; mistakes rising

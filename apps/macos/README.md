@@ -129,13 +129,20 @@ a new journal.
 ## Progress dashboard
 
 **Window → Progress** (⇧⌘P), or the **Progress** button next to the hints and mute buttons, opens
-a dashboard built from your practice journal. Pick a range (last 7 / 30 / 90 days, all time) and a clef;
-everything on the page follows that choice.
+a dashboard built from your practice journal. Pick a range (last 7 / 30 / 90 days, all time), a clef
+and, once you've answered more than one way, an answer method; everything on the page follows that
+choice. Answer methods come in two kinds: **naming** the note (Keyboard, Note buttons) and
+**playing** it (Real piano, Piano, Guitar). Each has its own speed (finding a key takes longer
+than typing a name), so wherever times are compared, each method keeps its own colour, and with
+all methods counted a note says which are mixed in the range.
 
 - **Overview**: practice time, notes answered, accuracy, typical response time (median to a
-  right answer) against the previous period, and your day streak.
+  right answer) against the previous period, and your day streak. When a range mixes methods,
+  accuracy and time are given per method.
+- **What you practised**: notes answered per day (per week past six weeks) as columns stacked by
+  answer method: the height is everything, the colours show whether it was naming, playing or both.
 - **Over time**: accuracy, response time, and how much your times vary (the spread of the middle
-  half of right answers), per day (per week past six weeks).
+  half of right answers), per day (per week past six weeks), one line per answer method.
 - **Becoming automatic**: the signs that naming a note no longer takes working out, each with a
   plain-language reading: how long your answers take (this period against the one before), mistakes
   by speed (are they the rushed ones?), and how the distance from the note before changes your time.
@@ -147,8 +154,8 @@ everything on the page follows that choice.
 - **Speed map**, laid out the same: each line and space's median time over its last 20 right
   answers, so the notes that are still slow stand out; hollow until a place has 5 right answers.
 - **Notes to work on**: your most-missed and slowest notes, sharps and flats included.
-- **Practice calendar**, **how you answer** (by answer method and naming system), **pieces** bar by
-  bar, and **recent rounds**.
+- **Practice calendar**, **how you answer** (naming and playing methods, and note names),
+  **pieces** bar by bar, and **recent rounds**.
 
 Every chart has a **Table** view with the numbers. The dashboard refreshes whenever practice
 reaches the journal (a round ending, or another device's) and can stay open beside the game.
@@ -232,7 +239,7 @@ Sources/Clefwise/
   UsageSchemaDoc.swift SCHEMA.md text included in exports
   AppUsage.swift      app lifecycle and UI-click logging, usage data menu items
   AppModel.swift      the journal in use with its game, pieces and dashboard; switching journals
-  Dashboard/          the Progress window: ProgressAnalyzer turns the practice journal into a
+  Dashboard/          the Progress window (answer methods in AnswerMethod.swift): ProgressAnalyzer turns the practice journal into a
                       ProgressReport; ProgressStore loads it off the main thread; DashboardView
                       and one file per section draw it (palette and card chrome in DashboardTheme)
   Journal/            the practice journal: run files and their writer, the folder, the journals

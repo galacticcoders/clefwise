@@ -35,10 +35,18 @@ enum DashboardTheme {
     static let baseline = Color(light: NSColor(hex: 0xC3C2B7), dark: NSColor(hex: 0x383835))
     static let border = Color(light: NSColor(0, 0, 0, alpha: 0.10), dark: NSColor(1, 1, 1, alpha: 0.10))
 
-    /// Categorical series in this fixed order (blue, orange, aqua); never more than three at once.
+    /// Categorical series in this fixed order: blue, orange, aqua, then yellow and magenta (added
+    /// 2026-11-15 for the five answer methods, `AnswerMethod.color`). Checked with the skill's
+    /// validator in this order, adjacent pairs (stacks, bars, lines): light on `#ffffff` passes
+    /// (worst CVD ΔE 9.1 yellow↔aqua, normal-vision 19.6 magenta↔yellow; aqua, yellow and magenta
+    /// under 3:1, so their series need visible labels or the table view), dark on `#1a1a19` passes
+    /// every gate (worst CVD 8.4, all over 3:1). Forms where every pair meets (maps, scatter) take
+    /// three at most.
     static let series: [Color] = [Color(light: NSColor(hex: 0x2A78D6), dark: NSColor(hex: 0x3987E5)),
                                   Color(light: NSColor(hex: 0xEB6834), dark: NSColor(hex: 0xD95926)),
-                                  Color(light: NSColor(hex: 0x1BAF7A), dark: NSColor(hex: 0x199E70))]
+                                  Color(light: NSColor(hex: 0x1BAF7A), dark: NSColor(hex: 0x199E70)),
+                                  Color(light: NSColor(hex: 0xEDA100), dark: NSColor(hex: 0xC98500)),
+                                  Color(light: NSColor(hex: 0xE87BA4), dark: NSColor(hex: 0xD55181))]
     /// The one colour for single-series charts.
     static var accent: Color { series[0] }
     /// What everything that isn't the point is drawn in.

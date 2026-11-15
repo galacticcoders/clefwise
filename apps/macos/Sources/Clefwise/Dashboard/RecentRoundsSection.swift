@@ -137,7 +137,14 @@ struct RecentRoundsSection: View {
             : date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
     }
 
-    private func input(_ round: RecentRound) -> String { Game.AnswerInput(rawValue: round.input)?.label ?? round.input.capitalized }
+    /// The "Answer with" setting, and for the piano which one: the real piano when every answer was
+    /// played on it, both when some were.
+    private func input(_ round: RecentRound) -> String {
+        if round.input == AnswerMethod.piano.rawValue, round.realPianoAnswers > 0 {
+            return round.realPianoAnswers >= round.attempts ? AnswerMethod.realPiano.label : "Piano and real piano"
+        }
+        return Game.AnswerInput(rawValue: round.input)?.label ?? round.input.capitalized
+    }
     private func namingLabel(_ round: RecentRound) -> String { NamingSystem(rawValue: round.naming)?.label ?? round.naming.capitalized }
 
     @ViewBuilder private func ending(_ round: RecentRound) -> some View {
