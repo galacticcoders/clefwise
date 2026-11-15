@@ -38,8 +38,9 @@ struct KPISection: View {
     private var subtitle: String {
         let clef = report.filter.clef == .all ? "" : " · \(report.filter.clef.label) clef"
         let method = report.filter.method.map { " · \($0.label)" } ?? ""
-        guard let days = report.filter.range.days else { return "All time\(clef)\(method)" }
-        return "\(report.filter.range.label)\(clef)\(method), against the \(days) days before"
+        let practice = report.filter.practice.map { " · \($0.label(in: report))" } ?? ""
+        guard let days = report.filter.range.days else { return "All time\(clef)\(method)\(practice)" }
+        return "\(report.filter.range.label)\(clef)\(method)\(practice), against the \(days) days before"
     }
 
     /// "previous 30 days"; nil for all time, which has nothing before it.

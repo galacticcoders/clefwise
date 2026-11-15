@@ -13,7 +13,7 @@ enum ProgressAnalyzer {
     /// when it started in the window and, with one clef or method chosen, has at least one answer
     /// that counts; its time, score and attempts are then the whole round's, every clef and method
     /// included. The stats snapshot, which has no method, counts only with every method. Streaks,
-    /// `clefsPractised` and `methodsPractised` ignore the filter.
+    /// `clefsPractised`, `methodsPractised`, `piecesPractised` and `hasRandomPractice` ignore the filter.
     ///
     /// Besides the rounds' own events, it uses two kinds from outside them: `statsSnapshot` (the
     /// opening balances: several, one per device, add up) and `pieceOpened` (each part's staves, for
@@ -177,6 +177,11 @@ private struct Analysis {
     /// Every clef and answer method answered in, whatever the filter.
     private var clefsPractised: Set<Clef> = []
     private var methodsPractised: Set<AnswerMethod> = []
+    /// Random notes against pieces, in the window; every piece answered and whether any random notes
+    /// were, whatever the filter.
+    private var practices: [String: Tally] = [:]
+    private var piecesPractised: [String: PracticedPiece] = [:]
+    private var hasRandomPractice = false
     /// Right answers to single notes in the window and in the one before, and the window's answers
     /// by speed and by the previous note: for `ResponseTimes`.
     private var times = TimesTally()
@@ -218,8 +223,19 @@ private struct Analysis {
         filter.method == nil || method == filter.method
     }
 
-    /// One clef or one method chosen: only some answers count, and only the rounds with one of them.
-    private var picksAnswers: Bool { filter.clef != .all || filter.method != nil }
+    /// Random notes are rounds without a piece; `pieceKey` is the round's piece's key in the report.
+    private func inPractice(_ pieceKey: String?) -> Bool {
+        switch filter.practice {
+        case nil: true
+        case .random: pieceKey == nil
+        case .pieces: pieceKey != nil
+        case .piece(let key): pieceKey == key
+        }
+    }
+
+    /// One clef, method or practice chosen: only some answers count, and only the rounds with one of
+    /// them.
+    private var picksAnswers: Bool { filter.clef != .all || filter.method != nil || filter.practice != nil }
 
     private mutating func round(_ id: UUID) -> Int {
         if let index = roundIndex[id] { return index }
@@ -298,7 +314,16 @@ private struct Analysis {
         if let clef = Clef(rawValue: question.clef) { clefsPractised.insert(clef) }
         let method = AnswerMethod.of(source: answer.source, input: question.input)
         if let method { methodsPractised.insert(method) }
-        guard inClef(question.clef), inMethod(method) else { return }
+        let pieceKey = rounds[index].piece?.key
+        if let pieceKey {
+            if piecesPractised[pieceKey].map({ $0.lastPractised <= time }) ?? true {
+                let title = rounds[index].start?.piece?.title ?? piecesPractised[pieceKey]?.title ?? "A piece"
+                piecesPractised[pieceKey] = PracticedPiece(id: pieceKey, title: title, lastPractised: time)
+            }
+        } else {
+            hasRandomPractice = true
+        }
+        guard inClef(question.clef), inMethod(method), inPractice(pieceKey) else { return }
         rounds[index].hasAnswerInFilter = true
         // Notes named together share one time, so the time statistics leave them out.
         let isSingleNote = question.isSingleNote
@@ -318,6 +343,7 @@ private struct Analysis {
         lastDay = max(lastDay ?? day.start, day.start)
         inputs[inputKey, default: Tally()].add(answer)
         namings[question.naming, default: Tally()].add(answer)
+        practices[pieceKey == nil ? PracticeFilter.randomKey : PracticeFilter.piecesKey, default: Tally()].add(answer)
         if let clef = Clef(rawValue: question.clef) {
             positions[ClefKey(clef: clef, value: question.position), default: PositionTally()].add(answer, singleNote: isSingleNote)
             if let pitch = ProgressAnalyzer.pitch(question.written) {
@@ -355,7 +381,8 @@ private struct Analysis {
         recent.sort { (rounds[$0].started!, $0) > (rounds[$1].started!, $1) }
 
         // The snapshot has no dates, and no methods.
-        let answersBeforeTracking = filter.range == .all && filter.method == nil ? addSnapshot() : 0
+        // The snapshot's answers have no method or practice: only with every one counted.
+        let answersBeforeTracking = filter.range == .all && filter.method == nil && filter.practice == nil ? addSnapshot() : 0
         for (key, stat) in openingBalance.noteStats where stat.attempts > 0 {
             if let (clef, _) = ProgressAnalyzer.parseStatKey(key) { clefsPractised.insert(clef) }
         }
@@ -383,13 +410,16 @@ private struct Analysis {
                 },
             byInput: Self.breakdown(inputs), byNaming: Self.breakdown(namings),
             previousByInput: periodStart == nil ? nil : Self.breakdown(previousInputs),
+            byPractice: Self.breakdown(practices),
             pieces: pieces.values
                 .compactMap { $0.summary() }
                 .sorted { ($0.lastPractised, $1.id) > ($1.lastPractised, $0.id) },
             recentRounds: recent.prefix(50).map { Self.recentRound(rounds[$0]) },
             responseTimes: times.responseTimes(previous: periodStart == nil ? nil : previousTimes),
             answersBeforeTracking: answersBeforeTracking, unreadableLines: 0, clefsPractised: clefsPractised,
-            methodsPractised: methodsPractised)
+            methodsPractised: methodsPractised,
+            piecesPractised: piecesPractised.values.sorted { ($0.lastPractised, $1.id) > ($1.lastPractised, $0.id) },
+            hasRandomPractice: hasRandomPractice)
     }
 
     /// Adds the stats kept before the log (every device's opening balance) to the note map and pitch

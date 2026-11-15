@@ -1,7 +1,8 @@
 import Foundation
 
-/// What the dashboard shows: a time window, which clef's notes count, and which answer method's.
-/// Every number on the dashboard is computed for the same filter, so they always agree.
+/// What the dashboard shows: a time window, which clef's notes count, which answer method's and
+/// which practice's. Every number on the dashboard is computed for the same filter, so they always
+/// agree.
 struct ProgressFilter: Equatable, Codable {
     enum Range: String, CaseIterable, Identifiable, Codable {
         case week, month, quarter, all
@@ -53,6 +54,8 @@ struct ProgressFilter: Equatable, Codable {
     var clef = ClefFilter.all
     /// Only answers given this way; nil for every method (the default).
     var method: AnswerMethod? = nil
+    /// Only random notes, only pieces, or one piece; nil for all practice (the default).
+    var practice: PracticeFilter? = nil
 
     /// The methods to offer besides All: every one with an answer in the journal
     /// (`ProgressReport.methodsPractised`), and the one `selected`, in `AnswerMethod` order.
@@ -69,7 +72,41 @@ extension ProgressFilter {
         range = (try? container.decodeIfPresent(Range.self, forKey: .range)) ?? .month
         clef = (try? container.decodeIfPresent(ClefFilter.self, forKey: .clef)) ?? .all
         method = (try? container.decodeIfPresent(AnswerMethod.self, forKey: .method)) ?? nil
+        practice = (try? container.decodeIfPresent(PracticeFilter.self, forKey: .practice)) ?? nil
     }
+}
+
+/// Which practice Progress counts. Random notes are read cold; a piece's notes come in patterns a
+/// player gets to know, so its times aren't comparable with random notes' (2026-11-15).
+enum PracticeFilter: Hashable, Codable {
+    /// Rounds of random notes.
+    case random
+    /// Rounds of any piece.
+    case pieces
+    /// Rounds of one piece, by its key in the report (`PieceProgressSummary.id`,
+    /// `PracticedPiece.id`): its journal id, else its path.
+    case piece(String)
+
+    /// The `ProgressReport.byPractice` keys.
+    static let randomKey = "random", piecesKey = "pieces"
+
+    /// "Random notes", "All pieces", or the piece's title (from `report`, "A piece" if it isn't there).
+    func label(in report: ProgressReport) -> String {
+        switch self {
+        case .random: "Random notes"
+        case .pieces: "All pieces"
+        case .piece(let id): report.piecesPractised.first { $0.id == id }?.title ?? "A piece"
+        }
+    }
+}
+
+/// A piece with an answer anywhere in the journal (`ProgressReport.piecesPractised`).
+struct PracticedPiece: Equatable, Identifiable {
+    /// Its key in the report: its journal id, else its path.
+    var id: String
+    /// From the round practised last.
+    var title: String
+    var lastPractised: Date
 }
 
 /// Everything the dashboard draws, worked out from the usage log for one filter.
@@ -99,6 +136,9 @@ struct ProgressReport: Equatable {
     /// `byInput` for the same-length window just before this one, for each method's change; nil
     /// for all time.
     var previousByInput: [BreakdownRow]? = nil
+    /// Random notes against pieces: keys `PracticeFilter.randomKey` and `piecesKey`, rows only for
+    /// those with answers, most answers first.
+    var byPractice: [BreakdownRow] = []
     /// Pieces practised in the window, most recently practised first.
     var pieces: [PieceProgressSummary]
     /// Rounds in the window, newest first, at most 50.
@@ -118,6 +158,10 @@ struct ProgressReport: Equatable {
     /// Every answer method with an answer anywhere in the journal, whatever the filter: it decides
     /// which methods the filter offers (`ProgressFilter.methodChoices`).
     var methodsPractised: Set<AnswerMethod> = []
+    /// Every piece with an answer anywhere in the journal, whatever the filter, most recently
+    /// practised first: the practice filter offers each. And whether there are random notes too.
+    var piecesPractised: [PracticedPiece] = []
+    var hasRandomPractice = false
 
     var isEmpty: Bool { totals.answers == 0 && answersBeforeTracking == 0 }
 

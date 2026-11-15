@@ -9,7 +9,7 @@ struct BreakdownSection: View {
     @State private var hovered: String?
 
     var body: some View {
-        DashboardCard(title: "How you answer", subtitle: "Accuracy and speed by answer method and note names") {
+        DashboardCard(title: "How you answer", subtitle: "Accuracy and speed by answer method, practice and note names") {
             if groups.isEmpty {
                 NothingYetText(emptyText)
             } else {
@@ -64,8 +64,15 @@ struct BreakdownSection: View {
         let methods = report.byInput.map { Row(id: "input.\($0.key)", name: BreakdownRow.inputLabel($0.key), source: $0) }
         let isPlaying = { (row: Row) in AnswerMethod(rawValue: row.source.key)?.family == .playing }
         let namings = report.byNaming.map { Row(id: "naming.\($0.key)", name: NamingSystem(rawValue: $0.key)?.label ?? $0.key.capitalized, source: $0) }
+        // Both or none: one alone says nothing a filter doesn't.
+        let kinds = report.byPractice.filter { $0.answers > 0 }
+        let practice = kinds.count > 1 ? kinds.map { row in
+            Row(id: "practice.\(row.key)", name: row.key == PracticeFilter.randomKey ? "Random notes" : "Pieces", source: row)
+        }.sorted { $0.source.key == PracticeFilter.randomKey && $1.source.key != PracticeFilter.randomKey } : []
         return [RowGroup(title: AnswerMethod.Family.naming.label, rows: ranked(methods.filter { !isPlaying($0) })),
                 RowGroup(title: AnswerMethod.Family.playing.label, rows: ranked(methods.filter(isPlaying))),
+                // Random notes read cold against pieces, whose patterns get familiar.
+                RowGroup(title: "Practice", rows: practice),
                 // As the toolbar calls the setting.
                 RowGroup(title: "Note names", rows: ranked(namings))]
             .filter { !$0.rows.isEmpty }
